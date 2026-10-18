@@ -1,0 +1,1064 @@
+// ===========================================================================
+// 3D rendering with three.js.
+//
+// The simulation is still flat 2D in Rust: map tile (x, y). Here that becomes
+// three.js world (x, height, z) with z = map y, so one tile is one unit.
+// Hills are only visual: units walk on the same flat grid, and we just set
+// their height from the terrain under them.
+
+const R3 = {
+  renderer: null, scene: null, camera: null, sun: null,
+  terrain: null, water: null, heights: null,
+  fowTex: null, fowData: null,
+  objs: new Map(), // entity id -> { root, body, tool, kind, owner, face, ... }
+  dying: [],
+  res: null, // instanced meshes for resources
+  resKey: "",
+  arrows: null,
+  ring: null, ringBig: null,
+  ghost: null, ghostKind: -1, footprint: null,
+  rally: null,
+  markers: [],
+  raycaster: null,
+  pickables: [],
+};
+
+// --- Fog of war -------------------------------------------------------------
+// One 80×80 texture, sampled in every material's fragment shader to darken
+// what you can't see. three.js lets us patch its built-in shaders with
+// `onBeforeCompile`, so we keep normal lighting and shadows for free.
+const fowUniforms = { uFow: { value: null }, uMapSize: { value: null } };
+// Time in seconds, shared by the water and the swaying grass.
+const timeUniform = { value: 0 };
+function withFow(mat, extra) {
+  mat.onBeforeCompile = sh => {
+    if (extra) extra(sh);
+    sh.uniforms.uFow = fowUniforms.uFow;
+    sh.uniforms.uMapSize = fowUniforms.uMapSize;
+    sh.vertexShader = "varying vec2 vFowW;\n" + sh.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
+      vec4 fowP = vec4(transformed, 1.0);
+      #ifdef USE_INSTANCING
+        fowP = instanceMatrix * fowP;
+      #endif
+      vFowW = (modelMatrix * fowP).xz;`);
+    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nvarying vec2 vFowW;\n" + sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
+      gl_FragColor.rgb *= texture2D(uFow, vFowW / uMapSize).r;`);
+  };
+  return mat;
+}
+
+// --- Model building ----------------------------------------------------------
+// Every unit and building is made of simple shapes (boxes, cylinders, cones)
+// merged into ONE geometry with per-vertex colours. One mesh per model means
+// one draw call, which matters with hundreds of units on screen.
+class Model {
+  constructor() { this.parts = []; }
+  // Add a shape. `geo` is already rotated/scaled as wanted; this places it.
+  add(geo, color, x = 0, y = 0, z = 0, ry = 0) {
+    geo = geo.index ? geo.toNonIndexed() : geo;
+    if (ry) geo.rotateY(ry);
+    geo.translate(x, y, z);
+    this.parts.push([geo, new THREE.Color(color)]);
+    return this;
+  }
+  build() {
+    let n = 0;
+    for (const [g] of this.parts) n += g.attributes.position.count;
+    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    let o = 0;
+    for (const [g, c] of this.parts) {
+      const p = g.attributes.position.array, q = g.attributes.normal.array;
+      pos.set(p, o * 3); nor.set(q, o * 3);
+      for (let i = 0; i < g.attributes.position.count; i++) { col[(o + i) * 3] = c.r; col[(o + i) * 3 + 1] = c.g; col[(o + i) * 3 + 2] = c.b; }
+      o += g.attributes.position.count;
+      g.dispose();
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    out.setAttribute("normal", new THREE.BufferAttribute(nor, 3));
+    out.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    out.computeBoundingSphere();
+    return out;
+  }
+}
+const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const cyl = (rt, rb, h, seg = 8) => new THREE.CylinderGeometry(rt, rb, h, seg);
+const cone = (r, h, seg = 8) => new THREE.ConeGeometry(r, h, seg);
+const ball = (r, d = 1) => new THREE.IcosahedronGeometry(r, d);
+// A pitched roof: a box turned 45° on its long axis and squashed.
+function roof(len, width, height) {
+  const g = box(len, width / Math.SQRT2, width / Math.SQRT2);
+  g.rotateX(Math.PI / 4); g.scale(1, height / (width / 2), 1);
+  return g;
+}
+// Units are drawn bigger than their real footprint so they read well from
+// a distance. This is only visual: the simulation doesn't change.
+const UNIT_SCALE = 1.5;
+const SKIN = "#e0b48c", WOOD = "#7a5532", DARKWOOD = "#4e3420", STONE = "#a39a88", STONE2 = "#8a8272", IRON = "#9da3ab";
+
+// Units face +x. Feet at y = 0. The tool (weapon or axe) is a separate mesh
+// so it can swing.
+function unitModel(kind, owner) {
+  const team = PCOL[owner], dark = PDARK[owner];
+  const m = new Model(), t = new Model();
+  const legs = (y, col) => { m.add(box(0.08, 0.22, 0.08), col, 0, y, 0.055).add(box(0.08, 0.22, 0.08), col, 0, y, -0.055); };
+  if (kind === K.Horseman) {
+    // horse
+    m.add(box(0.56, 0.22, 0.2), "#7a5232", 0, 0.42, 0);
+    for (const [x, z] of [[0.2, 0.07], [0.2, -0.07], [-0.2, 0.07], [-0.2, -0.07]]) m.add(box(0.07, 0.32, 0.07), "#5d3e25", x, 0.16, z);
+    const neck = box(0.12, 0.3, 0.12); neck.rotateZ(-0.6); m.add(neck, "#6e4a2c", 0.3, 0.6, 0);
+    m.add(box(0.2, 0.1, 0.1), "#6e4a2c", 0.42, 0.72, 0);
+    const tail = box(0.05, 0.22, 0.05); tail.rotateZ(0.5); m.add(tail, "#3a2716", -0.32, 0.4, 0);
+    m.add(box(0.22, 0.05, 0.24), team, 0, 0.55, 0); // saddle cloth
+    // rider
+    m.add(box(0.13, 0.22, 0.17), team, -0.02, 0.69, 0);
+    m.add(ball(0.065, 1), SKIN, -0.02, 0.86, 0);
+    m.add(new THREE.SphereGeometry(0.07, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), IRON, -0.02, 0.875, 0);
+    // lance
+    const lance = cyl(0.015, 0.015, 0.8, 5); lance.rotateZ(-1.2); t.add(lance, WOOD, 0.3, 0.12, 0);
+    const tip = cone(0.03, 0.1, 5); tip.rotateZ(-1.2 - Math.PI); t.add(tip, IRON, 0.68, 0.26, 0);
+    return { body: m.build(), tool: t.build(), pivot: [0, 0.7, 0.11], height: 0.95 };
+  }
+  legs(0.11, DARKWOOD);
+  const bodyCol = kind === K.Archer ? "#5d6a3a" : kind === K.Citizen ? "#b89a6c" : team;
+  m.add(box(0.14, 0.24, 0.2), bodyCol, 0, 0.34, 0);
+  m.add(box(0.15, 0.05, 0.21), kind === K.Spearman ? dark : team, 0, 0.27, 0); // belt
+  m.add(ball(0.072, 1), SKIN, 0, 0.53, 0);
+  const cap = new THREE.SphereGeometry(0.078, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2);
+  if (kind === K.Spearman) {
+    m.add(cap, IRON, 0, 0.545, 0);
+    const shield = cyl(0.11, 0.11, 0.03, 10); shield.rotateX(Math.PI / 2); m.add(shield, dark, 0.02, 0.36, -0.13);
+    m.add(cyl(0.03, 0.03, 0.035, 6).rotateX(Math.PI / 2), "#c99a45", 0.02, 0.36, -0.15);
+    t.add(cyl(0.015, 0.015, 0.95, 5), WOOD, 0, 0.12, 0);
+    t.add(cone(0.035, 0.12, 5), IRON, 0, 0.65, 0);
+    return { body: m.build(), tool: t.build(), pivot: [0.06, 0.34, 0.12], height: 0.7, toolTilt: 0.25 };
+  }
+  if (kind === K.Archer) {
+    m.add(cap, dark, 0, 0.55, 0);
+    m.add(box(0.06, 0.24, 0.07), DARKWOOD, -0.09, 0.4, 0.04); // quiver
+    const bow = new THREE.TorusGeometry(0.2, 0.013, 4, 14, Math.PI * 0.9); bow.rotateZ(-Math.PI * 0.45);
+    t.add(bow, "#6b4a2a", 0.06, 0, 0);
+    return { body: m.build(), tool: t.build(), pivot: [0.04, 0.38, 0.1], height: 0.66 };
+  }
+  // citizen
+  m.add(cap, team, 0, 0.545, 0);
+  t.add(cyl(0.013, 0.013, 0.36, 5), WOOD, 0, 0.0, 0);
+  t.add(box(0.05, 0.05, 0.11), IRON, 0, 0.17, 0.03);
+  return { body: m.build(), tool: t.build(), pivot: [0.05, 0.36, 0.11], height: 0.66, carry: true };
+}
+
+// Buildings are centred on their footprint; y = 0 is the ground.
+function buildingModel(kind, owner) {
+  const team = PCOL[owner], dark = PDARK[owner];
+  const m = new Model();
+  const s = stat(kind, 6);
+  // A plinth that reaches into the ground hides slopes under the building.
+  if (kind !== K.Farm) m.add(box(s * 0.94, 0.5, s * 0.94), "#6f6553", 0, -0.2, 0);
+  const banner = (x, z, h) => {
+    m.add(cyl(0.02, 0.02, h, 5), DARKWOOD, x, h / 2, z);
+    m.add(box(0.3, 0.18, 0.02), team, x + 0.15, h - 0.12, z);
+  };
+  const hall = (w, h, d, wall, roofCol, y0 = 0) => {
+    m.add(box(w, h, d), wall, 0, y0 + h / 2, 0);
+    for (let i = -1; i <= 1; i += 2) m.add(box(0.08, h, 0.08), DARKWOOD, i * (w / 2 - 0.02), y0 + h / 2, d / 2 - 0.02).add(box(0.08, h, 0.08), DARKWOOD, i * (w / 2 - 0.02), y0 + h / 2, -d / 2 + 0.02);
+    m.add(roof(w + 0.16, d + 0.16, h * 0.7), roofCol, 0, y0 + h, 0);
+    m.add(box(0.26, h * 0.6, 0.02), DARKWOOD, 0, y0 + h * 0.3, d / 2 + 0.01); // door
+  };
+  switch (kind) {
+    case K.Capitol: {
+      m.add(box(2.85, 0.3, 2.85), STONE2, 0, 0.15, 0);
+      m.add(box(1.8, 1.1, 1.8), STONE, 0, 0.85, 0);
+      const pyr = cone(1.4, 1.0, 4); pyr.rotateY(Math.PI / 4); m.add(pyr, team, 0, 1.9, 0);
+      for (const [x, z] of [[1.15, 1.15], [-1.15, 1.15], [1.15, -1.15], [-1.15, -1.15]]) {
+        m.add(cyl(0.25, 0.28, 1.4, 10), STONE, x, 0.7, z);
+        m.add(cone(0.32, 0.45, 10), dark, x, 1.62, z);
+      }
+      for (let i = -3; i <= 3; i++) { m.add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, 1.35).add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, -1.35); }
+      m.add(box(0.4, 0.6, 0.04), DARKWOOD, 0, 0.6, 0.91);
+      m.add(cyl(0.025, 0.025, 1.0, 5), DARKWOOD, 0, 2.6, 0);
+      m.add(box(0.5, 0.28, 0.02), team, 0.25, 2.95, 0);
+      break;
+    }
+    case K.Barracks:
+      hall(2.3, 0.85, 1.6, "#a07a4f", "#8a3e2a");
+      m.add(box(0.5, 0.05, 0.05).rotateZ(0.7), IRON, -0.6, 0.6, 0.82).add(box(0.5, 0.05, 0.05).rotateZ(-0.7), IRON, -0.6, 0.6, 0.82);
+      banner(1.2, 1.1, 1.4); banner(-1.2, 1.1, 1.4);
+      break;
+    case K.Range:
+      hall(2.1, 0.75, 1.3, "#a68b5c", "#7c7a3c");
+      for (const [r, c] of [[0.28, "#efe6d1"], [0.2, team], [0.1, "#efe6d1"]]) { const d = cyl(r, r, 0.04 + (0.28 - r) * 0.1, 14); d.rotateX(Math.PI / 2); m.add(d, c, 0.9, 0.55, 1.0 + (0.28 - r) * 0.05); }
+      m.add(box(0.06, 0.5, 0.06), DARKWOOD, 0.9, 0.25, 0.97);
+      banner(-1.25, 1.1, 1.3);
+      break;
+    case K.Stable:
+      hall(2.4, 0.8, 1.1, "#9b7a4a", "#b59a52", 0);
+      for (let i = 0; i < 7; i++) m.add(box(0.06, 0.4, 0.06), DARKWOOD, -1.2 + i * 0.4, 0.2, 1.3);
+      m.add(box(2.45, 0.05, 0.04), WOOD, 0, 0.32, 1.3).add(box(2.45, 0.05, 0.04), WOOD, 0, 0.18, 1.3);
+      banner(1.25, -0.9, 1.4);
+      break;
+    case K.Tower:
+      m.add(cyl(0.55, 0.7, 2.2, 10), STONE, 0, 1.1, 0);
+      for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; m.add(box(0.18, 0.2, 0.18), STONE2, Math.cos(a) * 0.55, 2.28, Math.sin(a) * 0.55, -a); }
+      m.add(cone(0.5, 0.7, 10), team, 0, 2.7, 0);
+      m.add(box(0.1, 0.25, 0.03), "#2a2219", 0, 1.4, 0.6);
+      break;
+    case K.Settlement:
+      hall(1.2, 0.6, 1.0, "#b79d74", "#6d5d48");
+      m.add(box(0.3, 0.3, 0.3), "#8a6438", 0.7, 0.15, 0.55).add(box(0.25, 0.25, 0.25), "#946c3e", -0.65, 0.12, 0.6);
+      m.add(cyl(0.14, 0.14, 0.3, 8), "#7a5532", 0.7, 0.15, -0.55);
+      banner(-0.75, -0.6, 1.1);
+      break;
+    case K.Granary: {
+      // Two round grain silos with conical thatch roofs.
+      for (const [x, z, r] of [[-0.35, -0.2, 0.42], [0.42, 0.3, 0.34]]) {
+        m.add(cyl(r, r * 1.05, 1.0, 12), "#cdb88a", x, 0.5, z);
+        m.add(cyl(r * 1.06, r * 1.06, 0.06, 12), WOOD, x, 0.35, z).add(cyl(r * 1.06, r * 1.06, 0.06, 12), WOOD, x, 0.75, z);
+        m.add(cone(r * 1.25, 0.55, 12), "#b8913f", x, 1.27, z);
+      }
+      m.add(box(0.3, 0.2, 0.25), "#d9c38f", 0.5, 0.1, -0.5); // a sack pile
+      banner(-0.75, 0.6, 1.0);
+      break;
+    }
+    case K.Sawmill: {
+      hall(1.3, 0.6, 0.9, "#9a7448", "#6b4d2d");
+      // log piles
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3 - i; j++) {
+        const lg = cyl(0.09, 0.09, 0.8, 7); lg.rotateX(Math.PI / 2);
+        m.add(lg, j % 2 ? "#7d5631" : "#8c6238", 0.75, 0.09 + i * 0.16, -0.45 + (j + i * 0.5) * 0.19);
+      }
+      const blade = cyl(0.22, 0.22, 0.03, 16); blade.rotateX(Math.PI / 2); m.add(blade, IRON, -0.7, 0.35, 0.55);
+      banner(-0.8, -0.6, 1.0);
+      break;
+    }
+    case K.Mason:
+      hall(1.2, 0.6, 0.9, STONE, "#6f6a62");
+      for (const [x, z, sz] of [[0.65, 0.5, 0.26], [0.75, 0.15, 0.22], [0.55, -0.4, 0.3], [0.85, -0.65, 0.2], [0.6, 0.5, 0.18]]) m.add(box(sz, sz * 0.8, sz), STONE2, x, sz * 0.4 + (x === 0.6 ? 0.26 : 0), z);
+      banner(-0.75, 0.65, 1.0);
+      break;
+    case K.Smithy:
+      hall(1.2, 0.65, 1.0, "#7d6b55", "#4b4038");
+      m.add(box(0.28, 1.1, 0.28), STONE2, 0.38, 0.85, -0.22); // chimney
+      m.add(box(0.2, 0.14, 0.12), "#2e2e33", -0.65, 0.2, 0.65).add(box(0.1, 0.12, 0.08), "#2e2e33", -0.65, 0.07, 0.65); // anvil
+      m.add(box(0.14, 0.14, 0.14), "#e0602a", 0.38, 1.42, -0.22); // glow
+      banner(0.75, 0.65, 1.0);
+      break;
+    case K.Market: {
+      // Three stalls with striped awnings in the owner's colour.
+      for (const [x, z] of [[-0.8, -0.5], [0.8, -0.5], [0, 0.65]]) {
+        m.add(box(0.8, 0.35, 0.5), WOOD, x, 0.18, z);
+        for (const [px, pz] of [[-0.38, -0.23], [0.38, -0.23], [-0.38, 0.23], [0.38, 0.23]]) m.add(box(0.05, 0.75, 0.05), DARKWOOD, x + px, 0.37, z + pz);
+        const aw = roof(0.92, 0.62, 0.22);
+        m.add(aw, team, x, 0.75, z);
+        m.add(box(0.14, 0.1, 0.14), ["#c9473a", "#e6be4b", "#5d8c3a"][(x + 1) % 3 | 0], x - 0.2, 0.4, z);
+        m.add(box(0.14, 0.1, 0.14), "#d9c38f", x + 0.15, 0.4, z);
+      }
+      m.add(cyl(0.25, 0.3, 0.3, 10), STONE, 0, 0.15, -0.1); // well
+      break;
+    }
+    case K.Temple: {
+      m.add(box(1.8, 0.2, 1.8), STONE2, 0, 0.1, 0).add(box(1.6, 0.15, 1.6), STONE, 0, 0.27, 0);
+      for (let i = 0; i < 4; i++) for (const z of [-0.6, 0.6]) m.add(cyl(0.08, 0.09, 0.9, 8), "#e8e1d0", -0.6 + i * 0.4, 0.8, z);
+      for (const x of [-0.6, 0.6]) m.add(cyl(0.08, 0.09, 0.9, 8), "#e8e1d0", x, 0.8, 0);
+      m.add(box(1.5, 0.12, 1.5), "#e8e1d0", 0, 1.3, 0);
+      m.add(roof(1.6, 1.6, 0.45), team, 0, 1.36, 0);
+      m.add(box(0.5, 0.5, 0.5), "#c99a45", 0, 0.6, 0); // the shrine
+      break;
+    }
+    case K.Wonder: {
+      // A stepped pyramid crowned with gold.
+      const steps = [[3.7, "#c8bba0"], [3.0, "#d3c7ad"], [2.3, "#c8bba0"], [1.6, "#d3c7ad"], [0.95, "#c8bba0"]];
+      steps.forEach(([w, c], i) => m.add(box(w, 0.55, w), c, 0, 0.275 + i * 0.55, 0));
+      m.add(box(0.5, 0.6, 1.2), "#b6a888", 0, 0.3, 1.75); // stairway
+      m.add(box(0.7, 0.6, 0.7), "#e8c45a", 0, 3.05, 0);
+      m.add(cone(0.45, 0.6, 4).rotateY(Math.PI / 4), "#f2d877", 0, 3.65, 0);
+      for (const [x, z] of [[1.6, 1.6], [-1.6, 1.6], [1.6, -1.6], [-1.6, -1.6]]) { m.add(cyl(0.05, 0.05, 1.4, 5), DARKWOOD, x, 0.7, z); m.add(box(0.4, 0.25, 0.02), team, x + 0.2, 1.25, z); }
+      break;
+    }
+    case K.Farm:
+      m.add(box(2.9, 0.08, 2.9), "#6e5232", 0, 0.03, 0);
+      for (let i = 0; i < 7; i++) m.add(box(2.6, 0.14, 0.16), i % 2 ? "#a7b44a" : "#93a541", 0, 0.12, -1.2 + i * 0.4);
+      for (const [x, z] of [[1.45, 1.45], [-1.45, 1.45], [1.45, -1.45], [-1.45, -1.45]]) m.add(box(0.08, 0.35, 0.08), team, x, 0.17, z);
+      break;
+  }
+  return m.build();
+}
+
+// Trees, bushes and rocks, used through InstancedMesh (one draw call each).
+function resourceModels() {
+  const pine = new Model();
+  pine.add(cyl(0.06, 0.08, 0.5, 6), DARKWOOD, 0, 0.25, 0);
+  pine.add(cone(0.42, 0.7, 7), "#1f4428", 0, 0.75, 0).add(cone(0.34, 0.6, 7), "#285333", 0, 1.1, 0).add(cone(0.24, 0.5, 7), "#33653c", 0, 1.42, 0);
+  const oak = new Model();
+  oak.add(cyl(0.07, 0.1, 0.6, 6), DARKWOOD, 0, 0.3, 0);
+  oak.add(ball(0.42, 0), "#2c5426", 0, 0.85, 0).add(ball(0.32, 0), "#3d6e30", 0.12, 1.12, 0.05).add(ball(0.26, 0), "#4d7f38", -0.12, 1.05, -0.1);
+  const bush = new Model();
+  bush.add(ball(0.26, 0), "#3e6a2f", 0, 0.2, 0).add(ball(0.2, 0), "#46783a", 0.15, 0.17, 0.1);
+  for (let i = 0; i < 9; i++) { const a = i * 2.4; bush.add(ball(0.04, 0), "#c9353f", Math.cos(a) * 0.2, 0.18 + (i % 3) * 0.08, Math.sin(a) * 0.2); }
+  const rock = (gold) => {
+    const r = new Model();
+    for (const [x, z, s] of [[0, 0, 0.32], [0.22, 0.12, 0.22], [-0.18, -0.14, 0.2]]) r.add(new THREE.DodecahedronGeometry(s, 0), gold ? "#8c7136" : "#7f7a70", x, s * 0.6, z);
+    if (gold) for (const [x, y, z] of [[0.1, 0.35, 0.2], [-0.15, 0.2, 0.2], [0.25, 0.25, -0.05], [-0.05, 0.4, -0.15]]) r.add(ball(0.05, 0), "#f4d462", x, y, z);
+    return r.build();
+  };
+  return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true) };
+}
+
+// --- Setup -------------------------------------------------------------------
+let entMat, ghostMat, hitMat;
+const modelCache = new Map();
+function cachedModel(kind, owner) {
+  const key = kind * 8 + owner;
+  if (!modelCache.has(key)) modelCache.set(key, kind >= 10 ? { body: buildingModel(kind, owner) } : unitModel(kind, owner));
+  return modelCache.get(key);
+}
+
+function initRenderer() {
+  const r = new THREE.WebGLRenderer({ canvas: view, antialias: true });
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  R3.renderer = r;
+  const scene = new THREE.Scene();
+  // Past the sea's edge, the far distance is deep blue rather than black.
+  scene.background = new THREE.Color("#12303f");
+  R3.scene = scene;
+  R3.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 400);
+
+  scene.add(new THREE.HemisphereLight("#dfe9f2", "#4a4232", 1.7));
+  const sun = new THREE.DirectionalLight("#fff1d6", 2.4);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.03;
+  scene.add(sun); scene.add(sun.target);
+  R3.sun = sun;
+
+  entMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }));
+  // Swapped in for a moment when something is hit: a warm glow, not a size change.
+  hitMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true, emissive: "#ff7a4d", emissiveIntensity: 0.55 }));
+  ghostMat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false });
+  R3.raycaster = new THREE.Raycaster();
+
+  // Selection rings, shared geometry; each selected thing gets a mesh.
+  R3.ringGeo = new THREE.RingGeometry(0.85, 1, 28).rotateX(-Math.PI / 2);
+  R3.ringMats = [null, new THREE.MeshBasicMaterial({ color: "#9cf27f", transparent: true, opacity: 0.9, depthWrite: false }), new THREE.MeshBasicMaterial({ color: "#ff8a6e", transparent: true, opacity: 0.9, depthWrite: false })];
+
+  // Arrows: one instanced mesh, up to 256 in flight.
+  const ag = new THREE.BoxGeometry(0.42, 0.025, 0.025);
+  R3.arrows = new THREE.InstancedMesh(ag, withFow(new THREE.MeshLambertMaterial({ color: "#e9dfc6" })), 256);
+  R3.arrows.frustumCulled = false;
+  scene.add(R3.arrows);
+
+  // Rally flag
+  const rm = new Model();
+  rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).add(box(0.32, 0.2, 0.02), PCOL[1], 0.16, 0.78, 0);
+  R3.rally = new THREE.Mesh(rm.build(), entMat);
+  R3.rallyFor = 1;
+  R3.rally.visible = false;
+  scene.add(R3.rally);
+
+  R3.resGeo = resourceModels();
+}
+
+function resizeRenderer() {
+  if (!R3.renderer) return;
+  R3.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  R3.renderer.setSize(view._w, view._h, false);
+  R3.camera.aspect = view._w / Math.max(1, view._h);
+  R3.camera.updateProjectionMatrix();
+}
+
+// --- Terrain -----------------------------------------------------------------
+// Height in world units for a tile's noise value (0..1). Water sits low.
+function elevOf(ht) {
+  if (ht < 0.34) return -0.3 - (0.34 - ht) * 4;
+  let e = (ht - 0.36) * 2.6;
+  if (ht > 0.58) e += (ht - 0.58) * 4; // hills rise a little faster
+  return e;
+}
+
+// Heights live on tile CORNERS: (MW+1) × (MH+1) of them. Called before the
+// terrain texture is painted, so the painter can colour slopes as rock.
+function computeHeights() {
+  const ter = u8(W.terrain_ptr(), MW * MH), shade = u8(W.shade_ptr(), MW * MH);
+  const cw = MW + 1, ch = MH + 1;
+  let h = new Float32Array(cw * ch);
+  const wet = new Uint8Array(cw * ch);
+  for (let cy = 0; cy <= MH; cy++) for (let cx = 0; cx <= MW; cx++) {
+    let sum = 0, n = 0;
+    for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
+      const tx = cx + dx, ty = cy + dy;
+      if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
+      sum += elevOf(shade[ty * MW + tx] / 255); n++;
+      if (ter[ty * MW + tx] === 1) wet[cy * cw + cx] = 1;
+    }
+    h[cy * cw + cx] = n ? sum / n : -1;
+  }
+  // Two blur passes turn the blocky per-tile steps into rolling hills.
+  for (let pass = 0; pass < 2; pass++) {
+    const o = new Float32Array(h.length);
+    for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+      let sum = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (x < 0 || y < 0 || x >= cw || y >= ch) continue;
+        const wgt = dx || dy ? 1 : 2;
+        sum += h[y * cw + x] * wgt; n += wgt;
+      }
+      o[cy * cw + cx] = sum / n;
+    }
+    h = o;
+  }
+  // Keep water below the surface and the shore just above it.
+  for (let i = 0; i < h.length; i++) h[i] = wet[i] ? Math.min(h[i], -0.4) : Math.max(h[i], 0.02);
+  R3.heights = h;
+}
+
+// Slope (0 flat .. ~1 steep) at a map position, from the corner heights.
+function slopeAt(x, y) {
+  const e = 0.5;
+  const dx = hAt(x + e, y) - hAt(x - e, y), dy = hAt(x, y + e) - hAt(x, y - e);
+  return Math.hypot(dx, dy);
+}
+
+const WATER_Y = -0.12;
+
+function buildWorld() {
+  const scene = R3.scene;
+  for (const o of R3.objs.values()) scene.remove(o.root);
+  R3.objs.clear();
+  for (const d of R3.dying) scene.remove(d.root);
+  R3.dying = [];
+  for (const k of ["terrain", "shore", "water", "tufts", "flowers"]) if (R3[k]) { scene.remove(R3[k]); R3[k].geometry.dispose(); R3[k] = null; }
+  if (R3.res) for (const m of Object.values(R3.res)) scene.remove(m);
+  R3.resKey = "";
+  R3.flattened = new Set();
+
+  const h = R3.heights, cw = MW + 1;
+  const geo = new THREE.PlaneGeometry(MW, MH, MW, MH);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(MW / 2, 0, MH / 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const cx = Math.round(pos.getX(i)), cz = Math.round(pos.getZ(i));
+    pos.setY(i, h[cz * cw + cx]);
+  }
+  geo.computeVertexNormals();
+  const tex = new THREE.CanvasTexture(terrainCanvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = R3.renderer.capabilities.getMaxAnisotropy();
+  const terrain = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ map: tex })));
+  terrain.receiveShadow = true;
+  scene.add(terrain);
+  R3.terrain = terrain;
+
+  buildShore();
+  buildWater();
+  // The rally flag wears this player's colour.
+  if (R3.rallyFor !== ME) {
+    const rm = new Model();
+    rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).add(box(0.32, 0.2, 0.02), PCOL[ME], 0.16, 0.78, 0);
+    R3.rally.geometry.dispose();
+    R3.rally.geometry = rm.build();
+    R3.rallyFor = ME;
+  }
+  buildTufts();
+
+  // Fog-of-war texture: one texel per tile, smoothly filtered.
+  R3.fowData = new Uint8Array(MW * MH * 4);
+  R3.fowTex = new THREE.DataTexture(R3.fowData, MW, MH, THREE.RGBAFormat);
+  R3.fowTex.magFilter = THREE.LinearFilter; R3.fowTex.minFilter = THREE.LinearFilter;
+  fowUniforms.uFow.value = R3.fowTex;
+  fowUniforms.uMapSize.value = new THREE.Vector2(MW, MH);
+
+  // Resource instanced meshes, sized for the most there could be.
+  // Room for every resource on the map. (Sizing this from the resources
+  // explored so far was a bug: trees discovered later had no room and vanished.)
+  const n = W.res_total() + 16;
+  const mk = (g, cnt) => { const m = new THREE.InstancedMesh(g, entMat, cnt); m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m; };
+  R3.res = { pine: mk(R3.resGeo.pine, n), oak: mk(R3.resGeo.oak, n), bush: mk(R3.resGeo.bush, n), stone: mk(R3.resGeo.stone, n), gold: mk(R3.resGeo.gold, n) };
+}
+
+// --- The coast around the map ---------------------------------------------------
+// The playable map is an island. Past its edge the ground keeps going and
+// slopes down into open sea, with a slightly ragged coastline, so the edge
+// of the world looks like a shore instead of a cliff.
+const SHORE_PAD = 24;
+function heightAnywhere(x, z) {
+  const out = Math.hypot(Math.max(0, -x, x - MW), Math.max(0, -z, z - MH));
+  if (out <= 0) return hAt(x, z);
+  const ragged = out + (vnoise(x / 4, z / 4, 5) - 0.5) * 1.6;
+  const drop = Math.max(0, ragged) * 0.6 + Math.max(0, ragged) ** 2 * 0.05;
+  return Math.max(-2.5, Math.min(hAt(x, z), 0.6) - drop);
+}
+function buildShore() {
+  const P = SHORE_PAD, w = MW + 2 * P, hgt = MH + 2 * P, vw = w + 1;
+  const pos = [], col = [], idx = [];
+  const c = new THREE.Color();
+  const small = terrainSmall.getContext("2d").getImageData(0, 0, MW, MH).data;
+  for (let j = 0; j <= hgt; j++) for (let i = 0; i <= w; i++) {
+    const x = i - P, z = j - P, y = heightAnywhere(x, z);
+    pos.push(x, y, z);
+    // Start from the colour of the nearest map-edge tile, fade to sand, then seabed.
+    const tx = Math.max(0, Math.min(MW - 1, Math.floor(x))), tz = Math.max(0, Math.min(MH - 1, Math.floor(z)));
+    const k = (tz * MW + tx) * 4;
+    c.setRGB(small[k] / 255, small[k + 1] / 255, small[k + 2] / 255, THREE.SRGBColorSpace);
+    const sand = new THREE.Color().setRGB(204 / 255, 186 / 255, 132 / 255, THREE.SRGBColorSpace);
+    const bed = new THREE.Color().setRGB(110 / 255, 122 / 255, 92 / 255, THREE.SRGBColorSpace);
+    // Land outside the map is only ever a strip of beach.
+    const outside = x < 0 || z < 0 || x > MW || z > MH;
+    c.lerp(sand, outside ? 0.9 : Math.max(0, Math.min(1, (0.25 - y) / 0.25)));
+    c.lerp(bed, Math.max(0, Math.min(1, (WATER_Y - y) / 0.8)));
+    col.push(c.r, c.g, c.b);
+  }
+  // Only the quads outside the map: inside, the real terrain mesh is drawn.
+  for (let j = 0; j < hgt; j++) for (let i = 0; i < w; i++) {
+    const x0 = i - P, z0 = j - P;
+    if (x0 >= 0 && x0 + 1 <= MW && z0 >= 0 && z0 + 1 <= MH) continue;
+    const a = j * vw + i, b = a + 1, d = a + vw, e = d + 1;
+    idx.push(a, d, b, b, d, e);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const shore = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ vertexColors: true })));
+  shore.receiveShadow = true;
+  R3.scene.add(shore);
+  R3.shore = shore;
+}
+
+// --- Water ---------------------------------------------------------------------
+// A plane with two vertices per tile. Each vertex knows how deep the water is
+// there, so the shader can shade shallows turquoise, deeps blue, and draw
+// lapping foam along the shore. Waves move the surface and wobble the normal,
+// which makes the sun glint.
+function buildWater() {
+  const pad = 40, res = 2;
+  const geo = new THREE.PlaneGeometry(MW + pad * 2, MH + pad * 2, (MW + pad * 2) * res, (MH + pad * 2) * res);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(MW / 2, WATER_Y, MH / 2);
+  const pos = geo.attributes.position, depth = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    // Outside the map, the sea floor keeps sloping down from the map's edge.
+    depth[i] = Math.max(-0.2, WATER_Y - heightAnywhere(x, z));
+  }
+  geo.setAttribute("aDepth", new THREE.BufferAttribute(depth, 1));
+  const mat = new THREE.MeshPhongMaterial({ color: "#2b6f8c", specular: "#5d7a88", shininess: 180, transparent: true, opacity: 0.88, depthWrite: false });
+  withFow(mat, sh => {
+    sh.uniforms.uTime = timeUniform;
+    sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+      vDepth = aDepth;
+      vWPos = position.xz;
+      transformed.y += (sin(position.x * 1.3 + uTime * 1.1) + cos(position.z * 1.1 + uTime * 0.8)) * 0.02 * clamp(aDepth * 3.0, 0.0, 1.0);`);
+    sh.fragmentShader = "uniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.fragmentShader
+      .replace("#include <color_fragment>", `#include <color_fragment>
+        float d = clamp(vDepth, 0.0, 2.0);
+        vec3 shallow = vec3(0.13, 0.42, 0.43), deep = vec3(0.05, 0.18, 0.3);
+        diffuseColor.rgb = mix(shallow, deep, smoothstep(0.05, 1.1, d));
+        float ripple = 0.5 + 0.5 * sin(uTime * 1.8 - d * 40.0 + sin(vWPos.x * 2.1) + cos(vWPos.y * 1.7));
+        float foam = (1.0 - smoothstep(0.0, 0.07, d)) * (0.35 + 0.45 * ripple);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.93, 0.92), foam);
+        diffuseColor.a = mix(0.62, 0.94, smoothstep(0.0, 0.6, d));
+        diffuseColor.a = max(diffuseColor.a, foam * 0.85);
+        if (vDepth < -0.05) discard;`)
+      .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
+        vec2 wp = vWPos * 3.2;
+        normal = normalize(normal + vec3(
+          sin(wp.x + uTime * 1.3) * 0.12 + sin(wp.y * 1.9 - uTime * 0.9) * 0.08,
+          cos(wp.y + uTime * 1.1) * 0.12 + cos(wp.x * 1.7 + uTime * 0.7) * 0.08, 0.0));`);
+  });
+  const water = new THREE.Mesh(geo, mat);
+  water.renderOrder = 1;
+  water.receiveShadow = true;
+  R3.scene.add(water);
+  R3.water = water;
+}
+
+// --- Grass tufts and flowers ----------------------------------------------------
+// A few thousand little clumps of blades, one instanced mesh. The vertex
+// shader bends each blade by its height so the meadow sways in the wind.
+function tuftGeometry() {
+  const m = new Model();
+  for (let k = 0; k < 4; k++) {
+    const g = new THREE.BufferGeometry();
+    const w = 0.035, hgt = 0.2 + (k % 2) * 0.07;
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-w, 0, 0, w, 0, 0, 0.02, hgt, 0]), 3));
+    g.computeVertexNormals();
+    g.rotateZ((k - 1.5) * 0.25);
+    g.rotateY(k * 1.3);
+    m.add(g, k % 2 ? "#79a64c" : "#5f8f3c", (k % 2) * 0.04 - 0.02, 0, (k > 1 ? 0.04 : -0.03));
+  }
+  return m.build();
+}
+function swayPatch(sh) {
+  sh.uniforms.uTime = timeUniform;
+  sh.vertexShader = "uniform float uTime;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+    #ifdef USE_INSTANCING
+      vec2 base = vec2(instanceMatrix[3][0], instanceMatrix[3][2]);
+    #else
+      vec2 base = vec2(0.0);
+    #endif
+    float bend = position.y * position.y * 4.0;
+    transformed.x += sin(uTime * 1.7 + base.x * 0.6 + base.y * 0.3) * 0.05 * bend;
+    transformed.z += cos(uTime * 1.3 + base.y * 0.5) * 0.03 * bend;`);
+}
+function buildTufts() {
+  const ter = u8(W.terrain_ptr(), MW * MH);
+  const spots = [];
+  for (let ty = 0; ty < MH; ty++) for (let tx = 0; tx < MW; tx++) {
+    const t = ter[ty * MW + tx];
+    if (t !== 0 && t !== 3) continue;
+    const n = hash2(tx * 3 + 7, ty * 5 + 1);
+    const count = n < 0.35 ? 0 : n < 0.75 ? 1 : 2;
+    for (let k = 0; k < count; k++) spots.push([tx + 0.1 + hash2(tx * 7 + k, ty) * 0.8, ty + 0.1 + hash2(ty * 11 + k, tx * 3) * 0.8, hash2(tx + k * 13, ty * 17)]);
+  }
+  R3.tuftSpots = spots;
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  withFow(mat, swayPatch);
+  R3.tufts = new THREE.InstancedMesh(tuftGeometry(), mat, spots.length);
+  R3.tufts.receiveShadow = true;
+  const fl = spots.filter(s => s[2] < 0.12);
+  R3.flowerSpots = fl;
+  const fmat = new THREE.MeshLambertMaterial({ color: "#ffffff" });
+  withFow(fmat, swayPatch);
+  R3.flowers = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.035, 0).translate(0.02, 0.24, 0), fmat, Math.max(1, fl.length));
+  const palette = ["#f2efe4", "#f3d55b", "#c58ad8", "#e98a5e"].map(c => new THREE.Color(c));
+  fl.forEach((s, i) => R3.flowers.setColorAt(i, palette[Math.floor(s[2] * 33) % 4]));
+  placeTufts();
+  R3.scene.add(R3.tufts, R3.flowers);
+}
+// (Re)position all tufts: called after the ground under a building is levelled.
+function placeTufts() {
+  const blocked = t => { const b = R3.flattened; return b && b.has(t); };
+  const put = (mesh, spots) => {
+    spots.forEach((s, i) => {
+      const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0])));
+      _p.set(s[0], hAt(s[0], s[1]) - 0.01, s[1]);
+      _q.setFromAxisAngle(_up, s[2] * 40);
+      _s.setScalar(hidden ? 0 : 0.6 + s[2] * 0.5);
+      _m4.compose(_p, _q, _s);
+      mesh.setMatrixAt(i, _m4);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  };
+  put(R3.tufts, R3.tuftSpots);
+  put(R3.flowers, R3.flowerSpots);
+}
+
+// Level the ground under a building so it sits flat instead of hovering on a
+// slope. We move the terrain's corner heights (which everything samples) and
+// the mesh vertices, and blend the ring around it so there's no cliff.
+function flattenUnder(cx, cy, s) {
+  const h = R3.heights, cw = MW + 1;
+  const x0 = Math.round(cx - s / 2), y0 = Math.round(cy - s / 2);
+  let sum = 0, n = 0;
+  for (let y = y0; y <= y0 + s; y++) for (let x = x0; x <= x0 + s; x++) { sum += h[y * cw + x]; n++; }
+  const base = Math.max(0.02, sum / n);
+  const pos = R3.terrain.geometry.attributes.position;
+  const set = (x, y, v) => {
+    if (x < 0 || y < 0 || x > MW || y > MH) return;
+    h[y * cw + x] = v;
+    pos.setY(y * cw + x, v); // PlaneGeometry vertices are laid out row by row, like `h`
+  };
+  for (let y = y0 - 1; y <= y0 + s + 1; y++) for (let x = x0 - 1; x <= x0 + s + 1; x++) {
+    if (x < 0 || y < 0 || x > MW || y > MH) continue;
+    const ring = x < x0 || y < y0 || x > x0 + s || y > y0 + s;
+    set(x, y, ring ? (h[y * cw + x] + base) / 2 : base);
+  }
+  for (let y = y0; y < y0 + s; y++) for (let x = x0; x < x0 + s; x++) R3.flattened.add(y * MW + x);
+  pos.needsUpdate = true;
+  R3.terrain.geometry.computeVertexNormals();
+  R3.resKey = "";
+  placeTufts();
+  return base;
+}
+
+function updateFowTexture() {
+  if (!R3.fowData) return;
+  const fog = u8(W.fog_ptr(), MW * MH), d = R3.fowData;
+  for (let i = 0; i < MW * MH; i++) d[i * 4] = fog[i] === 2 ? 255 : fog[i] === 1 ? 105 : 0;
+  R3.fowTex.needsUpdate = true;
+}
+
+// Terrain height at a map position, interpolated between tile corners.
+function hAt(x, y) {
+  const h = R3.heights; if (!h) return 0;
+  const cw = MW + 1;
+  x = Math.max(0, Math.min(MW - 0.001, x)); y = Math.max(0, Math.min(MH - 0.001, y));
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const a = h[y0 * cw + x0], b = h[y0 * cw + x0 + 1], c = h[(y0 + 1) * cw + x0], d = h[(y0 + 1) * cw + x0 + 1];
+  return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+}
+const groundAt = (x, y) => Math.max(hAt(x, y), WATER_Y + 0.02);
+
+// --- Camera ------------------------------------------------------------------
+function placeCamera() {
+  const c = R3.camera;
+  const gy = Math.max(0, hAt(cam.x, cam.y));
+  const horiz = Math.cos(cam.pitch) * cam.dist, up = Math.sin(cam.pitch) * cam.dist;
+  c.position.set(cam.x + Math.sin(cam.yaw) * horiz, gy + up, cam.y + Math.cos(cam.yaw) * horiz);
+  c.lookAt(cam.x, gy, cam.y);
+  c.updateMatrixWorld();
+  // The sun's shadow camera follows the view so shadows stay sharp.
+  const s = R3.sun, ext = cam.dist * 1.1 + 6;
+  s.position.set(cam.x - 14, gy + 26, cam.y + 9);
+  s.target.position.set(cam.x, gy, cam.y);
+  s.target.updateMatrixWorld();
+  const sc = s.shadow.camera;
+  if (sc.right !== ext) { sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 1; sc.far = 80; sc.updateProjectionMatrix(); }
+}
+
+function ndc(sx, sy) { return new THREE.Vector2((sx / view._w) * 2 - 1, -(sy / view._h) * 2 + 1); }
+
+// Screen pixel -> map position on the ground (or null if off the map).
+function screenToGround(sx, sy) {
+  R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+  const hit = R3.terrain && R3.raycaster.intersectObject(R3.terrain, false)[0];
+  if (hit) return { x: hit.point.x, y: hit.point.z };
+  const p = new THREE.Vector3();
+  if (R3.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), p)) return { x: p.x, y: p.z };
+  return null;
+}
+
+// Map position (+ height) -> screen pixels.
+const _v = new THREE.Vector3();
+function worldToScreen(x, y, h) {
+  _v.set(x, h, y).project(R3.camera);
+  return { x: (_v.x + 1) / 2 * view._w, y: (1 - _v.y) / 2 * view._h, behind: _v.z > 1 };
+}
+
+// What's under the cursor? Units are small, so we pick them in screen space
+// (closest to the cursor within a few pixels), which is far more forgiving
+// than a ray. Buildings and resources use a ray against their meshes.
+function pickAt(sx, sy) {
+  let best = null, bd = 20 * 20;
+  for (let i = 0; i < entCount; i++) {
+    const k = E(i, F.kind); if (k >= 10) continue;
+    const o = R3.objs.get(E(i, F.id)); if (!o) continue;
+    const p = worldToScreen(o.root.position.x, o.root.position.z, o.root.position.y + o.height * 0.5);
+    const d = (p.x - sx) ** 2 + (p.y - sy) ** 2;
+    if (d < bd) { bd = d; best = { x: E(i, F.x), y: E(i, F.y), id: E(i, F.id), what: "unit" }; }
+  }
+  if (best) return best;
+  R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+  const targets = [];
+  for (const o of R3.objs.values()) if (o.kind >= 10) targets.push(o.body);
+  if (R3.res) targets.push(...Object.values(R3.res));
+  if (R3.terrain) targets.push(R3.terrain);
+  const hit = R3.raycaster.intersectObjects(targets, false)[0];
+  if (!hit) return screenToGround(sx, sy);
+  if (hit.object === R3.terrain) return { x: hit.point.x, y: hit.point.z, what: "ground" };
+  if (hit.object.isInstancedMesh) {
+    const r = hit.object.userData.res[hit.instanceId];
+    return { x: r[0] + 0.5, y: r[1] + 0.5, what: "res" };
+  }
+  const o = hit.object.userData.obj;
+  return { x: o.x, y: o.y, id: o.id, what: "building" };
+}
+
+// The ground area the camera sees, as 4 map points (for the minimap).
+function viewQuad() {
+  const out = [];
+  const p = new THREE.Vector3(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3);
+  for (const [sx, sy] of [[0, 0], [view._w, 0], [view._w, view._h], [0, view._h]]) {
+    R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+    if (R3.raycaster.ray.intersectPlane(plane, p)) out.push([p.x, p.z]);
+  }
+  return out;
+}
+
+// --- Per-frame update --------------------------------------------------------
+function makeObj(i) {
+  const kind = E(i, F.kind), owner = E(i, F.owner), id = E(i, F.id);
+  const mdl = cachedModel(kind, owner);
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(mdl.body, entMat);
+  body.castShadow = true; body.receiveShadow = true;
+  root.add(body);
+  const o = { id, kind, owner, root, body, tool: null, face: E(i, F.face), height: 0.7, x: E(i, F.x), y: E(i, F.y), lastHp: 1, ring: null };
+  body.userData.obj = o;
+  if (kind >= 10) {
+    const s = stat(kind, 6);
+    o.baseY = flattenUnder(o.x, o.y, s);
+    o.height = { [K.Farm]: 0.3, [K.Tower]: 3, [K.Wonder]: 4, [K.Temple]: 1.9, [K.Granary]: 1.6 }[kind] || 1.6;
+    root.position.set(o.x, o.baseY, o.y);
+  } else {
+    const pivot = new THREE.Group();
+    pivot.position.set(...mdl.pivot);
+    const tool = new THREE.Mesh(mdl.tool, entMat);
+    o.toolMesh = tool;
+    tool.castShadow = true;
+    pivot.add(tool);
+    body.add(pivot);
+    o.tool = pivot; o.toolTilt = mdl.toolTilt || 0;
+    o.height = mdl.height * UNIT_SCALE;
+    body.scale.setScalar(UNIT_SCALE);
+    if (mdl.carry) {
+      o.bundle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.1), entMat);
+      o.bundle.position.set(-0.11, 0.4, 0);
+      o.bundle.visible = false;
+      body.add(o.bundle);
+    }
+  }
+  R3.scene.add(root);
+  R3.objs.set(id, o);
+  return o;
+}
+
+const CARRY_COL = ["#c9473a", "#8a5a33", "#a8a297", "#e6be4b"].map(c => new THREE.Color(c));
+const bundleMats = CARRY_COL.map(c => withFow(new THREE.MeshLambertMaterial({ color: c })));
+
+function setRing(o, on, size) {
+  if (on && !o.ring) {
+    o.ring = new THREE.Mesh(R3.ringGeo, R3.ringMats[o.owner === ME ? 1 : 2]);
+    o.ring.scale.setScalar(size);
+    o.ring.position.y = 0.04;
+    o.ring.renderOrder = 2;
+    o.root.add(o.ring);
+  }
+  if (o.ring) o.ring.visible = on;
+}
+
+function render3d(alpha, now, dt) {
+  const t = now / 1000;
+  timeUniform.value = t;
+  placeCamera();
+  const seen = new Set();
+
+  for (let i = 0; i < entCount; i++) {
+    const id = E(i, F.id), kind = E(i, F.kind);
+    let o = R3.objs.get(id);
+    if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; }
+    if (!o) o = makeObj(i);
+    seen.add(id);
+    const flags = E(i, F.flags);
+    o.lastHp = E(i, F.hp) / E(i, F.maxhp);
+    if (kind >= 10) {
+      const building = flags & 2;
+      o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
+      o.body.material = (flags & 8) ? hitMat : entMat;
+      setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
+      continue;
+    }
+    const x = E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha;
+    const y = E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha;
+    o.x = x; o.y = y;
+    o.root.position.set(x, groundAt(x, y), y);
+    // Turn smoothly toward the facing Rust reports (three.js turns the other way).
+    let target = -E(i, F.face), d = target - o.face;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    o.face += d * Math.min(1, dt * 12);
+    o.root.rotation.y = o.face;
+    const anim = E(i, F.anim);
+    const ph = t + id * 0.37;
+    o.body.position.y = anim === 1 ? Math.abs(Math.sin(ph * 11)) * 0.035 : 0;
+    o.body.rotation.z = anim === 1 ? -0.06 : 0;
+    if (o.tool) {
+      let swing = 0;
+      if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
+      else if (anim === 3) swing = kind === K.Archer ? 0.35 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
+      o.tool.rotation.z = -swing - o.toolTilt;
+    }
+    if (o.bundle) {
+      const carrying = E(i, F.carry) > 0.5;
+      o.bundle.visible = carrying;
+      if (carrying) o.bundle.material = bundleMats[E(i, F.carryK)];
+    }
+    const mat = (flags & 8) ? hitMat : entMat;
+    o.body.material = mat;
+    if (o.toolMesh) o.toolMesh.material = mat;
+    setRing(o, !!(flags & 1), W.kind_radius(kind) * 1.45);
+  }
+
+  // Things that vanished: badly hurt units and buildings get a short death
+  // animation; anything else just walked into the fog.
+  for (const [id, o] of R3.objs) {
+    if (seen.has(id)) continue;
+    R3.objs.delete(id);
+    if (o.ring) o.ring.visible = false;
+    if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10 });
+    else R3.scene.remove(o.root);
+  }
+  R3.dying = R3.dying.filter(d => {
+    const p = (now - d.t0) / (d.building ? 1600 : 1200);
+    if (p >= 1) { R3.scene.remove(d.root); return false; }
+    if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
+    else { d.root.children[0].rotation.x = -Math.min(1, p * 3) * Math.PI / 2; d.root.position.y -= p > 0.6 ? dt * 0.4 : 0; }
+    return true;
+  });
+
+  updateResources();
+  updateArrows(alpha);
+  updateRally();
+  updateGhost();
+  updateMarkers(now);
+  R3.renderer.render(R3.scene, R3.camera);
+}
+
+// Rebuild the resource instances when anything about them changed.
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _c = new THREE.Color();
+function updateResources() {
+  if (!R3.res) return;
+  let key = resCount + ":";
+  for (let i = 0; i < resCount; i += 7) key += (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0);
+  if (frame % 15 !== 0 && key === R3.resKey) return;
+  R3.resKey = key;
+  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [] };
+  for (const m of Object.values(R3.res)) m.count = 0;
+  for (let i = 0; i < resCount; i++) {
+    const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
+    const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
+    let mesh, scale;
+    if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
+    else if (kind === 0) { mesh = "bush"; scale = 0.6 + 0.6 * frac; }
+    else { mesh = kind === 3 ? "gold" : "stone"; scale = 0.55 + 0.55 * frac; }
+    const m = R3.res[mesh];
+    if (m.count >= m.instanceMatrix.count) continue;
+    const x = tx + 0.5 + (h - 0.5) * 0.25, y = ty + 0.5 + (h2 - 0.5) * 0.25;
+    _p.set(x, groundAt(x, y) - 0.02, y);
+    _q.setFromAxisAngle(_up, h * 6.28);
+    _s.setScalar(scale);
+    _m4.compose(_p, _q, _s);
+    m.setMatrixAt(m.count, _m4);
+    const v = 0.85 + h2 * 0.3;
+    m.setColorAt(m.count, _c.setRGB(v, v, v));
+    lists[mesh].push([tx, ty]);
+    m.count++;
+  }
+  for (const [k, m] of Object.entries(R3.res)) {
+    m.userData.res = lists[k];
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.computeBoundingSphere();
+  }
+}
+
+function updateArrows(alpha) {
+  const a = R3.arrows;
+  a.count = Math.min(projCount, 256);
+  for (let i = 0; i < a.count; i++) {
+    const px = projBuf[i * 4 + 2], py = projBuf[i * 4 + 3], x = projBuf[i * 4], y = projBuf[i * 4 + 1];
+    const ix = px + (x - px) * alpha, iy = py + (y - py) * alpha;
+    _p.set(ix, groundAt(ix, iy) + 0.55, iy);
+    _q.setFromAxisAngle(_up, -Math.atan2(y - py, x - px));
+    _s.setScalar(1);
+    _m4.compose(_p, _q, _s);
+    a.setMatrixAt(i, _m4);
+  }
+  a.instanceMatrix.needsUpdate = true;
+}
+
+function updateRally() {
+  const sel = selection();
+  const r = R3.rally;
+  r.visible = false;
+  if (sel.length !== 1) return;
+  const i = sel[0], rx = E(i, F.rx), ry = E(i, F.ry);
+  if (E(i, F.owner) !== ME || Number.isNaN(rx)) return;
+  r.visible = true;
+  r.position.set(rx, groundAt(rx, ry), ry);
+}
+
+// The see-through building that follows the mouse while placing.
+function updateGhost() {
+  if (placing == null || !mouse.inside) { if (R3.ghost) R3.ghost.visible = false; return; }
+  if (R3.ghostKind !== placing) {
+    if (R3.ghost) R3.scene.remove(R3.ghost);
+    R3.ghost = new THREE.Group();
+    R3.ghost.add(new THREE.Mesh(cachedModel(placing, ME).body, ghostMat));
+    const s = stat(placing, 6);
+    R3.footprint = new THREE.Mesh(new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#7be864", transparent: true, opacity: 0.35, depthWrite: false }));
+    R3.footprint.position.y = 0.06;
+    R3.ghost.add(R3.footprint);
+    R3.scene.add(R3.ghost);
+    R3.ghostKind = placing;
+  }
+  const spot = placementSpot(mouse.x, mouse.y);
+  if (!spot) { R3.ghost.visible = false; return; }
+  const s = stat(placing, 6), cx = spot.tx + s / 2, cy = spot.ty + s / 2;
+  R3.ghost.visible = true;
+  R3.ghost.position.set(cx, Math.max(0.02, hAt(cx, cy)), cy);
+  R3.footprint.material.color.set(W.can_place(placing, spot.tx, spot.ty) ? "#7be864" : "#f05a3c");
+}
+
+// Expanding rings on the ground where you clicked.
+function addMarker(x, y, color) {
+  const m = new THREE.Mesh(R3.ringGeo, new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false }));
+  m.position.set(x, groundAt(x, y) + 0.05, y);
+  m.renderOrder = 3;
+  R3.scene.add(m);
+  R3.markers.push({ m, t0: performance.now() });
+}
+function updateMarkers(now) {
+  R3.markers = R3.markers.filter(k => {
+    const p = (now - k.t0) / 600;
+    if (p >= 1) { R3.scene.remove(k.m); k.m.material.dispose(); return false; }
+    k.m.scale.setScalar(0.15 + p * 0.45);
+    k.m.material.opacity = 1 - p;
+    return true;
+  });
+}
+
+// Screen position of an entity (for health bars and box-select).
+function entScreen(i, atTop) {
+  const o = R3.objs.get(E(i, F.id));
+  if (!o) return null;
+  const top = o.kind >= 10 ? o.height * (o.body.scale.y) : o.height + 0.12;
+  return worldToScreen(o.root.position.x, o.root.position.z, o.root.position.y + (atTop ? top : o.height * 0.5));
+}
+
+// --- HUD icons -----------------------------------------------------------------
+// Button icons and portraits are rendered from the same 3D models, with a
+// small second renderer, then copied into ordinary 2D canvases.
+const iconCache = new Map();
+let iconR = null;
+function iconRenderer() {
+  if (iconR) return iconR;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setSize(128, 128, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight("#f1f4f8", "#5a5040", 2.0));
+  const d = new THREE.DirectionalLight("#fff3dd", 2.2); d.position.set(-2, 4, 3); scene.add(d);
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  iconR = { renderer, scene, cam, mat };
+  return iconR;
+}
+function icon(k, owner, px) {
+  const key = `${k}/${owner}/${px}`;
+  if (iconCache.has(key)) return iconCache.get(key);
+  const { renderer, scene, cam, mat } = iconRenderer();
+  const mdl = cachedModel(k, owner);
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(mdl.body, mat);
+  g.add(body);
+  if (mdl.tool) { const t = new THREE.Mesh(mdl.tool, mat); t.position.set(...mdl.pivot); t.rotation.z = -(mdl.toolTilt || 0); g.add(t); }
+  g.rotation.y = k >= 10 ? -0.6 : -0.9;
+  scene.add(g);
+  // Frame the model: fit its bounding box in view.
+  const bb = new THREE.Box3().setFromObject(g), c = bb.getCenter(new THREE.Vector3()), size = bb.getSize(new THREE.Vector3());
+  if (k >= 10) { bb.min.y = Math.max(bb.min.y, 0); c.y = (bb.min.y + bb.max.y) / 2; }
+  const r = Math.max(size.x, size.y, size.z) * (k >= 10 ? 0.62 : 0.7);
+  const dist = r / Math.tan((cam.fov * Math.PI) / 360);
+  cam.position.set(c.x, c.y + dist * 0.55, c.z + dist * 0.85);
+  cam.lookAt(c);
+  renderer.render(scene, cam);
+  scene.remove(g);
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = px * 2;
+  cv.getContext("2d").drawImage(renderer.domElement, 0, 0, px * 2, px * 2);
+  iconCache.set(key, cv);
+  return cv;
+}
+function iconEl(k, owner, px) {
+  const cv = document.createElement("canvas");
+  const src = icon(k, owner, px);
+  cv.width = src.width; cv.height = src.height;
+  cv.getContext("2d").drawImage(src, 0, 0);
+  return cv;
+}

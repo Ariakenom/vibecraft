@@ -1,0 +1,15 @@
+[Unit]
+Description=VibeCraft multiplayer WebSocket relay
+After=network.target
+
+[Service]
+Environment=PORT=8787
+ExecStart=/usr/bin/node /opt/vibecraft/server.js
+Restart=always
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
