@@ -29,6 +29,8 @@ cdn.jsdelivr.net, so the page needs an internet connection.
 | web/audio.js    | Synthesized sound effects (Web Audio)                            |
 | web/net.js      | Multiplayer: server, client (prediction), transports, trace      |
 | server.js       | A tiny WebSocket relay for multiplayer from your own copy        |
+| assets/models.py| Builds the 3D models in Blender; writes web/models.glb (see assets/README.md) |
+| web/models.glb  | The models, embedded in the page by build.sh                     |
 
 The sim runs at a fixed 20 ticks/second (`Game::tick`). Each frame JS calls
 `render()`, which writes every visible entity as 18 floats into a buffer, and

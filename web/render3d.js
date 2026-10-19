@@ -369,12 +369,122 @@ function resourceModels() {
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true) };
 }
 
+// --- Models made in Blender ------------------------------------------------------
+// assets/models.py builds the models in Blender and exports web/models.glb;
+// build.sh puts that file in the page here as base64. Without it (or if it
+// won't load) the game falls back to the models built in code above.
+//
+// Blender marks team-coloured parts magenta (TEAM) or dark magenta (TEAM_DARK),
+// and they're painted in each player's colours here. Vertex colour alpha holds
+// ambient occlusion baked in Blender: shading in corners, under eaves and
+// where things meet the ground.
+const MODELS_B64 = "/*MODELS_BASE64*/";
+const GLB_NAMES = { 0: "Citizen", 1: "Spearman", 2: "Archer", 3: "Horseman", 10: "Capitol", 12: "Barracks", 13: "Range", 14: "Stable", 15: "Tower",
+  16: "Settlement", 17: "Farm", 18: "Granary", 19: "Sawmill", 20: "Mason", 21: "Smithy", 22: "Market", 23: "Temple", 24: "Wonder" };
+const AO_STRENGTH = 0.9;
+let glbModels = null; // name -> { geo, team, ao, tool, pivot }
+
+function loadGlbModels() {
+  if (MODELS_B64.startsWith("/*")) return; // not built in
+  try {
+    const raw = atob(MODELS_B64), bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    glbModels = parseGlb(bytes.buffer);
+  } catch (e) {
+    console.warn("Couldn't load models.glb; using the built-in models.", e);
+    glbModels = null;
+  }
+}
+
+// A small reader for the glTF Binary files Blender writes: meshes with
+// positions, normals, colours and custom attributes, in a node tree.
+function parseGlb(buf) {
+  const dv = new DataView(buf);
+  if (dv.getUint32(0, true) !== 0x46546c67) throw new Error("not a GLB file");
+  const jlen = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jlen)));
+  const bin = 20 + jlen + 8;
+  const SIZE = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+  const READ = { 5120: ["getInt8", 1, 127], 5121: ["getUint8", 1, 255], 5122: ["getInt16", 2, 32767], 5123: ["getUint16", 2, 65535], 5125: ["getUint32", 4, 0], 5126: ["getFloat32", 4, 0] };
+  // An accessor's values as floats (normalized integers scaled to 0..1 or -1..1).
+  const read = i => {
+    const a = json.accessors[i], bv = json.bufferViews[a.bufferView], n = SIZE[a.type];
+    const [fn, bytes, max] = READ[a.componentType];
+    const stride = bv.byteStride || n * bytes, base = bin + (bv.byteOffset || 0) + (a.byteOffset || 0);
+    const out = new Float32Array(a.count * n);
+    for (let k = 0; k < a.count; k++) for (let c = 0; c < n; c++) {
+      let v = dv[fn](base + k * stride + c * bytes, true);
+      if (a.normalized) v = Math.max(v / max, -1);
+      out[k * n + c] = v;
+    }
+    return { data: out, n, count: a.count };
+  };
+  const meshGeo = mi => {
+    const prim = json.meshes[mi].primitives[0], at = prim.attributes;
+    const pos = read(at.POSITION), count = pos.count;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos.data, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(read(at.NORMAL).data, 3));
+    const col = at.COLOR_0 != null ? read(at.COLOR_0) : null;
+    const rgb = new Float32Array(count * 3), ao = new Float32Array(count), team = new Uint8Array(count);
+    for (let k = 0; k < count; k++) {
+      const r = col ? col.data[k * col.n] : 1, g = col ? col.data[k * col.n + 1] : 1, b = col ? col.data[k * col.n + 2] : 1;
+      ao[k] = col && col.n === 4 ? 1 - (1 - col.data[k * 4 + 3]) * AO_STRENGTH : 1;
+      // TEAM is linear (1, 0, 1); TEAM_DARK is #800080, linear (0.216, 0, 0.216).
+      team[k] = g < 0.02 && Math.abs(r - b) < 0.02 ? (r > 0.6 ? 1 : r > 0.1 ? 2 : 0) : 0;
+      rgb[k * 3] = r * ao[k]; rgb[k * 3 + 1] = g * ao[k]; rgb[k * 3 + 2] = b * ao[k];
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(rgb, 3));
+    geo.setAttribute("aWave", new THREE.BufferAttribute(at._WAVE != null ? read(at._WAVE).data : new Float32Array(count), 1));
+    if (prim.indices != null) geo.setIndex(Array.from(read(prim.indices).data));
+    geo.computeBoundingBox(); geo.computeBoundingSphere();
+    return { geo, team, ao };
+  };
+  const out = {};
+  const children = new Set();
+  for (const nd of json.nodes) for (const c of nd.children || []) children.add(c);
+  json.nodes.forEach((nd, i) => {
+    if (children.has(i) || nd.mesh == null) return;
+    const m = meshGeo(nd.mesh);
+    for (const c of nd.children || []) {
+      const cn = json.nodes[c];
+      if (cn.mesh != null && /\.tool$/.test(cn.name)) { m.tool = meshGeo(cn.mesh); m.pivot = cn.translation || [0, 0, 0]; }
+    }
+    out[nd.name] = m;
+  });
+  return out;
+}
+
+// A copy of a Blender model's geometry painted in a player's colours.
+function teamGeo(m, owner) {
+  const geo = m.geo.clone();
+  const col = geo.attributes.color.array;
+  const c1 = new THREE.Color(PCOL[owner]), c2 = new THREE.Color(PDARK[owner]);
+  for (let k = 0; k < m.team.length; k++) {
+    if (!m.team[k]) continue;
+    const c = m.team[k] === 1 ? c1 : c2, a = m.ao[k];
+    col[k * 3] = c.r * a; col[k * 3 + 1] = c.g * a; col[k * 3 + 2] = c.b * a;
+  }
+  return geo;
+}
+
+function glbModel(kind, owner) {
+  const m = glbModels && glbModels[GLB_NAMES[kind]];
+  if (!m) return null;
+  if (kind >= 10) return { body: teamGeo(m, owner) };
+  if (!m.tool) return null;
+  // Keep the code model's animation settings (tool tilt, carrying), swap the shapes.
+  const code = unitModel(kind, owner);
+  code.body.dispose(); code.tool.dispose();
+  return Object.assign(code, { body: teamGeo(m, owner), tool: teamGeo(m.tool, owner), pivot: m.pivot, height: m.geo.boundingBox.max.y });
+}
+
 // --- Setup -------------------------------------------------------------------
 let entMat, ghostMat, hitMat, treeMat, treeDepthMat;
 const modelCache = new Map();
 function cachedModel(kind, owner) {
   const key = kind * 8 + owner;
-  if (!modelCache.has(key)) modelCache.set(key, kind >= 10 ? { body: buildingModel(kind, owner) } : unitModel(kind, owner));
+  if (!modelCache.has(key)) modelCache.set(key, glbModel(kind, owner) || (kind >= 10 ? { body: buildingModel(kind, owner) } : unitModel(kind, owner)));
   return modelCache.get(key);
 }
 
@@ -436,7 +546,11 @@ function initRenderer() {
   R3.rally.visible = false;
   scene.add(R3.rally);
 
+  loadGlbModels();
   R3.resGeo = resourceModels();
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"]]) {
+    if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
+  }
   buildSmoke();
   addGraphicsControls();
   applyGraphics();
@@ -876,6 +990,7 @@ function makeObj(i) {
     const s = stat(kind, 6);
     o.baseY = flattenUnder(o.x, o.y, s);
     o.height = { [K.Farm]: 0.3, [K.Tower]: 3, [K.Wonder]: 4, [K.Temple]: 1.9, [K.Granary]: 1.6 }[kind] || 1.6;
+    if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
   } else {
     const pivot = new THREE.Group();
@@ -1255,7 +1370,7 @@ function setSmokeEmitters(list) {
 }
 // Where smoke comes out, relative to the building's centre.
 function updateSmoke() {
-  const CHIMNEYS = { [K.Smithy]: [0.38, 1.5, -0.22], [K.Settlement]: [0.3, 1.1, -0.2] };
+  const CHIMNEYS = { [K.Smithy]: [0.38, 1.5, -0.22], [K.Settlement]: [0.3, glbModels ? 1.2 : 1.1, -0.2] };
   if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
   const list = [];
   for (const o of R3.objs.values()) {

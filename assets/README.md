@@ -1,0 +1,48 @@
+# 3D models
+
+`models.py` builds every unit, building and resource model in Blender and
+writes `web/models.glb`. `build.sh` embeds that file in the page. If the
+file is missing, the game falls back to the simpler models built in code
+in `web/render3d.js`.
+
+## Rebuilding
+
+Blender 4.2 or newer:
+
+    blender --background --python assets/models.py
+
+or without the Blender app, with the `bpy` module (Python 3.11):
+
+    python3.11 -m venv .bvenv && .bvenv/bin/pip install bpy==4.2.0
+    .bvenv/bin/python assets/models.py
+
+Add `--blend` to also save `assets/models.blend`.
+
+The script bakes ambient occlusion with Cycles (a few seconds on a CPU),
+then packs the file: normals and colours are stored as bytes using the
+standard `KHR_mesh_quantization` extension, which roughly halves its size.
+
+## Editing a model by hand
+
+Import `web/models.glb` into Blender (File > Import > glTF 2.0). Keep these
+conventions, which the game relies on:
+
+- **One object per model**, named as the game expects: `Capitol`,
+  `Barracks`, `Range`, `Stable`, `Tower`, `Settlement`, `Farm`, `Granary`,
+  `Sawmill`, `Mason`, `Smithy`, `Market`, `Temple`, `Wonder`, `Pine`,
+  `Oak`, `Bush`, `Stone`, `Gold`, `Citizen`, `Spearman`, `Archer`,
+  `Horseman`. The object's own location doesn't matter.
+- **Units** face +X with their feet at the ground. The weapon or tool is a
+  child object named `<Unit>.tool`; its origin is the point it swings
+  around.
+- **Buildings** are centred on their footprint (2, 3 or 4 tiles square,
+  see `src/defs.rs`) with the ground at zero.
+- **Team colours:** paint parts pure magenta `#ff00ff` (team colour) or
+  `#800080` (darker team colour). The game repaints them per player.
+- **Vertex colour alpha is ambient occlusion** (1 = fully lit).
+- **Flags** wave when their vertices have a `_WAVE` float attribute:
+  0 at the pole, 1 at the free end.
+
+Export as glTF Binary with: Include > Data > Attributes on (for `_WAVE`),
+Mesh > Vertex Color "Active", Materials "No export", +Y up. Then rebuild the
+page with `build.sh`. Rerunning `models.py` overwrites hand edits.

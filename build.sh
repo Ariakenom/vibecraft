@@ -25,6 +25,10 @@ def inline(m):
     return "<script>\n" + open("web/" + src, encoding="utf-8").read() + "\n</script>"
 html = re.sub(r'<script src="([^"]+)"></script>', inline, html)
 html = html.replace("/*WASM_BASE64*/", base64.b64encode(wasm).decode())
+# The 3D models from Blender (assets/models.py writes web/models.glb).
+import os
+if os.path.exists("web/models.glb"):
+    html = html.replace("/*MODELS_BASE64*/", base64.b64encode(open("web/models.glb", "rb").read()).decode())
 open("dist/vibecraft.html", "w", encoding="utf-8").write(html)
 print(f"dist/vibecraft.html  ({len(wasm)//1024} KB wasm, {len(html)//1024} KB page)")
 PY
