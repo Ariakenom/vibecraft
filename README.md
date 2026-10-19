@@ -1,145 +1,299 @@
 # VibeCraft
 
-A small RTS in the spirit of Empire Earth. Game logic is Rust compiled to
-WebAssembly; the 3D view is three.js, and the UI and input are plain JavaScript.
+A small real-time strategy game in the spirit of Empire Earth, for up to four
+players (people or computer). The game logic is Rust compiled to
+WebAssembly; the 3D view is three.js; the interface, input and networking
+are plain JavaScript. Everything ships as one HTML file.
 
-## Build
+Play it at https://ginnu.freemyip.com/vibecraft/ (see Deployment). A copy
+also runs as a claude.ai artifact, but multiplayer there is unreliable
+(claude.ai's room service), so treat that one as single player.
+
+## Quick start
 
     rustup target add wasm32-unknown-unknown   # once
     ./build.sh                                   # writes dist/vibecraft.html
 
-Open `dist/vibecraft.html` in a browser. No server or bundler needed:
+Open `dist/vibecraft.html` in a browser. No server or bundler is needed:
 the .wasm and our scripts are embedded in the page. three.js loads from
 cdn.jsdelivr.net, so the page needs an internet connection.
 
-## Code map
+`build.sh` also works where the wasm target can't be installed: with
+`BUILD_STD=1` it builds Rust's standard library from source
+(`-Zbuild-std`), which needs the `rust-src` component.
 
-| File            | What it does                                                     |
-|-----------------|------------------------------------------------------------------|
-| src/defs.rs     | Unit/building stats, costs, rock-paper-scissors damage table     |
-| src/map.rs      | Tile map, noise-based symmetric map generator                    |
-| src/path.rs     | A* pathfinding                                                   |
-| src/game.rs     | The simulation: orders, movement, gathering, combat, fog          |
-| src/ai.rs       | The computer opponent                                            |
-| src/save.rs     | Saving and loading: the whole game to bytes and back              |
-| src/lib.rs      | The Rust/JavaScript boundary (exported functions, render buffers)|
-| web/index.html  | Page layout and styles; lists the scripts below                  |
-| web/main.js     | Game loop, camera, input, HUD, minimap                           |
-| web/render3d.js | three.js scene: terrain, water, grass, models, fog of war, picking, icons |
-| web/audio.js    | Synthesized sound effects (Web Audio)                            |
-| web/net.js      | Multiplayer: server, client (prediction), transports, trace      |
-| server.js       | A tiny WebSocket relay for multiplayer from your own copy        |
-| assets/models.py| Builds the 3D models in Blender; writes web/models.glb (see assets/README.md) |
-| web/models.glb  | The models, embedded in the page by build.sh                     |
+For multiplayer from your own copy, run the relay too: `node server.js`
+(no dependencies), and put its address under "Relay server" on the start
+screen. Friends on your network use your computer's address, e.g.
+`ws://192.168.1.20:8787`. You can test alone with several browser windows.
 
-The sim runs at a fixed 20 ticks/second (`Game::tick`). Each frame JS calls
-`render()`, which writes every visible entity as 18 floats into a buffer, and
-reads that buffer straight out of wasm memory.
+## Repository layout
 
-## Rules worth knowing
+| File                 | What it does                                                    |
+|----------------------|-----------------------------------------------------------------|
+| src/defs.rs          | Unit and building kinds, stats, costs, tech requirements, bonuses, damage table |
+| src/map.rs           | Tile map and the symmetric map generator                        |
+| src/path.rs          | A* pathfinding                                                  |
+| src/game.rs          | The simulation: orders, movement, gathering, building, combat, food, fog, victory |
+| src/ai.rs            | The computer opponent                                           |
+| src/save.rs          | Saving and loading: the whole game to bytes and back            |
+| src/lib.rs           | The Rust/JavaScript boundary: exported functions, render buffers, the two multiplayer copies |
+| web/index.html       | Page layout and styles; lists the scripts below                 |
+| web/main.js          | Game loop, camera, input, HUD, lobby, saving, multiplayer glue, the trace panel |
+| web/render3d.js      | three.js scene: terrain, water, models, effects, fog of war, picking, icons, graphics setting |
+| web/audio.js         | Synthesized sound effects (Web Audio), volume                   |
+| web/net.js           | Multiplayer: transports, the trace, `Server` and `Client`       |
+| server.js            | The WebSocket relay that carries multiplayer messages           |
+| assets/models.py     | Builds the 3D models in Blender and writes web/models.glb (see assets/README.md) |
+| web/models.glb       | The models, embedded in the page by build.sh                    |
+| deploy/              | nginx and systemd config for the live site                      |
+| test/                | Tests that run with plain Node (see Testing)                    |
+| dist/vibecraft.html  | The built game, checked in so it can be deployed as is          |
 
-- Win by destroying the enemy Capitol, or by finishing a Wonder. (The AI
-  goes for a Wonder too, on Normal and Hard.)
-- Progress comes from buildings, not research: each building unlocks others
-  (`Kind::requires` in `src/defs.rs`) and gives a lasting bonus
-  (`Bonuses::from_buildings`). Press K in game for the tech tree.
-- There's no population cap. Every unit eats food each minute (see `upkeep`
-  in `src/defs.rs`); if the granary empties, your units slowly lose health.
-- One citizen per farm.
+## How the pieces fit
 
-## Controls
+**The simulation is Rust and owns all game state.** `Game::tick` advances
+the world by one fixed step of 50 ms (20 ticks a second). Nothing in the
+simulation looks at the clock, the screen or the network.
 
-WASD / arrows / screen edges move the camera, the wheel zooms, middle-drag
-rotates and tilts. Build: Q farm, E settlement, R barracks, T granary,
-Y sawmill, U range, I stonemason, O tower, F smithy, G stable, C market,
-V temple, B wonder. Train: Q. K tech tree. Z attack-move, X stop, H home, `.` idle
-citizen, Ctrl+1–9 groups, P pause, M sound, Ctrl+S save.
+**JavaScript drives it through plain numeric exports** (`#[unsafe(no_mangle)]
+pub extern "C" fn` in `src/lib.rs`). There's no binding generator: every
+export takes and returns numbers. Larger data moves through buffers in wasm
+memory. For example, each frame JS calls `render()`, which writes every
+visible entity as 18 floats (`ENT_STRIDE`; field offsets are `F` in
+`main.js`), and JS reads that straight out of `memory.buffer`. Lists going
+the other way, like the ids in a command, go through `scratch_ptr()`.
 
-## Saving
+**Every player action is a command:** a flat array of numbers
+`[code, arg, x, y, ...ids]`, built in `issue()` in `main.js` and applied by
+`command()` in `lib.rs`. Codes: 1 smart order (right-click), 2 attack-move,
+3 stop, 4 train, 5 cancel, 6 place a building, 7 hand a player to the
+computer (only the host sends this). In single player, `issue()` applies it
+at once. In multiplayer it's applied at once too, and sent to the host.
 
-Single player only. Menu → Save game (or Ctrl+S) stores the game in the
-browser (localStorage, the newest 8); Menu → Load game, or "Load a saved
-game" on the title screen, lists them. Download turns a save into a
-`.vibecraft` file that "Load from a file…" reads back, on any computer.
+**Drawing** (`render3d.js`) reads the render buffers each frame and
+interpolates every unit between its previous and current tick position
+(`px/py` to `x/y`), so motion is smooth at any frame rate. The models come
+from `web/models.glb`, made in Blender by `assets/models.py`, with simpler
+models built in code as a fallback.
 
-`Game::save` in `src/save.rs` writes the complete simulation state as
-little-endian bytes, floats bit for bit, so a loaded game carries on exactly
-as the saved one would have (`cargo test` checks this). The page wraps those
-bytes, gzipped, in a JSON envelope with the camera and control groups.
-Change any saved struct and you must update `save`/`load` together and bump
-`VERSION`; older saves are then refused rather than misread.
+## Rules that must not break
+
+Multiplayer and saves rely on these. Break one and games drift apart, or
+loaded games misbehave.
+
+1. **The simulation is deterministic.** Same start plus same commands on
+   the same ticks gives the same game on every computer. So in the
+   simulation:
+   - no randomness except seeded from the game (the map seed);
+   - no clock, no `HashMap` iteration order, nothing that varies by machine;
+   - floats only through operations that are exact in IEEE (they are, in wasm).
+2. **All input goes through commands.** Anything that changes the game must
+   be a command, so it can be sent, ordered and replayed. Selection and the
+   camera aren't commands, since they don't change the game.
+3. **Command arguments are exact.** `issue()` rounds x and y to 1/100 of a
+   tile once; everyone then applies exactly those numbers. `cleanCmd()`
+   checks the shape of anything that arrives from the network.
+4. **Commands from JS are re-run.** Multiplayer re-applies commands when it
+   corrects a prediction. `applyCmd()` therefore has no side effects
+   (sounds, messages); those belong in the code that calls `issue()`.
+5. **The whole game can be copied.** `Game` derives `Clone` (multiplayer
+   keeps two copies). A new field must be `Clone` too. Scratch buffers that
+   don't affect results can skip copying, like `Pathfinder` does.
+6. **Saved structs and the save format change together.** Change a struct
+   that `src/save.rs` writes, and update `save` and `load` together and bump
+   `VERSION`. Older saves are then refused rather than misread.
+7. **Network messages change with `NET.PROTOCOL`.** Bump it in `net.js`
+   whenever a message's meaning changes; players on different versions then
+   simply don't see each other's games.
+
+## Common changes
+
+**Tune a unit or building.** Stats and costs are the `static … Stats` lines
+in `src/defs.rs`. Tech requirements are `Kind::requires`; bonuses are
+`Bonuses::from_buildings`.
+
+**Add a building or unit kind.**
+- Rust:
+  - add it to `Kind` and `Kind::from_u32` in `src/defs.rs`;
+  - give it stats in `Kind::stats`, its requirements, and (for buildings)
+    a place in `BUILDABLE`;
+  - if the AI should build it, add it to its plan in `src/ai.rs`.
+- JS:
+  - add it to `K`, `NAMES` and `DESC` in `main.js`;
+  - for buildings, to `BUILD_MENU` (hotkey) and `ERAS` (tech tree column);
+  - give it a model: in `assets/models.py` (rebuild `web/models.glb`; see
+    `assets/README.md`), and a fallback in `unitModel` or `buildingModel` in
+    `render3d.js`.
+- Saves store kinds as numbers, so a new kind doesn't need a new `VERSION`.
+
+**Add a command.**
+- Add a `Command` variant and its handling in `Game::apply` (`src/game.rs`),
+  and a code in `command()` (`src/lib.rs`).
+- Allow the code in `cleanCmd()` (`main.js`), and send it from the interface
+  through `issue()`.
+- Bump `NET.PROTOCOL`.
+
+**Add simulation state.** Add the field. Make sure it's `Clone`. Write it in
+`save`/`load` and bump the save `VERSION`. If it should catch drift between
+players, include it in `Game::checksum`.
+
+## Testing
+
+    cargo test --release      # the simulation: save round trips, damaged saves
+    ./build.sh
+    node test/wasm.mjs        # two copies stay identical; copy/restore; timings
+    node test/relay.cjs       # the relay: allowed pages, limits, heartbeat, bad messages
+
+For multiplayer, open the page in two browser windows: one hosts, the other
+opens the invite link. Press F8 in a game for the network details (see
+below).
 
 ## Multiplayer
 
-Up to four players, any mix of people and computer players. Every
-computer runs the same deterministic simulation and only commands travel
-(`Command` in `src/game.rs`, `issue()` in `web/main.js`).
+### The idea
 
-Everyone follows one clock (20 ticks a second, kept by the host). A command
-is stamped with the tick it was given on and applied at once by the player
-who gave it, so your own units react instantly. Each computer keeps two
-copies of the game (`mp_save` / `mp_swap` / `mp_restore` in `src/lib.rs`):
-the **live** copy you play in, at "now", and the **confirmed** copy, a short
-window behind, which only moves forward with commands in their final order.
+Every computer runs the same simulation, and only commands travel.
 
-- The **server** (`Server` in `web/net.js`, inside the host's tab) collects
-  everyone's commands. When the confirmed time reaches a tick, it bundles
-  the commands stamped for it and sends the bundle to every client. The
-  window is sized from the measured ping so commands arrive in time; a late
-  one goes into the next open tick.
-- Every player, the host too, runs a **client** (`Client`). It steps its
-  confirmed copy with each bundle and compares it with what the live copy
-  did. Usually they match and nothing happens. When a friend's command was
-  in the bundle, the live copy is replaced by the confirmed one and the
-  ticks since are run again with your own unconfirmed commands (about a
-  millisecond). Friends' actions show up one network trip late.
+Everyone follows **one clock**: tick numbers kept by the host, 20 a second.
+A command is stamped with the tick it was given on. The player who gave it
+applies it at once, so their own units react instantly, host and guest
+alike.
 
-Checksums of the confirmed copy are compared every second; drift ends the
-game for everyone. If a guest leaves, the host puts "the computer takes over"
-into a bundle. No pausing or speed changes. The game steps on animation
-frames and, in a background tab, on a Web Worker clock.
+Each computer keeps **two copies** of the game (`mp_save`, `mp_swap`,
+`mp_restore` in `src/lib.rs`):
 
-Press F8 (or Net) during a game for the network details: ping, window, how
-often predictions were right (whole game, and your own things), corrections
-and why, whether a correction ever changed your own things or your
-selection, how late friends' commands show up, late commands, drift, stalls
-and message rates. "Copy trace" copies a second-by-second recording as JSON.
+- the **live** copy, which you see and play in, at "now";
+- the **confirmed** copy, a short **window** behind now (100–200 ms
+  usually), which only moves forward with commands in their final order.
 
-The start screen is a lobby with four seats. Opening the page makes you the
-host of your own lobby; the other seats each hold a computer player or are
-left open. Friends join with an invite link (the page address plus `#CODE`)
-and take an open seat, or a computer's if none is open. The host can give a
-friend's seat back to the computer or remove them. Begin with no friends
-seated is a single-player game. Each lobby is a room named after its code,
-and the game runs in that same room; the host's presence there carries the
-seat list (`openOwnLobby`, `joinLobby`, `beginGame` in `web/main.js`).
+The **server** (`Server` in `net.js`) runs in the host's tab and keeps no
+game state. It collects commands. When confirmed time reaches a tick, it
+puts that tick's commands into a **bundle** (ordered by player, then by the
+order each gave them) and sends the bundle to everyone.
 
-- On the published claude.ai page: links can't reach the page inside
-  claude.ai, so everyone's lobby is listed instead ("Join game XXXXXX"), and
-  invite links can be pasted. Friends must be signed in and invited to the
-  artifact (Viewer is enough: everything travels as room *presence*, which
-  anyone in the room may set). The small line under the lobby shows what
-  claude.ai's room reports, for troubleshooting. Browser privacy features
-  (Firefox tracking protection, ad blockers) can block it.
-- From your own copy (`dist/vibecraft.html`): run `node server.js` (no
-  dependencies) and enter its address under "Relay server", e.g.
-  `ws://192.168.1.20:8787` for friends on your network. Friends with their
-  own copy paste your invite link. You can test alone with several windows.
-- From a web server: serve the page and proxy `./relay` next to it to
-  `server.js`; the page then fills in that relay address by itself
-  (`wss://<host>/<path>/relay`), so invite links just work.
+Every player, the host included, runs a **client** (`Client`). It steps its
+confirmed copy with each bundle and compares the bundle with what its live
+copy assumed for that tick. Almost always they match, and nothing happens.
+When they don't, the live copy is replaced by the confirmed one and the ticks
+since are run again, with every command not yet confirmed. That takes about
+a millisecond. Units that moved slide to their new place over 150 ms instead
+of jumping.
 
-The relay only accepts pages from its own site (`ALLOWED_ORIGINS`, default
-`https://ginnu.freemyip.com`), local copies and home-network addresses,
-limits connections (`MAX_CONNECTIONS`, `MAX_PER_IP`), message size (16 KB),
-stored state (8 KB per connection) and message rate (60 a second, closing
-connections that keep flooding), shrugs off malformed messages, and pings
-every 30 s to drop connections that have gone quiet.
+The server also passes every command on the moment it arrives (**early
+news**), so the other players can put it into their live copy right away.
+That costs one correction, but friends' actions show up a single network trip
+after they were given, instead of a window later. Early news is only a hint;
+bundles are what everyone agrees on.
+
+### Timeline of one command
+
+Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
+
+| When (host time) | What happens |
+|---|---|
+| tick 100 | B's live copy applies it at once; B's units move. B sends it, stamped 100. |
+| about 30 ms later | The host's server receives it, passes it on as early news, and the host's live copy rewinds to put it in at tick 100. |
+| about 60 ms later | Other guests receive the early news and do the same. |
+| tick 102 | Confirmed time reaches tick 100 (window 2). The server bundles it and everyone's confirmed copy applies it, matching what their live copies did. |
+
+### Edge cases
+
+- **A late command**, one that reaches the server after its tick was already
+  bundled, goes into the next tick still open. The giver's prediction then
+  turns out wrong by a tick or two, and a correction moves their units
+  slightly. The server also grows the window by one tick, so the next ones
+  arrive in time.
+- **The window** is sized from each guest's measured ping: half a round trip
+  plus twice the wobble plus 25 ms. It grows at once, but shrinks only after
+  5 calm seconds, one tick at a time, so a ping right on a boundary doesn't
+  make it flap.
+- **A guest's clock** is the host's tick count plus half the round trip,
+  taken from the most hopeful recent message and adjusted gently. The host
+  measures how far off each guest's clock is (shown in the trace).
+- **Running ahead.** The live copy may run at most 3 s ahead of the
+  confirmed copy. If confirmations stop, the game waits.
+- **Drift.** Checksums of the confirmed copy are compared every second.
+  Drift ends the game for everyone; it means a determinism bug.
+- **Someone leaving.** The host notices them gone from the room, or silent
+  for 20 s, and puts "the computer takes over" (command 7) into a bundle.
+- **Lost messages.** Every message repeats what the other side hasn't
+  acknowledged, so losing some only delays things.
+
+### The trace (F8)
+
+Press F8, or Net, during a game. It shows:
+- ping, window and clock error;
+- how often the live copy predicted the confirmed one exactly (the whole
+  game, and your own things);
+- corrections and their causes, and whether a correction ever changed your
+  own things or your selection;
+- how soon friends' commands showed up;
+- late commands, drift, stalls and message rates.
+
+"Copy trace" copies a second-by-second recording as JSON, for debugging.
+
+### Messages
+
+Two topics travel through the room. Every message carries
+`v: NET.PROTOCOL`.
+
+- `cmd`, guest to host: `{from, token, cmds: [[seq, stamp, cmd], …], ack,
+  sum, echo, gt, est}`. `cmds` lists unconfirmed commands, `ack` is the
+  newest tick held, `sum` is a recent confirmed checksum, and `echo`, `gt`
+  and `est` are for ping and clock.
+- `frame`, host to everyone: `{upTo, ticks: [[tick, bundle], …], early,
+  now, w, acks, sum, ge, ce, late, end}`. Every tick up to `upTo` is final,
+  and ticks not listed had no commands. `early` holds commands not yet
+  bundled.
+
+### Lobby and transports
+
+- **The lobby.** The start screen has four seats. Opening the page makes
+  you the host of your own lobby. Friends join with an invite link (the
+  page address plus `#CODE`) and take an open seat, or a computer's if none
+  is open. Begin with no friends seated is single player.
+- **Rooms.** Each lobby is a room named after its code; the game runs in
+  that room, and the host's presence there carries the seat list
+  (`openOwnLobby`, `joinLobby`, `beginGame` in `main.js`).
+- **Transports.** Rooms are either the relay (`server.js`, through
+  `openSocket`) or, on claude.ai, its room service (`wrapClaudeRoom`).
+  Both look the same to the rest of the code: `emit`, `on`, `presence`,
+  `onPeers`, `leave`.
+
+### The relay
+
+`server.js` knows nothing about the game. It joins clients into named rooms
+and forwards messages within a room. It:
+- accepts only pages from its own site (`ALLOWED_ORIGINS`, default
+  `https://ginnu.freemyip.com`), local copies and home-network addresses;
+- limits connections (`MAX_CONNECTIONS`, `MAX_PER_IP`), message size
+  (16 KB), stored presence (8 KB per connection) and rate (60 messages a
+  second), closing connections that keep flooding;
+- ignores malformed messages;
+- pings every 30 s and drops connections that stay silent.
+
+## Saving
+
+Single player only:
+- **Save:** Menu → Save game, or Ctrl+S, stores the game in the browser
+  (localStorage, the newest 8).
+- **Load:** Menu → Load game, or "Load a saved game" on the start screen,
+  lists them.
+- **Files:** Download turns a save into a `.vibecraft` file that "Load from
+  a file…" reads back, on any computer. (Download doesn't work in the
+  claude.ai copy.)
+
+`Game::save` in `src/save.rs` writes the complete simulation state as
+little-endian bytes, floats bit for bit, so a loaded game carries on exactly
+as the saved one would have; `cargo test` checks this. The page wraps those
+bytes, gzipped, in a JSON envelope with the camera and control groups.
 
 ## Deployment
 
-The game runs at https://ginnu.freemyip.com/vibecraft/ (host `ginnu`, Ubuntu,
-reached with `ssh ginnu`). The files in `deploy/` are the server config:
+The game runs at https://ginnu.freemyip.com/vibecraft/ on the host `ginnu`
+(Ubuntu, reached with `ssh ginnu`). The files in `deploy/` are the server
+config:
 
 | On the server                                    | From                          |
 |--------------------------------------------------|-------------------------------|
@@ -157,13 +311,34 @@ To update:
 
     ./build.sh && scp dist/vibecraft.html ginnu:/var/www/vibecraft/index.html
     # if server.js changed:
-    scp server.js ginnu:/opt/vibecraft/ && ssh -t ginnu sudo systemctl restart vibecraft-relay
+    scp server.js ginnu:/tmp/ && ssh -t ginnu 'sudo mv /tmp/server.js /opt/vibecraft/ && sudo systemctl restart vibecraft-relay'
     # if deploy/nginx-vibecraft.conf changed:
     scp deploy/nginx-vibecraft.conf ginnu:/tmp/ && ssh -t ginnu 'sudo mv /tmp/nginx-vibecraft.conf /etc/nginx/snippets/vibecraft.conf && sudo nginx -t && sudo systemctl reload nginx'
 
-## Players and maps
+Players must reload the page after an update: different `NET.PROTOCOL`
+versions don't play together.
 
-Two players get an 80×80 map with 180° symmetry; three or four get 96×96
-with four-way symmetry, so every start is the same, just turned. Lose your
-Capitol and you're out: everything you own falls with it. Last one standing
-wins, or whoever finishes a Wonder first.
+## The game
+
+- **Winning:** destroy every rival Capitol, or finish a Wonder. The AI goes
+  for a Wonder too, on Normal and Hard. Lose your Capitol and everything you
+  own falls with it.
+- **Progress comes from buildings, not research.** Each building unlocks
+  others and gives a lasting bonus. Press K for the tech tree.
+- **No population cap.** Every unit eats food each minute; if the granary
+  empties, your units slowly lose health. One citizen per farm.
+- **Maps:** two players get an 80×80 map with 180° symmetry; three or four
+  get 96×96 with four-way symmetry, so every start is the same, just turned.
+
+**Controls.**
+- **Camera:** WASD, arrows or screen edges move it; the wheel zooms;
+  middle-drag rotates and tilts.
+- **Build:** Q farm, E settlement, R barracks, T granary, Y sawmill,
+  U range, I stonemason, O tower, F smithy, G stable, C market, V temple,
+  B wonder.
+- **Train:** Q.
+- **Other keys:**
+  - Z attack-move, X stop
+  - H home, `.` idle citizen
+  - Ctrl+1–9 make a group, 1–9 recall it
+  - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
