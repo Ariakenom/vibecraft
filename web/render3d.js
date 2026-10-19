@@ -36,6 +36,12 @@ const timeUniform = { value: 0 };
 // How much things move in the wind (0 on the Low graphics setting).
 const swayUniform = { value: 1 };
 function withFow(mat, extra) {
+  // three.js reuses a compiled shader for any material whose onBeforeCompile
+  // has the same source text. This wrapper's text is the same for every
+  // material, so each patch needs its own key, or (say) the swaying trees
+  // would silently get the plain shader of whichever material compiled first.
+  const key = "fow:" + (extra ? extra.cacheKey || extra.toString() : "");
+  mat.customProgramCacheKey = () => key;
   mat.onBeforeCompile = sh => {
     if (extra) extra(sh);
     sh.uniforms.uFow = fowUniforms.uFow;
@@ -104,6 +110,85 @@ function treePatch(sh) {
   sh.uniforms.uTime = timeUniform;
   sh.uniforms.uSway = swayUniform;
   sh.vertexShader = WIND_GLSL + sh.vertexShader.replace("#include <begin_vertex>", TREE_SWAY_GLSL);
+}
+
+// --- Surface detail in the shaders -------------------------------------------------
+// Smooth 3D value noise, for detail computed per pixel: the shoreline, sand
+// grain, stone and gold veins. Per pixel stays sharp however close the camera
+// gets, where a painted texture would blur.
+const NOISE_GLSL = `
+  float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+  float vnoise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+  }
+  float vnoise2(vec2 p) { return vnoise3(vec3(p, 0.37)); }
+`;
+// Pass the world position of each pixel to the fragment shader as vGW.
+function worldPosPatch(sh) {
+  sh.vertexShader = "varying vec3 vGW;\n" + sh.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
+    vec4 gwP = vec4(transformed, 1.0);
+    #ifdef USE_INSTANCING
+      gwP = instanceMatrix * gwP;
+    #endif
+    vGW = (modelMatrix * gwP).xyz;`);
+  sh.fragmentShader = "varying vec3 vGW;\n" + NOISE_GLSL + sh.fragmentShader;
+}
+
+// The ground: beaches are drawn here from each pixel's height, so the line
+// between grass and sand is crisp, a little ragged, and darker where the sand
+// is wet. Grass and sand get a fine grain. The painted texture only provides
+// the broad colours (meadow patches, earth and rock on slopes).
+function groundPatch(sh) {
+  worldPosPatch(sh);
+  sh.fragmentShader = sh.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+    {
+      vec2 g = vGW.xz;
+      float gn = vnoise2(g * 0.8) * 0.6 + vnoise2(g * 2.6) * 0.3 + vnoise2(g * 7.0) * 0.1;
+      float line = 0.13 + (gn - 0.5) * 0.18;               // the height where grass gives way to sand
+      float sandAmt = 1.0 - smoothstep(line - 0.008, line + 0.008, vGW.y);
+      float grain = vnoise2(g * 40.0), grain2 = vnoise2(g * 13.0);
+      vec3 dry = vec3(0.60, 0.49, 0.24), wet = vec3(0.33, 0.25, 0.12);
+      vec3 sand = mix(dry, wet, smoothstep(${(WATER_Y + 0.14).toFixed(3)}, ${(WATER_Y + 0.01).toFixed(3)}, vGW.y));
+      sand *= 0.9 + 0.12 * grain + 0.08 * grain2;
+      // Below the waterline the painted seabed shows through.
+      sandAmt *= smoothstep(${(WATER_Y - 0.3).toFixed(3)}, ${(WATER_Y - 0.08).toFixed(3)}, vGW.y);
+      // A slightly darker rim of grass along the beach makes the edge read.
+      float rim = smoothstep(line + 0.008, line + 0.02, vGW.y) * (1.0 - smoothstep(line + 0.03, line + 0.07, vGW.y));
+      vec3 grass = diffuseColor.rgb * (0.9 + 0.2 * vnoise2(g * 11.0) - 0.16 * rim);
+      diffuseColor.rgb = mix(grass, sand, sandAmt);
+    }`);
+}
+
+// Stone: keeps its flat facets, with a stony surface painted on per pixel:
+// mottled tone, faint layers, hairline cracks and dark specks. Gold ore is the
+// same stone with branching gold veins over about half of it, which catch the
+// light.
+function rockPatch(gold) {
+  const patch = sh => {
+    worldPosPatch(sh);
+    sh.fragmentShader = sh.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+      vec3 rp = vGW * 5.0;
+      float n1 = vnoise3(rp), n2 = vnoise3(rp * 3.1), n3 = vnoise3(rp * 9.7);
+      float layers = 0.5 + 0.5 * sin(vGW.y * 26.0 + n1 * 5.0);
+      diffuseColor.rgb *= 0.8 + 0.24 * n1 + 0.1 * n2 + 0.06 * layers;
+      float crack = 1.0 - smoothstep(0.0, 0.025, abs(vnoise3(rp * 1.6 + 4.0) - 0.5));
+      diffuseColor.rgb *= 1.0 - 0.4 * crack - 0.35 * smoothstep(0.8, 0.86, n3);
+      float vein = 0.0;
+      ${gold ? `
+      // Two networks of thin lines (where a noise field crosses 0.5) make
+      // branching veins; together they cover about half the stone.
+      float va = vnoise3(vGW * 6.0) * 0.7 + vnoise3(vGW * 14.0 + 2.0) * 0.3;
+      float vb = vnoise3(vGW * 5.0 + 7.0) * 0.7 + vnoise3(vGW * 12.0 + 9.0) * 0.3;
+      vein = max(1.0 - smoothstep(0.045, 0.07, abs(va - 0.5)), 1.0 - smoothstep(0.035, 0.06, abs(vb - 0.5)));
+      vec3 goldCol = vec3(0.82, 0.5, 0.07) * (0.7 + 0.5 * n2);
+      diffuseColor.rgb = mix(diffuseColor.rgb, goldCol, vein);` : ""}`)
+      .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+      ${gold ? `totalEmissiveRadiance += vec3(0.5, 0.32, 0.04) * vein * (0.15 + 0.85 * smoothstep(0.8, 0.9, vnoise3(vGW * 30.0)));` : ""}`);
+  };
+  patch.cacheKey = gold ? "gold" : "stone";
+  return patch;
 }
 
 // --- Model building ----------------------------------------------------------
@@ -483,7 +568,7 @@ function glbModel(kind, owner) {
 }
 
 // --- Setup -------------------------------------------------------------------
-let entMat, ghostMat, hitMat, treeMat, treeDepthMat;
+let entMat, ghostMat, hitMat, treeMat, treeDepthMat, stoneMat, goldMat;
 const modelCache = new Map();
 function cachedModel(kind, owner) {
   const key = kind * 8 + owner;
@@ -528,6 +613,8 @@ function initRenderer() {
   treeMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), treePatch);
   treeDepthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   treeDepthMat.onBeforeCompile = treePatch;
+  stoneMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), rockPatch(false));
+  goldMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), rockPatch(true));
   ghostMat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false });
   R3.raycaster = new THREE.Raycaster();
 
@@ -646,7 +733,7 @@ function buildWorld() {
   const tex = new THREE.CanvasTexture(terrainCanvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = R3.renderer.capabilities.getMaxAnisotropy();
-  const terrain = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ map: tex })));
+  const terrain = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ map: tex }), groundPatch));
   terrain.receiveShadow = true;
   scene.add(terrain);
   R3.terrain = terrain;
@@ -674,12 +761,12 @@ function buildWorld() {
   // Room for every resource on the map. (Sizing this from the resources
   // explored so far was a bug: trees discovered later had no room and vanished.)
   const n = W.res_total() + 16;
-  const mk = (g, cnt, sways) => {
-    const m = new THREE.InstancedMesh(g, sways ? treeMat : entMat, cnt);
+  const mk = (g, cnt, sways, mat) => {
+    const m = new THREE.InstancedMesh(g, mat || (sways ? treeMat : entMat), cnt);
     if (sways) m.customDepthMaterial = treeDepthMat;
     m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m;
   };
-  R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n), gold: mk(R3.resGeo.gold, n) };
+  R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -726,7 +813,7 @@ function buildShore() {
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const shore = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ vertexColors: true })));
+  const shore = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), groundPatch));
   shore.receiveShadow = true;
   R3.scene.add(shore);
   R3.shore = shore;
@@ -749,24 +836,40 @@ function buildWater() {
     depth[i] = Math.max(-0.2, WATER_Y - heightAnywhere(x, z));
   }
   geo.setAttribute("aDepth", new THREE.BufferAttribute(depth, 1));
+  // The ground's height under the water, 4 samples per tile, so the shader
+  // knows the depth at every pixel: the foam line then follows the real
+  // shoreline crisply instead of smearing across the mesh's coarse vertices.
+  const HR = 4, hw = (MW + pad * 2) * HR, hh = (MH + pad * 2) * HR, hdata = new Uint16Array(hw * hh);
+  for (let j = 0; j < hh; j++) for (let i = 0; i < hw; i++) hdata[j * hw + i] = THREE.DataUtils.toHalfFloat(heightAnywhere((i + 0.5) / HR - pad, (j + 0.5) / HR - pad));
+  const htex = new THREE.DataTexture(hdata, hw, hh, THREE.RedFormat, THREE.HalfFloatType);
+  htex.magFilter = htex.minFilter = THREE.LinearFilter;
+  htex.needsUpdate = true;
+  R3.heightTex = htex;
   const mat = new THREE.MeshPhongMaterial({ color: "#2b6f8c", specular: "#5d7a88", shininess: 180, transparent: true, opacity: 0.88, depthWrite: false });
   withFow(mat, sh => {
     sh.uniforms.uTime = timeUniform;
+    sh.uniforms.uHeight = { value: htex };
     sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
       vDepth = aDepth;
       vWPos = position.xz;
       transformed.y += (sin(position.x * 1.3 + uTime * 1.1) + cos(position.z * 1.1 + uTime * 0.8)) * 0.02 * clamp(aDepth * 3.0, 0.0, 1.0);`);
-    sh.fragmentShader = "uniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.fragmentShader
+    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
-        float d = clamp(vDepth, 0.0, 2.0);
+        float ground = texture2D(uHeight, (vWPos + ${pad}.0) / vec2(${MW + pad * 2}.0, ${MH + pad * 2}.0)).r;
+        float dRaw = ${WATER_Y.toFixed(3)} - ground;
+        if (dRaw < -0.01) discard;
+        float d = clamp(dRaw, 0.0, 2.0);
         vec3 shallow = vec3(0.13, 0.42, 0.43), deep = vec3(0.05, 0.18, 0.3);
         diffuseColor.rgb = mix(shallow, deep, smoothstep(0.05, 1.1, d));
-        float ripple = 0.5 + 0.5 * sin(uTime * 1.8 - d * 40.0 + sin(vWPos.x * 2.1) + cos(vWPos.y * 1.7));
-        float foam = (1.0 - smoothstep(0.0, 0.07, d)) * (0.35 + 0.45 * ripple);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.93, 0.92), foam);
-        diffuseColor.a = mix(0.62, 0.94, smoothstep(0.0, 0.6, d));
-        diffuseColor.a = max(diffuseColor.a, foam * 0.85);
-        if (vDepth < -0.05) discard;`)
+        // A crisp line of foam where the water meets the sand, and a wave of
+        // foam washing in and out just beyond it.
+        float edge = 1.0 - smoothstep(0.0, 0.012, d);
+        float wash = sin(uTime * 1.5 - d * 70.0 + sin(vWPos.x * 1.7) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
+        float wave = smoothstep(0.75, 0.95, wash) * (1.0 - smoothstep(0.015, 0.07, d));
+        float foam = max(edge, wave * 0.7);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.94, 0.93), foam);
+        diffuseColor.a = mix(0.7, 0.95, smoothstep(0.0, 0.5, d));
+        diffuseColor.a = max(diffuseColor.a, foam * 0.92);`)
       .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
         vec2 wp = vWPos * 3.2;
         normal = normalize(normal + vec3(
@@ -841,7 +944,8 @@ function placeTufts() {
   const blocked = t => { const b = R3.flattened; return b && b.has(t); };
   const put = (mesh, spots) => {
     spots.forEach((s, i) => {
-      const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0])));
+      // no grass on the beach (the ground shader turns low ground to sand)
+      const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0]))) || hAt(s[0], s[1]) < 0.24;
       _p.set(s[0], hAt(s[0], s[1]) - 0.01, s[1]);
       _q.setFromAxisAngle(_up, s[2] * 40);
       _s.setScalar(hidden ? 0 : 0.6 + s[2] * 0.5);
@@ -1266,7 +1370,7 @@ function applyGraphics() {
       sun.shadow.mapSize.set(GFX.shadows, GFX.shadows);
       r.shadowMap.type = GFX.shadows >= 2048 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     }
-    for (const m of [entMat, hitMat, treeMat, ghostMat, ...bundleMats]) m.needsUpdate = true;
+    for (const m of [entMat, hitMat, treeMat, stoneMat, goldMat, ghostMat, ...bundleMats]) m.needsUpdate = true;
     R3.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   }
   applyGrass();
