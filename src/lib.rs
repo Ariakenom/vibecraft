@@ -337,6 +337,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
                 Some(kind) => Command::Place { ids, kind, tx: x as i32, ty: y as i32 },
                 None => return 12,
             },
+            8 => Command::Surrender,
             _ => return 0,
         };
         match w.game.apply(owner as u8, cmd) {
@@ -685,4 +686,122 @@ mod tests {
         assert_eq!(load_game(0), 0, "an empty buffer is refused");
         assert_eq!(checksum(), sum, "a refused load leaves the game alone");
     }
+
+    /// Surrender puts you out at once. With two computer players left they
+    /// play on (you can watch); with one left, it has won.
+    #[test]
+    fn surrender_puts_you_out() {
+        init(3, 1, 3);
+        for _ in 0..100 {
+            tick();
+        }
+        assert_eq!(command(1, 8, 0, 0.0, 0.0, 0), 0);
+        tick();
+        assert_eq!((defeated(1), state_of(1), state_of(2)), (1, 5, 0));
+        assert_eq!(debug_count(1, 0) + debug_count(1, 10), 0, "everything of theirs fell");
+        assert_eq!(command(1, 8, 0, 0.0, 0.0, 0), 0, "surrendering twice is harmless");
+
+        init(3, 1, 2);
+        command(1, 8, 0, 0.0, 0.0, 0);
+        tick();
+        assert_eq!((state_of(1), state_of(2), winner_player()), (2, 1, 2));
+    }
+
+    /// Lifting the fog, or looking through another player's eyes, changes
+    /// only what's shown: the game runs exactly the same.
+    #[test]
+    fn the_view_never_changes_the_game() {
+        init(11, 2, 4);
+        set_ai(1, 1);
+        for _ in 0..1200 {
+            tick();
+        }
+        mp_save(); // a second copy, to run side by side
+        set_view(3, 1); // both copies: the whole map, seen as Green
+        with(|w| {
+            let o = w.other.as_mut().unwrap(); // then the second one back to normal
+            o.local = 1;
+            o.reveal = false;
+        });
+        for t in 0..2400 {
+            tick();
+            take_events();
+            mp_swap();
+            tick();
+            take_events();
+            let other = checksum();
+            mp_swap();
+            assert_eq!(checksum(), other, "the views made the games differ at tick {t}");
+        }
+        assert_eq!((local_player(), view_reveal()), (3, 1));
+        mp_swap();
+        assert_eq!((local_player(), view_reveal()), (1, 0));
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// Watching: spectators, replays, and players who are out of the game.
+
+/// Look at the game through player `player`'s eyes (their fog, HUD numbers
+/// and alerts), or with `reveal` the whole map. Through a player's eyes the
+/// fog starts afresh: the parts they can see now, the rest unexplored. Only changes what this
+/// computer shows, never the game itself, so it's safe in multiplayer. Both
+/// multiplayer copies get it, so a correction doesn't undo it.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_view(player: u32, reveal: u32) {
+    with(|w| {
+        for g in std::iter::once(&mut w.game).chain(w.other.as_mut()) {
+            g.local = player.clamp(1, g.n_players as u32) as u8;
+            g.reveal = reveal != 0;
+            if !g.reveal {
+                // Only one player's fog is ever kept, so we can't know what
+                // this one has explored before: start from what they see now.
+                g.fog.iter_mut().for_each(|v| *v = 0);
+                let local = g.local;
+                for e in g.ents.iter_mut() {
+                    e.seen = e.owner == local;
+                }
+            }
+            g.update_fog();
+        }
+    })
+}
+/// Like `state()`, but from player `p`'s point of view, whoever we're
+/// looking through: 0 playing, 1 won by conquest, 2 lost by conquest, 3 won
+/// with a Wonder, 4 lost to a Wonder, 5 out while the others play on.
+#[unsafe(no_mangle)]
+pub extern "C" fn state_of(p: u32) -> u32 {
+    game(|g| {
+        let out = g.players.get(p as usize).is_some_and(|pl| pl.defeated);
+        match (g.winner as u32, g.by_wonder) {
+            (0, _) if out => 5,
+            (0, _) => 0,
+            (w, false) if w == p => 1,
+            (_, false) => 2,
+            (w, true) if w == p => 3,
+            _ => 4,
+        }
+    })
+}
+/// 1 while the fog is lifted (see `set_view`).
+#[unsafe(no_mangle)]
+pub extern "C" fn view_reveal() -> u32 {
+    game(|g| g.reveal as u32)
+}
+/// 1 if the winner won by finishing a Wonder.
+#[unsafe(no_mangle)]
+pub extern "C" fn by_wonder() -> u32 {
+    game(|g| g.by_wonder as u32)
+}
+/// For the spectators' scoreboard: player `p`'s stock of resource `r`.
+#[unsafe(no_mangle)]
+pub extern "C" fn player_stock(p: u32, r: u32) -> f32 {
+    game(|g| g.players.get(p as usize).map_or(0.0, |pl| pl.stock[(r as usize).min(3)]))
+}
+/// For the spectators' scoreboard: living units of player `p`
+/// (`which` 0), or just their soldiers (1).
+#[unsafe(no_mangle)]
+pub extern "C" fn player_units(p: u32, which: u32) -> u32 {
+    game(|g| g.ents.iter().filter(|e| e.alive && e.owner as u32 == p && !e.is_building() && (which == 0 || e.kind.is_military())).count() as u32)
 }

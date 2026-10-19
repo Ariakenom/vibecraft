@@ -218,6 +218,37 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 #netTraceText { width: 100%; height: 80px; font: 11px ui-monospace, Menlo, Consolas, monospace; background: var(--ground); color: var(--ink); border: 1px solid var(--line); }
 #netWait { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); padding: 10px 16px; border-radius: 3px; font-size: 15px; z-index: 3; }
 
+/* watching: scoreboard, replay bar, spectator count */
+#loadScreen .saves { max-height: min(30vh, 300px); }
+.danger:hover { border-color: var(--bad); color: #f2b0a2; }
+.chip.watching { color: var(--muted); font-size: 13px; }
+#scoreboard { position: absolute; top: 10px; left: 10px; z-index: 2; background: #1b1610e6; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 6px 8px; max-width: calc(100% - 20px); }
+#scoreboard .sb-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
+#scoreboard .sb-head b { font: 400 14px var(--display); color: var(--bronze); letter-spacing: .04em; }
+#scoreboard table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+#scoreboard th { color: var(--muted); font-weight: 500; text-align: right; padding: 0 0 2px 10px; }
+#scoreboard th:first-child { text-align: left; padding-left: 0; }
+#scoreboard td { text-align: right; padding: 2px 0 2px 10px; }
+#scoreboard td:first-child { text-align: left; padding-left: 0; }
+#scoreboard tr.out td { opacity: .5; }
+#scoreboard tr.viewing { background: #c99a4522; }
+.sb-name { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 6px 2px 2px; cursor: pointer; font: 700 13px var(--body); }
+.sb-name:hover, .sb-name[aria-pressed="true"] { border-color: var(--line); }
+.sb-name i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.sb-name small { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+#obsBar { position: absolute; left: 0; right: 0; margin-inline: auto; width: fit-content; bottom: 10px; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; background: #1b1610ee; border: 1px solid var(--line); border-radius: 3px; padding: 6px 10px; max-width: calc(100% - 20px); }
+#obsLabel { font: 400 14px var(--display); color: var(--bronze); letter-spacing: .04em; }
+#obsBar .rp-only { display: none; align-items: center; gap: 8px; flex-wrap: wrap; }
+body[data-observe="replay"] #obsBar .rp-only { display: flex; }
+#rpSpeed button { padding: 3px 9px; font-size: 13px; }
+#rpSeek { width: min(320px, 50vw); accent-color: var(--bronze); }
+#rpTime { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 90px; text-align: center; }
+body.observing #hint { display: none; }
+@media (max-width: 760px) {
+  #scoreboard th.r, #scoreboard td:nth-child(n+4) { display: none; }
+  #rpSeek { width: 100%; }
+}
+
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 </style>
 
@@ -227,6 +258,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
     <div class="res" id="res"></div>
     <div id="restip" hidden></div>
     <div class="spacer"></div>
+    <span class="chip watching" id="watchCount" title="Spectators watching this game" hidden></span>
     <span class="clock" id="clock">0:00</span>
     <span class="vol">
       <button class="tbtn" id="soundBtn" title="Sound on or off (M)">Sound on</button>
@@ -243,6 +275,24 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
     <div id="toasts" aria-live="polite"></div>
     <div id="hint" hidden></div>
     <div id="netWait" hidden></div>
+    <section id="scoreboard" hidden aria-label="Players">
+      <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
+      <table>
+        <thead><tr><th>Player</th><th title="Living units">People</th><th title="Soldiers">Army</th><th class="r">Food</th><th class="r">Wood</th><th class="r">Stone</th><th class="r">Gold</th></tr></thead>
+        <tbody id="sbBody"></tbody>
+      </table>
+    </section>
+    <div id="obsBar" hidden>
+      <span id="obsLabel">Replay</span>
+      <span class="rp-only">
+        <button class="tbtn" id="rpRestart" title="Back to the start" aria-label="Back to the start">⏮</button>
+        <button class="tbtn" id="rpPlay" aria-pressed="true">Pause</button>
+        <span class="seg" id="rpSpeed" role="group" aria-label="Replay speed"><button data-s="1" aria-pressed="true">1×</button><button data-s="2" aria-pressed="false">2×</button><button data-s="4" aria-pressed="false">4×</button><button data-s="8" aria-pressed="false">8×</button></span>
+        <input type="range" id="rpSeek" min="0" max="100" step="20" value="0" aria-label="Jump to">
+        <span id="rpTime">0:00 / 0:00</span>
+      </span>
+      <button class="tbtn" id="obsExit">Exit replay</button>
+    </div>
     <section id="netTrace" hidden aria-label="Network details">
       <pre id="netTraceBody"></pre>
       <div class="row">
@@ -275,7 +325,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
         <ol class="seats" id="seats"></ol>
         <div class="invite" id="inviteRow" hidden>
           <label for="inviteLink">Invite friends with this link. They take a free seat when they open it.</label>
-          <div class="row"><input id="inviteLink" readonly spellcheck="false"><button class="ghost" id="copyLink">Copy link</button></div>
+          <div class="row"><input id="inviteLink" readonly spellcheck="false"><button class="ghost" id="copyLink">Copy link</button><button class="ghost" id="lobbyWatchLink" title="A link for people who only want to watch your games">Copy watch link</button></div>
         </div>
         <div class="row" id="openGames"></div>
         <div class="row" id="joinRow" hidden>
@@ -289,10 +339,11 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
           <span class="note">To play with friends from your own copy, run <code>node server.js</code> (see README).</span>
         </div>
         <p class="note" id="mpStatus" aria-live="polite"></p>
+        <div class="row"><button class="ghost" id="watchHostBtn" hidden>Watch their game</button></div>
         <p class="note net-status" id="netStatus"></p>
         <div class="row">
           <button class="go" id="startBtn">Begin</button>
-          <button class="ghost" id="startLoadBtn">Load a saved game</button>
+          <button class="ghost" id="startLoadBtn">Saved games and replays</button>
           <button class="ghost" id="leaveLobbyBtn" hidden>Play my own game instead</button>
         </div>
       </section>
@@ -319,6 +370,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
       <table class="stats" id="endStats"></table>
       <div class="row">
         <button class="go" id="againBtn">Play again</button>
+        <button class="ghost" id="replayBtn" hidden>Watch the replay</button>
         <button class="ghost" id="toMenuBtn">Change difficulty</button>
       </div>
     </div>
@@ -337,7 +389,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 
   <div class="overlay" id="menuScreen" hidden>
     <div class="card">
-      <h1>Paused</h1>
+      <h1 id="menuTitle">Paused</h1>
       <div class="row">
         <button class="go" id="resumeBtn">Resume</button>
         <button class="ghost" id="saveBtn" title="Save (Ctrl+S)">Save game</button>
@@ -345,6 +397,28 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
         <button class="ghost" id="restartBtn">Restart</button>
         <button class="ghost" id="quitBtn">New game</button>
       </div>
+      <div class="row">
+        <button class="ghost" id="watchLinkBtn" title="Anyone with this link can watch the game live, seeing the whole map">Copy watch link</button>
+        <button class="ghost danger" id="surrenderBtn">Surrender</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="outScreen" hidden>
+    <div class="card">
+      <h1><span id="outTitle">Defeat</span><small id="outWhy">Your Capitol has fallen. The others play on.</small></h1>
+      <div class="row">
+        <button class="go" id="outWatchBtn">Watch the rest</button>
+        <button class="ghost" id="outLeaveBtn">Leave the game</button>
+      </div>
+      <p class="note">Watching, you see the whole map, or the game through any player's eyes.</p>
+    </div>
+  </div>
+
+  <div class="overlay" id="watchWait" hidden>
+    <div class="card">
+      <h1>Spectating<small id="watchWaitText">Looking for the game…</small></h1>
+      <div class="row"><button class="ghost" id="watchWaitCancel">Cancel</button></div>
     </div>
   </div>
 
@@ -355,11 +429,13 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
         <button class="ghost" id="loadClose">Back</button>
       </div>
       <ul class="saves" id="saveList"></ul>
+      <h2>Replays</h2>
+      <ul class="saves" id="replayList"></ul>
       <div class="row">
         <button class="ghost" id="loadFileBtn">Load from a file…</button>
         <input type="file" id="loadFile" accept=".vibecraft,application/json" hidden>
       </div>
-      <p class="note">Saves are kept in this browser. Use Download to keep one as a file, or to carry it to another computer.</p>
+      <p class="note">Saves and replays are kept in this browser. Use Download to keep one as a file, or to carry it to another computer.</p>
     </div>
   </div>
 </div>
@@ -370,4 +446,5 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 <script src="audio.js"></script>
 <script src="net.js"></script>
 <script src="render3d.js"></script>
+<script src="watch.js"></script>
 <script src="main.js"></script>

@@ -43,6 +43,7 @@ screen. Friends on your network use your computer's address, e.g.
 | web/render3d.js      | three.js scene: terrain, water, models, effects, fog of war, picking, icons, graphics setting |
 | web/audio.js         | Synthesized sound effects (Web Audio), volume                   |
 | web/net.js           | Multiplayer: transports, the trace, `Server` and `Client`       |
+| web/watch.js         | Recording games, replays, spectators, and watching after you're out |
 | server.js            | The WebSocket relay that carries multiplayer messages           |
 | assets/models.py     | Builds the 3D models in Blender and writes web/models.glb (see assets/README.md) |
 | web/models.glb       | The models, embedded in the page by build.sh                    |
@@ -68,7 +69,7 @@ the other way, like the ids in a command, go through `scratch_ptr()`.
 `[code, arg, x, y, ...ids]`, built in `issue()` in `main.js` and applied by
 `command()` in `lib.rs`. Codes: 1 smart order (right-click), 2 attack-move,
 3 stop, 4 train, 5 cancel, 6 place a building, 7 hand a player to the
-computer (only the host sends this). In single player, `issue()` applies it
+computer (only the host sends this), 8 surrender. In single player, `issue()` applies it
 at once. In multiplayer it's applied at once too, and sent to the host.
 
 **Drawing** (`render3d.js`) reads the render buffers each frame and
@@ -97,13 +98,18 @@ loaded games misbehave.
 4. **Commands from JS are re-run.** Multiplayer re-applies commands when it
    corrects a prediction. `applyCmd()` therefore has no side effects
    (sounds, messages); those belong in the code that calls `issue()`.
-5. **The whole game can be copied.** `Game` derives `Clone` (multiplayer
+5. **What a computer shows never changes the game.** `local` (whose eyes
+   we look through), `reveal` (fog lifted), the fog itself, `seen` and the
+   selection are view-only: no rule may read them. Spectators and replays
+   look at the same game in different ways and must still run it
+   identically (`the_view_never_changes_the_game` checks this).
+6. **The whole game can be copied.** `Game` derives `Clone` (multiplayer
    keeps two copies). A new field must be `Clone` too. Scratch buffers that
    don't affect results can skip copying, like `Pathfinder` does.
-6. **Saved structs and the save format change together.** Change a struct
+7. **Saved structs and the save format change together.** Change a struct
    that `src/save.rs` writes, and update `save` and `load` together and bump
    `VERSION`. Older saves are then refused rather than misread.
-7. **Network messages change with `NET.PROTOCOL`.** Bump it in `net.js`
+8. **Network messages change with `NET.PROTOCOL`.** Bump it in `net.js`
    whenever a message's meaning changes; players on different versions then
    simply don't see each other's games.
 
@@ -140,10 +146,15 @@ players, include it in `Game::checksum`.
 
 ## Testing
 
-    cargo test --release      # the simulation: save round trips, damaged saves
+    cargo test --release      # the simulation: saves, surrender, views
     ./build.sh
     node test/wasm.mjs        # two copies stay identical; copy/restore; timings
     node test/relay.cjs       # the relay: allowed pages, limits, heartbeat, bad messages
+    test/browser/run.sh       # headless Chromium: replays, surrender, spectators (see the script for setup)
+
+The browser tests check the things that matter by checksum: a replay at
+any tick is the game at that tick, and a spectator's copy is the players'
+confirmed game, tick for tick.
 
 For multiplayer, open the page in two browser windows: one hosts, the other
 opens the invite link. Press F8 in a game for the network details (see
@@ -213,6 +224,8 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
   measures how far off each guest's clock is (shown in the trace).
 - **Running ahead.** The live copy may run at most 3 s ahead of the
   confirmed copy. If confirmations stop, the game waits.
+- **The end.** The game is over when the confirmed copy says so, not the
+  live one, so the recording (and what spectators get) has the ending too.
 - **Drift.** Checksums of the confirmed copy are compared every second.
   Drift ends the game for everyone; it means a determinism bug.
 - **Someone leaving.** The host notices them gone from the room, or silent
@@ -241,7 +254,7 @@ Press F8, or Net, during a game. It shows:
 
 ### Messages
 
-Two topics travel through the room. Every message carries
+Two topics carry the game itself. Every message carries
 `v: NET.PROTOCOL`.
 
 - `cmd`, guest to host: `{from, token, cmds: [[seq, stamp, cmd], …], ack,
@@ -252,6 +265,7 @@ Two topics travel through the room. Every message carries
   now, w, acks, sum, ge, ce, late, end}`. Every tick up to `upTo` is final,
   and ticks not listed had no commands. `early` holds commands not yet
   bundled.
+- `watch` and `feed`: spectators (see Watching).
 
 ### Lobby and transports
 
@@ -278,6 +292,47 @@ and forwards messages within a room. It:
   second), closing connections that keep flooding;
 - ignores malformed messages;
 - pings every 30 s and drops connections that stay silent.
+
+## Watching: replays and spectators
+
+Three ways to watch a game share one **observer mode** (`web/watch.js`):
+the fog lifted, a scoreboard of every player, no commands. Click a
+player's name to see the game through their eyes (their fog and resource
+bar; the fog starts from what they see at that moment, since only one
+player's fog history is kept). The view is set with `set_view` in
+`lib.rs` and never changes the game (rule 5).
+
+- **After you're out.** Lose your Capitol, or surrender (Menu → Surrender,
+  two clicks), while others play on: "Watch the rest" or leave. Single
+  player can then run up to 8×.
+- **Replays.** Every game is recorded (`Rec`): where it started, as save
+  bytes, plus each tick's commands as `[player, seq, ...cmd]`. Single
+  player records commands as they're given; multiplayer records the
+  confirmed bundles. Playing back loads the start and applies each tick's
+  commands before running it, which gives the very same game. Games over
+  20 s are kept in the browser (the latest 6, `vibecraft.replays`), and can
+  be downloaded as a file. Jumping back loads the nearest keyframe (a save
+  taken every minute while playing) and runs forward from there.
+- **Spectators.** A watch link (`#watch-CODE`, in the menu and the lobby)
+  joins the host's room as a `watcher`. The host's page answers out of
+  `Rec` (`Watchers`): first a snapshot of the game (a save, gzipped, in
+  12 KB pieces because of the relay's message limit; made afresh when the
+  last one is over 10 s old), then each tick's commands from there on. The
+  watcher runs its own copy, a little behind the players, and catches up
+  faster if it falls behind. Nothing waits for spectators, and there's a
+  budget (12 messages a second, 6 spectators per game) so they can't slow
+  the game. A friend waiting in the lobby while the host plays gets "Watch
+  their game". Spectators follow the host into the next game, and keep a
+  replay of what they watched. Players see "N watching" in the top bar.
+  Spectating works over the relay, not claude.ai's room service.
+
+Spectator messages, both carrying `v` and the watcher's `token`:
+- `watch`, watcher to host, twice a second: `{game, have, snap, parts}`:
+  which game, how many ticks of it they hold (`-1`: no snapshot yet), and
+  which snapshot pieces.
+- `feed`, host to one watcher (`to`): `{game, snap: {id, T, i, n, z, data,
+  meta}}` (a snapshot piece), or `{game, from, upTo, ticks, over}` (the
+  commands of ticks `from` to `upTo - 1`), or `{game: null}` (no game on).
 
 ## Saving
 
@@ -364,3 +419,4 @@ versions don't play together.
   - H home, `.` idle citizen
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
+  - Menu: surrender, copy a watch link for spectators

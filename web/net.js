@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 6,
+  PROTOCOL: 7,    // 7: surrender (command 8), spectators
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
@@ -415,7 +415,9 @@ class Server {
 // Server). `hooks` connects it to the game: apply(owner, cmd) runs a command
 // without any sound or message; keep() and restore(kept) carry the player's
 // selection (and the units' drawn positions) over a correction; system(cmd)
-// tells the player about a command from the host (someone left).
+// tells the player about a command from the host (someone left);
+// confirmed(tick, bundle) records each tick's final commands (replays,
+// spectators).
 //
 // The live copy assumes, for every tick, a list of commands: mine, plus any
 // friend's that arrived as early news. Each bundle is compared with that.
@@ -442,7 +444,7 @@ class Client {
     this.sums = new Map();               // tick -> checksum of the confirmed copy (every SUM_EVERY ticks)
     this.hostSums = new Map();
     this.dirty = null;                   // why the live copy needs correcting, or null
-    this.finalState = 0;                 // the confirmed copy's W.state()
+    this.finalState = 0;                 // the confirmed copy's W.state_of(me)
     this.window = NET.WINDOW;
     this.offset = null;                  // guests: host clock minus ours, ms
     this.offsets = [];
@@ -646,8 +648,9 @@ class Client {
       W.tick();
       W.take_events(); // the live copy already showed these (or will)
       const whole = W.checksum(), own = W.checksum_owner(this.me);
-      this.finalState = W.state();
+      this.finalState = W.state_of(this.me);
       W.mp_swap();
+      if (this.hooks.confirmed) this.hooks.confirmed(k, bundle);
       this.final = k;
       this.stats.confirmed++;
       if (k % NET.SUM_EVERY === 0) {

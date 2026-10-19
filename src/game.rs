@@ -281,6 +281,8 @@ pub enum Command {
     Train { ids: Vec<u32>, kind: Kind },
     Cancel { id: u32 },
     Place { ids: Vec<u32>, kind: Kind, tx: i32, ty: i32 },
+    /// Give up: everything this player owns falls, as if their Capitol had.
+    Surrender,
 }
 
 pub enum Pick {
@@ -317,6 +319,9 @@ pub struct Game {
     /// Always 1 in single player. In multiplayer it's 1 for the host and 2
     /// for the guest. None of the game's rules depend on it.
     pub local: u8,
+    /// Lift the fog of war: see the whole map (spectators, replays, players
+    /// who are out). Like `local`, only what this computer shows depends on it.
+    pub reveal: bool,
 
     /// Notifications for the UI: groups of 4 floats [type, x, y, data].
     pub events: Vec<f32>,
@@ -384,6 +389,7 @@ impl Game {
             winner: 0,
             by_wonder: false,
             local,
+            reveal: false,
             events: Vec::new(),
             ais,
             slot: 0,
@@ -736,6 +742,18 @@ impl Game {
 
     /// Lose your Capitol and you're out: everything you own falls with it.
     /// The last player standing wins, or whoever finishes a Wonder first.
+    /// A player gives up. Their things fall at the end of this tick, and
+    /// `check_victory` puts them out of the game exactly as if their Capitol
+    /// had been destroyed.
+    fn surrender(&mut self, owner: u8) {
+        if owner == GAIA || self.players.get(owner as usize).is_none_or(|p| p.defeated) {
+            return;
+        }
+        for e in self.ents.iter_mut().filter(|e| e.alive && e.owner == owner) {
+            e.hp = 0.0;
+        }
+    }
+
     fn check_victory(&mut self) {
         for p in self.player_ids() {
             if !self.players[p as usize].defeated && self.find_first(p, Kind::Capitol).is_none() {
@@ -1210,6 +1228,7 @@ impl Game {
                 let builders: Vec<u32> = own(self, &ids).into_iter().filter(|&id| self.ents[id as usize].kind == Kind::Citizen).collect();
                 self.place(owner, kind, tx, ty, &builders)?;
             }
+            Command::Surrender => self.surrender(owner),
         }
         Ok(())
     }
@@ -1809,7 +1828,14 @@ impl Game {
     // -----------------------------------------------------------------------
     // Fog of war (for the human player only; the AI sees everything)
 
-    fn update_fog(&mut self) {
+    pub(crate) fn update_fog(&mut self) {
+        if self.reveal {
+            self.fog.iter_mut().for_each(|v| *v = 2);
+            for e in self.ents.iter_mut().filter(|e| e.alive && e.is_building()) {
+                e.seen = true;
+            }
+            return;
+        }
         for v in self.fog.iter_mut() {
             if *v == 2 {
                 *v = 1;
