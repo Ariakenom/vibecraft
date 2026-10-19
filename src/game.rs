@@ -141,6 +141,11 @@ pub struct Entity {
 }
 
 impl Entity {
+    /// An entity with every field at its default, for loading a save into.
+    pub(crate) fn blank(id: u32, kind: Kind, owner: u8) -> Entity {
+        Entity::new(id, kind, owner, 0.0, 0.0)
+    }
+
     fn new(id: u32, kind: Kind, owner: u8, x: f32, y: f32) -> Entity {
         Entity {
             id,
@@ -283,6 +288,8 @@ pub enum Pick {
 }
 
 pub struct Game {
+    /// The map seed. Kept so a saved game can be redrawn the same way.
+    pub seed: u32,
     pub map: Map,
     pub res: Vec<Resource>,
     pub ents: Vec<Entity>,
@@ -323,32 +330,11 @@ impl Game {
         let n_players = n_players.clamp(2, MAX_PLAYERS as u8);
         let (map, res, bases) = map::generate(seed, n_players as usize);
         let n = (map.w * map.h) as usize;
-        let cells = ((map.w / CELL + 1) * (map.h / CELL + 1)) as usize;
         let start = Player { stock: [250.0, 250.0, 100.0, 100.0], pop: 0, upkeep: 0.0, starving: false, defeated: false, gather_mult: 1.0, bonus: Bonuses::default(), income: [[0.0; 4]; 60], trained: 0, lost: 0, gathered: 0.0 };
-        let mut g = Game {
-            map,
-            res,
-            ents: Vec::new(),
-            players: vec![start; n_players as usize + 1],
-            n_players,
-            proj: Vec::new(),
-            time: 0.0,
-            fog: vec![0; n],
-            fog_timer: 0.0,
-            state: 0,
-            winner: 0,
-            by_wonder: false,
-            local: PLAYER,
-            events: Vec::new(),
-            // Each AI thinks on a slightly different tick, so they don't all spike at once.
-            ais: (0..=n_players).map(|p| Ai::new(difficulty, p > 1, p as f32 * 0.13)).collect(),
-            slot: 0,
-            second_timer: 1.0,
-            pf: Pathfinder::new(n),
-            grid: vec![Vec::new(); cells],
-            alert_cooldown: 0.0,
-            idle_cursor: 0,
-        };
+        let players = vec![start; n_players as usize + 1];
+        // Each AI thinks on a slightly different tick, so they don't all spike at once.
+        let ais = (0..=n_players).map(|p| Ai::new(difficulty, p > 1, p as f32 * 0.13)).collect();
+        let mut g = Game::from_parts(seed, map, res, Vec::new(), players, n_players, Vec::new(), vec![0; n], ais, PLAYER);
         let handicap = match difficulty {
             0 => 0.8,
             1 => 1.0,
@@ -368,6 +354,49 @@ impl Game {
         g.recount_pop();
         g.update_fog();
         g
+    }
+
+    /// Assemble a game from its stored parts; scratch space (pathfinder
+    /// buffers, the spatial grid) is made fresh. Used by `new` and `load`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts(seed: u32, map: Map, res: Vec<Resource>, ents: Vec<Entity>, players: Vec<Player>, n_players: u8, proj: Vec<Projectile>, fog: Vec<u8>, ais: Vec<Ai>, local: u8) -> Game {
+        let n = (map.w * map.h) as usize;
+        let cells = ((map.w / CELL + 1) * (map.h / CELL + 1)) as usize;
+        Game {
+            seed,
+            map,
+            res,
+            ents,
+            players,
+            n_players,
+            proj,
+            time: 0.0,
+            fog,
+            fog_timer: 0.0,
+            state: 0,
+            winner: 0,
+            by_wonder: false,
+            local,
+            events: Vec::new(),
+            ais,
+            slot: 0,
+            second_timer: 1.0,
+            pf: Pathfinder::new(n),
+            grid: vec![Vec::new(); cells],
+            alert_cooldown: 0.0,
+            idle_cursor: 0,
+        }
+    }
+
+    /// The private timers, for `save`/`load`.
+    pub(crate) fn save_timers(&self) -> (f32, f32, f32, u32) {
+        (self.fog_timer, self.second_timer, self.alert_cooldown, self.idle_cursor)
+    }
+    pub(crate) fn load_timers(&mut self, (fog, second, alert, idle): (f32, f32, f32, u32)) {
+        self.fog_timer = fog;
+        self.second_timer = second;
+        self.alert_cooldown = alert;
+        self.idle_cursor = idle;
     }
 
     /// Turn a fresh game into a multiplayer game, seen as player `local`.
