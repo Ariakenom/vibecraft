@@ -52,8 +52,15 @@ function withFow(mat, extra) {
         fowP = instanceMatrix * fowP;
       #endif
       vFowW = (modelMatrix * fowP).xz;`);
-    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nvarying vec2 vFowW;\n" + sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
+    sh.uniforms.uCloudT = timeUniform;
+    let fs = sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
       gl_FragColor.rgb *= texture2D(uFow, vFowW / uMapSize).r;`);
+    if (fs.includes("#include <lights_fragment_begin>")) {
+      fs = fs.replace("#include <lights_fragment_begin>", THREE.ShaderChunk.lights_fragment_begin.replace(
+        "getDirectionalLightInfo( directionalLight, directLight );",
+        "getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cloudShade(vFowW);"));
+    }
+    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nvarying vec2 vFowW;\n" + NOISE_GLSL + CLOUD_GLSL + fs;
   };
   return mat;
 }
@@ -117,6 +124,8 @@ function treePatch(sh) {
 // grain, stone and gold veins. Per pixel stays sharp however close the camera
 // gets, where a painted texture would blur.
 const NOISE_GLSL = `
+  #ifndef VC_NOISE
+  #define VC_NOISE
   float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
   float vnoise3(vec3 p) {
     vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -124,6 +133,38 @@ const NOISE_GLSL = `
                mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
   }
   float vnoise2(vec2 p) { return vnoise3(vec3(p, 0.37)); }
+  #endif
+`;
+
+// --- Sky and clouds -------------------------------------------------------------------
+// One sun for everything: the light, the sky's glow, the glints on water.
+const SUN_DIR = new THREE.Vector3(-17, 21, 11).normalize();
+const SKY_GLSL = `
+  #ifndef VC_SKY
+  #define VC_SKY
+  const vec3 SUN_DIR = vec3(${SUN_DIR.x.toFixed(4)}, ${SUN_DIR.y.toFixed(4)}, ${SUN_DIR.z.toFixed(4)});
+  // The colour of the sky in a direction (world space, normalized), in linear light.
+  vec3 skyColor(vec3 d) {
+    vec3 zenith = vec3(0.1, 0.27, 0.62), horizon = vec3(0.42, 0.56, 0.68), below = vec3(0.05, 0.16, 0.24);
+    float h = d.y;
+    vec3 c = h > 0.0 ? mix(horizon, zenith, pow(min(h * 1.4, 1.0), 0.55)) : mix(horizon, below, min(-h * 5.0, 1.0));
+    float s = max(dot(d, SUN_DIR), 0.0);
+    c += vec3(1.0, 0.72, 0.4) * (pow(s, 6.0) * 0.35 + pow(s, 64.0) * 0.6);   // warm glow around the sun
+    c = mix(c, c * vec3(1.1, 1.0, 0.88), (1.0 - abs(h)) * 0.4);             // and a warm haze low down
+    return c;
+  }
+  #endif
+`;
+// Cloud shadows: patches of shade drifting across the land with the wind.
+// Computed per pixel in every lit material, as a dimmer on the sunlight only,
+// so shaded ground still gets the sky's light.
+const CLOUD_GLSL = `
+  uniform float uCloudT;
+  float cloudShade(vec2 p) {
+    vec2 q = p * 0.045 + vec2(0.82, 0.57) * uCloudT * 0.012;
+    float n = vnoise2(q) * 0.62 + vnoise2(q * 2.3 + 5.0) * 0.28 + vnoise2(q * 5.1 + 9.0) * 0.1;
+    return 1.0 - 0.55 * smoothstep(0.5, 0.66, n);
+  }
 `;
 // Pass the world position of each pixel to the fragment shader as vGW.
 function worldPosPatch(sh) {
@@ -189,6 +230,38 @@ function rockPatch(gold) {
   };
   patch.cacheKey = gold ? "gold" : "stone";
   return patch;
+}
+
+// A big sphere around the camera, painted with the sky colour, the sun's
+// glow and drifting clouds. Drawn first, behind everything.
+function buildSky(scene) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uCloudT: timeUniform },
+    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+    vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: NOISE_GLSL + SKY_GLSL + `
+      uniform float uCloudT; varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        vec3 c = skyColor(d);
+        if (d.y > 0.0) {
+          // Clouds on a flat layer above: the same pattern that shades the ground.
+          vec2 p = d.xz / (d.y + 0.08) * 40.0;
+          vec2 q = p * 0.045 + vec2(0.82, 0.57) * uCloudT * 0.012;
+          float n = vnoise2(q) * 0.62 + vnoise2(q * 2.3 + 5.0) * 0.28 + vnoise2(q * 5.1 + 9.0) * 0.1;
+          float cl = smoothstep(0.48, 0.7, n) * smoothstep(0.0, 0.25, d.y);
+          vec3 lit = vec3(1.0, 0.95, 0.88) * (0.85 + 0.4 * pow(max(dot(d, SUN_DIR), 0.0), 4.0));
+          c = mix(c, lit, cl * 0.85);
+        }
+        gl_FragColor = vec4(c, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  R3.sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), mat);
+  R3.sky.renderOrder = -10;
+  R3.sky.frustumCulled = false;
+  scene.add(R3.sky);
 }
 
 // --- Model building ----------------------------------------------------------
@@ -587,10 +660,11 @@ function initRenderer() {
   r.shadowMap.type = THREE.PCFSoftShadowMap;
   R3.renderer = r;
   const scene = new THREE.Scene();
-  // Past the sea's edge, the far distance is deep blue rather than black.
-  scene.background = new THREE.Color("#12303f");
-  // A light haze in the distance gives the view depth when the camera tilts up.
-  scene.fog = new THREE.Fog("#12303f", 60, 200);
+  scene.background = new THREE.Color("#12303f"); // under the sky dome; only seen if it fails
+  // A light, sky-coloured haze in the distance gives the view depth, and
+  // melts the far sea into the horizon.
+  scene.fog = new THREE.Fog(new THREE.Color().setRGB(0.44, 0.56, 0.66), 60, 200);
+  buildSky(scene);
   R3.scene = scene;
   R3.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 400);
 
@@ -872,13 +946,40 @@ function buildWater() {
         diffuseColor.a = max(diffuseColor.a, foam * 0.92);`)
       .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
         vec2 wp = vWPos * 3.2;
-        normal = normalize(normal + vec3(
+        // Small waves fade out with distance: there they're finer than a pixel and would shimmer in stripes.
+        float waveAmt = 1.0 - smoothstep(25.0, 70.0, length(vViewPosition));
+        normal = normalize(normal + waveAmt * vec3(
           sin(wp.x + uTime * 1.3) * 0.12 + sin(wp.y * 1.9 - uTime * 0.9) * 0.08,
-          cos(wp.y + uTime * 1.1) * 0.12 + cos(wp.x * 1.7 + uTime * 0.7) * 0.08, 0.0));`);
+          cos(wp.y + uTime * 1.1) * 0.12 + cos(wp.x * 1.7 + uTime * 0.7) * 0.08, 0.0));`)
+      // The water mirrors the sky, more so at a glancing angle (Fresnel).
+      .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+        {
+          vec3 V = normalize(vViewPosition);
+          vec3 R = (vec4(reflect(-V, normal), 0.0) * viewMatrix).xyz;   // to world space
+          R.y = abs(R.y);
+          float fres = 0.04 + 0.96 * pow(1.0 - max(dot(normal, V), 0.0), 5.0);
+          totalEmissiveRadiance += skyColor(normalize(R)) * fres * 0.55 * (1.0 - foam);
+        }`);
+    sh.fragmentShader = SKY_GLSL + sh.fragmentShader;
   });
   const water = new THREE.Mesh(geo, mat);
   water.renderOrder = 1;
   water.receiveShadow = true;
+  // Open sea out to the horizon: four big flat quads around the detailed
+  // water, with the same material (the height texture reads as deep there).
+  const far = 1500, x0 = -pad, x1 = MW + pad, z0 = -pad, z1 = MH + pad;
+  const ring = [], quad = (ax, az, bx, bz) => ring.push(ax, WATER_Y, az, bx, WATER_Y, az, bx, WATER_Y, bz, ax, WATER_Y, az, bx, WATER_Y, bz, ax, WATER_Y, bz);
+  quad(-far, -far, far, z0); quad(-far, z1, far, far); quad(-far, z0, x0, z1); quad(x1, z0, far, z1);
+  const rg = new THREE.BufferGeometry();
+  rg.setAttribute("position", new THREE.Float32BufferAttribute(ring, 3));
+  rg.setAttribute("aDepth", new THREE.Float32BufferAttribute(new Array(ring.length / 3).fill(2), 1));
+  rg.setAttribute("normal", new THREE.Float32BufferAttribute(new Array(ring.length / 3).fill(0).flatMap(() => [0, 1, 0]), 3));
+  // wind the triangles to face up
+  const pa = rg.attributes.position.array;
+  for (let i = 0; i < pa.length; i += 9) for (let k = 0; k < 3; k++) { const t = pa[i + 3 + k]; pa[i + 3 + k] = pa[i + 6 + k]; pa[i + 6 + k] = t; }
+  const sea = new THREE.Mesh(rg, mat);
+  sea.renderOrder = 1;
+  water.add(sea);
   R3.scene.add(water);
   R3.water = water;
 }
@@ -1018,6 +1119,7 @@ function placeCamera() {
   s.position.set(cam.x - 17, gy + 21, cam.y + 11);
   // Haze starts past what you're looking at, so it only softens the far distance.
   R3.scene.fog.near = cam.dist * 1.6; R3.scene.fog.far = cam.dist * 5 + 40;
+  if (R3.sky) R3.sky.position.copy(c.position);
   s.target.position.set(cam.x, gy, cam.y);
   s.target.updateMatrixWorld();
   const sc = s.shadow.camera;
@@ -1337,10 +1439,10 @@ function entScreen(i, atTop) {
 // never the simulation, so players in one multiplayer game can each pick
 // their own. Saved per browser.
 const GFX_LEVELS = {
-  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, ao: false },
-  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  ao: false },
-  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  ao: false },
-  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  ao: true },
+  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, post: false, bloom: false, ao: false },
+  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  post: true,  bloom: false, ao: false },
+  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  post: true,  bloom: true,  ao: false },
+  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  post: true,  bloom: true,  ao: true },
 };
 let gfxName = (() => {
   try { const v = localStorage.getItem("vibecraftGraphics"); if (GFX_LEVELS[v]) return v; } catch (e) {}
@@ -1497,23 +1599,35 @@ function updateSmoke() {
   R3.smoke.material.uniforms.uScale.value = view._h * R3.renderer.getPixelRatio() * 0.5 * R3.camera.projectionMatrix.elements[5];
 }
 
-// --- Ambient occlusion (Ultra) -------------------------------------------------------
-// The scene is drawn into a texture with its depth, then a full-screen pass
-// darkens creases and contact points: where a building meets the ground,
-// between huddled units, under eaves. It works from depth alone, sampling a
-// small disc around each pixel to see how much nearby geometry rises above
-// it. That pass also applies the tone mapping, which three.js skips when
-// drawing into a texture.
-const Post = { rt: null, scene: null, cam: null, mat: null };
+// --- After the scene is drawn: grading, bloom, ambient occlusion ---------------------
+// From Medium up, the scene is drawn into an off-screen image first, and one
+// last full-screen pass finishes it:
+// - colour grading: warm light, cool slightly teal shade, a touch more
+//   colour, and a soft vignette (Medium and up);
+// - bloom: bright things (sunlit roofs, glints on water, the forge, gold
+//   veins) glow softly (High and up);
+// - ambient occlusion: creases and contact points darken, worked out from
+//   the depth image (Ultra).
+// That pass also applies the tone mapping, which three.js skips when drawing
+// into an image. On Low the scene goes straight to the screen.
+const Post = { rt: null, scene: null, cam: null, mat: null, bloom: null, quad: null };
+const FULLSCREEN_VS = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
 function buildPost() {
   Post.rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
   Post.rt.depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
   Post.mat = new THREE.ShaderMaterial({
-    uniforms: { tColor: { value: null }, tDepth: { value: null }, uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() }, uRadius: { value: 0.55 } },
+    uniforms: {
+      tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
+      uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
+      uRadius: { value: 0.55 }, uBloom: { value: 0 },
+    },
+    defines: { USE_AO: 0 },
     depthTest: false, depthWrite: false,
-    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+    vertexShader: FULLSCREEN_VS,
     fragmentShader: `
-      uniform sampler2D tColor; uniform sampler2D tDepth; uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius;
+      uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
+      uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
         float d = texture2D(tDepth, uv).x;
@@ -1521,9 +1635,9 @@ function buildPost() {
         return p.xyz / p.w;
       }
       void main() {
-        vec4 col = texture2D(tColor, vUv);
+        vec3 col = texture2D(tColor, vUv).rgb;
+        #if USE_AO
         float d = texture2D(tDepth, vUv).x;
-        float ao = 1.0;
         if (d < 1.0) {
           vec3 P = viewPos(vUv);
           vec3 N = normalize(cross(dFdx(P), dFdy(P)));
@@ -1540,31 +1654,107 @@ function buildPost() {
             // Nearby geometry above this pixel's surface occludes it; far-away geometry doesn't count.
             occ += max(0.0, dot(v, N) - 0.015) / (vv + 0.05) * smoothstep(uRadius * uRadius * 4.0, uRadius * uRadius, vv);
           }
-          ao = clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
+          col *= clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
         }
-        gl_FragColor = vec4(col.rgb * ao, 1.0);
+        #endif
+        col += texture2D(tBloom, vUv).rgb * uBloom;
+        // Grading, in linear light before tone mapping: cool the shade, warm the light.
+        float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col *= mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
+        col = max(mix(vec3(lum), col, 1.12), 0.0);
+        gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
+        // A soft vignette pulls the eye to the middle of the view.
+        vec2 q = vUv - 0.5;
+        gl_FragColor.rgb *= 1.0 - 0.28 * smoothstep(0.25, 0.85, dot(q, q) * 2.2);
       }`,
   });
+  Post.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat);
+  Post.quad.frustumCulled = false;
   Post.scene = new THREE.Scene();
-  Post.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat));
+  Post.scene.add(Post.quad);
   Post.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 }
 
+// Bloom: keep only what's brighter than a threshold, shrink it step by step
+// to a sixteenth of the screen, then grow it back, adding each level: a wide,
+// soft glow for very little work (the "dual filter" method).
+function buildBloom() {
+  const levels = [];
+  for (let i = 0; i < 5; i++) levels.push(new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+  const mk = (frag, extra = {}) => new THREE.ShaderMaterial({
+    uniforms: Object.assign({ tSrc: { value: null }, uTexel: { value: new THREE.Vector2() } }, extra),
+    depthTest: false, depthWrite: false, vertexShader: FULLSCREEN_VS, fragmentShader: frag,
+  });
+  const down = `
+    uniform sampler2D tSrc; uniform vec2 uTexel; varying vec2 vUv;
+    vec3 tap(vec2 o) { return texture2D(tSrc, vUv + o * uTexel).rgb; }`;
+  const bright = mk(down + `
+    uniform float uThreshold;
+    void main() {
+      vec3 c = (tap(vec2(-1.0)) + tap(vec2(1.0)) + tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, -1.0))) * 0.25;
+      float l = max(c.r, max(c.g, c.b));
+      float k = smoothstep(uThreshold, uThreshold * 1.6, l);   // a soft knee, so the glow fades in
+      gl_FragColor = vec4(min(c * k, vec3(8.0)), 1.0);
+    }`, { uThreshold: { value: 1.05 } });
+  const shrink = mk(down + `
+    void main() {
+      vec3 c = tap(vec2(0.0)) * 4.0 + tap(vec2(-1.0)) + tap(vec2(1.0)) + tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, -1.0));
+      gl_FragColor = vec4(c / 8.0, 1.0);
+    }`);
+  const grow = mk(down + `
+    void main() {
+      vec3 c = tap(vec2(-2.0, 0.0)) + tap(vec2(2.0, 0.0)) + tap(vec2(0.0, -2.0)) + tap(vec2(0.0, 2.0))
+             + (tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, 1.0)) + tap(vec2(-1.0, -1.0)) + tap(vec2(1.0, -1.0))) * 2.0;
+      gl_FragColor = vec4(c / 12.0, 1.0);
+    }`);
+  grow.blending = THREE.AdditiveBlending;
+  Post.bloom = { levels, bright, shrink, grow };
+}
+
+function blit(r, mat, src, dst) {
+  mat.uniforms.tSrc.value = src.texture || src;
+  const w = (src.width || src.image.width), h = (src.height || src.image.height);
+  mat.uniforms.uTexel.value.set(1 / w, 1 / h);
+  Post.quad.material = mat;
+  r.setRenderTarget(dst);
+  r.render(Post.scene, Post.cam);
+}
+
+function renderBloom(r, sz) {
+  if (!Post.bloom) buildBloom();
+  const { levels, bright, shrink, grow } = Post.bloom;
+  levels.forEach((t, i) => { const w = Math.max(1, sz.x >> (i + 1)), h = Math.max(1, sz.y >> (i + 1)); if (t.width !== w || t.height !== h) t.setSize(w, h); });
+  blit(r, bright, Post.rt, levels[0]);
+  for (let i = 1; i < levels.length; i++) blit(r, shrink, levels[i - 1], levels[i]);
+  r.autoClear = false;
+  for (let i = levels.length - 1; i > 0; i--) blit(r, grow, levels[i], levels[i - 1]);
+  r.autoClear = true;
+  return levels[0].texture;
+}
+
+const _black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+_black.needsUpdate = true;
+
 function renderScene() {
   const r = R3.renderer;
-  if (!GFX.ao) { r.render(R3.scene, R3.camera); return; }
+  if (!GFX.post) { r.render(R3.scene, R3.camera); return; }
   if (!Post.rt) buildPost();
   const sz = r.getDrawingBufferSize(_v2);
   if (Post.rt.width !== sz.x || Post.rt.height !== sz.y) Post.rt.setSize(sz.x, sz.y);
   r.setRenderTarget(Post.rt);
   r.render(R3.scene, R3.camera);
-  r.setRenderTarget(null);
   const u = Post.mat.uniforms;
+  u.tBloom.value = GFX.bloom ? renderBloom(r, sz) : _black;
+  u.uBloom.value = GFX.bloom ? 0.32 : 0;
+  r.setRenderTarget(null);
+  const ao = GFX.ao ? 1 : 0;
+  if (Post.mat.defines.USE_AO !== ao) { Post.mat.defines.USE_AO = ao; Post.mat.needsUpdate = true; }
   u.tColor.value = Post.rt.texture; u.tDepth.value = Post.rt.depthTexture;
   u.uProj.value.copy(R3.camera.projectionMatrix); u.uProjInv.value.copy(R3.camera.projectionMatrixInverse);
   u.uRes.value.set(sz.x, sz.y);
+  Post.quad.material = Post.mat;
   r.render(Post.scene, Post.cam);
 }
 const _v2 = new THREE.Vector2();
