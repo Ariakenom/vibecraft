@@ -625,9 +625,20 @@ function applyCmd(owner, arr) {
 const mpHooks = {
   apply: applyCmd,
   // Carry the selection over a correction: same ids, and say whether any of
-  // them now means something else.
+  // them now means something else. Units the correction moved slide to
+  // their new place instead of jumping (R3.nudges, used in render3d.js).
   keep() { readWorld(); return selection().map(i => [E(i, F.id), E(i, F.kind)]); },
-  restore(kept) {
+  restore(kept, alpha) {
+    readWorld();
+    const t = performance.now();
+    for (let i = 0; i < entCount; i++) {
+      if (E(i, F.kind) >= 10) continue;
+      const id = E(i, F.id), o = R3.objs.get(id);
+      if (!o || o.x === undefined) continue;
+      const dx = o.x - (E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha);
+      const dy = o.y - (E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha);
+      if (Math.abs(dx) + Math.abs(dy) > 0.01 && Math.abs(dx) + Math.abs(dy) < 4) R3.nudges.set(id, { dx, dy, t });
+    }
     setSelection(kept.map(k => k[0]));
     const now = new Map(selection().map(i => [E(i, F.id), E(i, F.kind)]));
     return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
@@ -1073,14 +1084,15 @@ function renderTrace() {
   const st = s.stats, tick = NET.TICK_MS;
   const lines = [];
   lines.push(`You: ${s.role} (${PNAME[ME]}) · ${Trace.info.transport} · window ${s.window} ticks (${s.window * tick} ms)`);
+  const sign = n => n == null ? "?" : `${n > 0 ? "+" : ""}${n} ms`;
   if (s.server) {
-    for (const [slot, g] of Object.entries(s.server.guests)) lines.push(`${PNAME[slot]}: ${g.active ? "" : "(left) "}ping ${ms(g.rtt)} ±${g.dev ?? "?"} · late commands ${g.late} · heard ${ms(g.heardAgo)} ago`);
+    for (const [slot, g] of Object.entries(s.server.guests)) lines.push(`${PNAME[slot]}: ${g.active ? "" : "(left) "}ping ${ms(g.rtt)} ±${g.dev ?? "?"} · clock ${sign(g.clockErr)} · late commands ${g.late} · heard ${ms(g.heardAgo)} ago`);
   } else {
-    lines.push(`Ping to host: ${ms(s.rtt)} ±${s.dev} · clock off by ${ms(s.clockErr)} · heard ${ms(s.heardAgo)} ago`);
+    lines.push(`Ping to host: ${ms(s.rtt)} ±${s.dev} · my clock ${sign(s.clockErr)} (as the host sees it) · heard ${ms(s.heardAgo)} ago`);
   }
-  lines.push(`Live runs ${s.ahead} ticks ahead of confirmed · my unconfirmed commands ${s.pending}`);
+  lines.push(`Live runs ${s.ahead} ticks ahead of confirmed · unconfirmed commands: mine ${s.pending}, friends' ${s.foreign}`);
   lines.push(`Predictions right: whole game ${pct(st.matched, st.compared)}, my own things ${pct(st.mineMatched, st.compared)} (of ${st.compared} ticks)`);
-  lines.push(`Corrections ${st.corrections} (friend ${st.remote}, mine moved ${st.moved}, system ${st.system}, behind ${st.behind}) · re-ran ${st.resimTicks} ticks`);
+  lines.push(`Corrections ${st.corrections} (friend early ${st.early}, friend in bundle ${st.remote}, moved ${st.moved}, system ${st.system}, behind ${st.behind}) · re-ran ${st.resimTicks} ticks`);
   lines.push(`…that changed my own things ${st.mineChanged} · moved my selection ${st.selChanged}`);
   lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
   lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);

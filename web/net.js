@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 5,
+  PROTOCOL: 6,
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
@@ -222,6 +222,10 @@ const Trace = {
 // --- The server: puts everyone's commands in order --------------------------
 // It runs inside the host's tab and keeps no game state of its own: it only
 // keeps the clock, collects commands, and hands out one bundle per tick.
+//
+// Commands also go out as "early news" the moment they arrive, so the other
+// players can show them right away instead of a window later. Early news is
+// only a hint; the bundles are what everyone agrees on.
 class Server {
   // `guests`: [[slot, token], ...] for the other human players. `local`: the
   // host's own Client, which gets every bundle directly instead of by network.
@@ -231,8 +235,10 @@ class Server {
     this.onEnd = onEnd;
     this.t0 = performance.now();          // tick 0; set again once the map is built
     this.window = NET.WINDOW;
+    this.lowSince = 0;                    // since when the window could have been smaller
     this.final = -1;                      // newest tick bundled
     this.inbox = [];                      // [stamp, player, seq, cmd] waiting for their tick
+    this.fresh = false;                   // new commands to pass on as early news
     this.sent = new Map();                // tick -> bundle (only ticks with commands), until every guest has it
     this.tokens = new Map(guests);        // slot -> token
     this.active = new Set(this.tokens.keys());
@@ -240,6 +246,7 @@ class Server {
     this.ack = new Map();                 // slot -> they hold every bundle up to this tick
     this.heard = new Map();               // slot -> when we last heard them
     this.rtt = new Map();                 // slot -> { srtt, dev }, ms
+    this.clockErr = new Map();            // slot -> how far their idea of "now" is off ours, ms (+ = ahead)
     this.guestClock = new Map();          // slot -> [their clock, when it came]: echoed so they can time the trip
     this.started = new Set();             // guests who have started the game
     for (const s of this.active) { this.lastSeq.set(s, 0); this.ack.set(s, -1); this.heard.set(s, performance.now()); }
@@ -254,6 +261,8 @@ class Server {
     if (seq <= (this.lastSeq.get(p) || 0)) return; // seen it already
     this.lastSeq.set(p, seq);
     this.inbox.push([stamp, p, seq, cmd]);
+    this.fresh = true;
+    if (p !== this.local.me) this.local.early(p, seq, stamp, cmd); // the host's own screen, at once
   }
   // Bundle every tick that is now a window old.
   pump() {
@@ -267,23 +276,40 @@ class Server {
       // A fixed order inside a tick: by player, then in the order they gave them.
       due.sort((a, b) => a[1] - b[1] || a[2] - b[2]);
       for (const e of due) if (e[0] < k && e[1] !== 0) {
+        // Too late for its own tick: it goes into this one instead. Give the
+        // next ones more time.
         this.late[e[1]] = (this.late[e[1]] || 0) + 1;
         Trace.event("late", { player: e[1], ticks: k - e[0] });
+        this.grow(this.window + 1, "late command");
       }
       const bundle = due.map(e => [e[1], e[2], ...e[3]]);
       if (bundle.length) this.sent.set(k, bundle);
       this.local.confirm(k, bundle);
       moved = true;
     }
-    if (moved || performance.now() - this.lastSend > 250) this.send();
+    if (moved || this.fresh || performance.now() - this.lastSend > 250) this.send();
   }
-  // Long enough for a command to reach us from the slowest guest, with room for wobble.
+  grow(w, why) {
+    w = Math.min(NET.MAX_WINDOW, w);
+    if (w > this.window) { Trace.event("window", { from: this.window, to: w, why }); this.window = w; }
+    this.lowSince = 0;
+  }
+  // Long enough for a command to reach us from the slowest guest, with room
+  // for wobble. It grows at once but shrinks only after five calm seconds,
+  // one tick at a time, so a ping right on a boundary doesn't make it flap.
   updateWindow() {
     let need = 0;
     for (const s of this.active) { const r = this.rtt.get(s); if (r) need = Math.max(need, r.srtt / 2 + 2 * r.dev + 25); }
     const w = Math.max(NET.MIN_WINDOW, Math.min(NET.MAX_WINDOW, Math.ceil(need / NET.TICK_MS)));
-    if (w !== this.window) Trace.event("window", { from: this.window, to: w, need: Math.round(need) });
-    this.window = w;
+    const now = performance.now();
+    if (w > this.window) this.grow(w, `ping needs ${Math.round(need)} ms`);
+    else if (w === this.window) this.lowSince = 0;
+    else if (!this.lowSince) this.lowSince = now;
+    else if (now - this.lowSince > 5000) {
+      Trace.event("window", { from: this.window, to: this.window - 1, why: "calm" });
+      this.window--;
+      this.lowSince = now;
+    }
   }
   // Someone left: from a tick from now, the computer plays their side.
   drop(slot) {
@@ -305,12 +331,24 @@ class Server {
       size += len;
       ticks.push([k, b]);
     }
-    const now = performance.now(), ge = {};
+    // Early news: every command not bundled yet, [player, seq, stamp, ...cmd].
+    const early = [];
+    size = 0;
+    for (const e of this.inbox) {
+      if (e[1] === 0) continue;
+      const entry = [e[1], e[2], e[0], ...e[3]];
+      size += JSON.stringify(entry).length;
+      if (size > 1000) break;
+      early.push(entry);
+    }
+    this.fresh = false;
+    const now = performance.now(), ge = {}, ce = {};
     for (const [s, [t, at]] of this.guestClock) ge[s] = [t, Math.round(now - at)];
+    for (const [s, e] of this.clockErr) ce[s] = Math.round(e);
     const acks = {};
     for (const [s, q] of this.lastSeq) if (s !== this.local.me) acks[s] = q;
     // `upTo`: every tick up to here is final; those not listed had no commands.
-    const msg = { v: NET.PROTOCOL, upTo, ticks, now: Math.round(this.now() * 100) / 100, w: this.window, acks, sum: this.local.latestSum(), ge, late: this.late, end, t: Math.round(now) };
+    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
     this.t.emit("frame", msg);
     Trace.msgOut(JSON.stringify(msg).length);
     this.lastSend = now;
@@ -338,6 +376,14 @@ class Server {
         this.updateWindow();
       }
     }
+    // Their clock: what they thought "now" was when they sent this, against
+    // what it was here, allowing for the trip.
+    const r = this.rtt.get(s);
+    if (typeof d.est === "number" && r) {
+      const err = (d.est - this.now()) * NET.TICK_MS + r.srtt / 2;
+      const old = this.clockErr.get(s);
+      this.clockErr.set(s, old === undefined ? err : 0.9 * old + 0.1 * err);
+    }
     // Their confirmed copy against ours (or they found a difference themselves).
     const drift = typeof d.desync === "number" ? d.desync
       : Array.isArray(d.sum) && this.local.sums.has(d.sum[0]) && this.local.sums.get(d.sum[0]) !== d.sum[1] ? d.sum[0] : null;
@@ -355,8 +401,8 @@ class Server {
   snapshot() {
     const guests = {};
     for (const s of this.tokens.keys()) {
-      const r = this.rtt.get(s);
-      guests[s] = { active: this.active.has(s), rtt: r ? Math.round(r.srtt) : null, dev: r ? Math.round(r.dev) : null, behind: this.final - this.ack.get(s), heardAgo: Math.round(performance.now() - this.heard.get(s)), late: this.late[s] || 0 };
+      const r = this.rtt.get(s), ce = this.clockErr.get(s);
+      guests[s] = { active: this.active.has(s), rtt: r ? Math.round(r.srtt) : null, dev: r ? Math.round(r.dev) : null, clockErr: ce === undefined ? null : Math.round(ce), behind: this.final - this.ack.get(s), heardAgo: Math.round(performance.now() - this.heard.get(s)), late: this.late[s] || 0 };
     }
     return { window: this.window, inbox: this.inbox.length, guests };
   }
@@ -366,8 +412,12 @@ class Server {
 // Every player runs one, the host too (its bundles come straight from its
 // Server). `hooks` connects it to the game: apply(owner, cmd) runs a command
 // without any sound or message; keep() and restore(kept) carry the player's
-// selection over a correction; system(cmd) tells the player about a command
-// from the host (someone left).
+// selection (and the units' drawn positions) over a correction; system(cmd)
+// tells the player about a command from the host (someone left).
+//
+// The live copy assumes, for every tick, a list of commands: mine, plus any
+// friend's that arrived as early news. Each bundle is compared with that.
+const byPlayerThenSeq = (a, b) => a[0] - b[0] || a[1] - b[1];
 class Client {
   constructor(me, transport, token, hooks, onEnd) {
     this.me = me;
@@ -383,7 +433,9 @@ class Client {
     this.bundles = new Map();            // tick -> bundle, received but not run yet
     this.seq = 0;
     this.pending = [];                   // [seq, stamp, cmd]: my commands not confirmed yet
-    this.mine = new Map();               // tick -> my commands the live copy applied on it, as bundle entries
+    this.foreign = new Map();            // "player:seq" -> {p, seq, stamp, cmd, applied}: friends' early news, not confirmed yet
+    this.doneSeq = new Map();            // player -> newest seq seen confirmed
+    this.assumed = new Map();            // tick -> the commands the live copy applied on it, as bundle entries
     this.liveSums = new Map();           // tick -> [whole game, my things] checksums of the live copy after it
     this.sums = new Map();               // tick -> checksum of the confirmed copy (every SUM_EVERY ticks)
     this.hostSums = new Map();
@@ -392,6 +444,7 @@ class Client {
     this.window = NET.WINDOW;
     this.offset = null;                  // guests: host clock minus ours, ms
     this.offsets = [];
+    this.clockErr = null;                // guests: how far off our clock is, as the host measures it
     this.rtt = null; this.rttDev = 0;
     this.echoT = null; this.echoAt = 0; this.lastEcho = 0; this.taken = 0;
     this.lastHeard = performance.now(); this.lastSend = 0;
@@ -402,8 +455,11 @@ class Client {
       mineMatched: 0,  // ...where it had predicted my own things exactly
       compared: 0,     // ...that the live copy had run (so could be compared)
       corrections: 0, resimTicks: 0,
-      remote: 0, moved: 0, system: 0, behind: 0,
-      unexplained: 0,  // bundle as predicted, yet the copies differ: should never happen
+      // why: early (a friend's command came in, for a tick we'd run already),
+      // remote (one reached us only in a bundle), moved (a command landed on
+      // another tick than stamped), system, behind (confirmed overtook live),
+      // unexplained (bundle as predicted, yet the copies differ)
+      early: 0, remote: 0, moved: 0, system: 0, behind: 0, unexplained: 0,
       mineChanged: 0,  // corrections that changed my own things
       selChanged: 0,   // corrections after which my selection pointed at something else
       desyncs: 0,
@@ -422,16 +478,34 @@ class Client {
     const t = this.target();
     return t === null ? 1 : Math.max(0, Math.min(1, t - (this.live - 1)));
   }
+  // The tick a not-yet-confirmed command goes on: its stamp, or the first
+  // open tick if its own is final already (it's late).
+  eff(stamp) { return Math.max(stamp, this.final + 1); }
+  note(k, entry) {
+    if (!this.assumed.has(k)) this.assumed.set(k, []);
+    this.assumed.get(k).push(entry);
+  }
 
   // One of my commands. The game has already applied it to the live copy.
   queue(cmd) {
     const stamp = this.live; // it takes effect before the next tick runs
     const seq = ++this.seq;
     this.pending.push([seq, stamp, cmd]);
-    if (!this.mine.has(stamp)) this.mine.set(stamp, []);
-    this.mine.get(stamp).push([this.me, seq, ...cmd]);
+    this.note(stamp, [this.me, seq, ...cmd]);
     if (this.server) this.server.submit(this.me, seq, stamp, cmd);
     else this.send();
+  }
+
+  // A friend's command, before it's confirmed.
+  early(p, seq, stamp, cmd) {
+    if (!cmd || p === this.me || p === 0) return;
+    const key = p + ":" + seq;
+    if (this.foreign.has(key) || seq <= (this.doneSeq.get(p) || 0)) return;
+    this.foreign.set(key, { p, seq, stamp, cmd, applied: false });
+    this.stats.seenLate.push(this.live - stamp);
+    if (this.stats.seenLate.length > 50) this.stats.seenLate.shift();
+    // Meant for a tick we've run already: go back and put it in.
+    if (this.eff(stamp) < this.live && !this.dirty) this.dirty = "early";
   }
 
   // The host's own client: a bundle straight from the server.
@@ -441,7 +515,7 @@ class Client {
     this.window = this.server.window;
   }
 
-  // A guest: bundles (and the clock) from the host.
+  // A guest: bundles, early news and the clock, from the host.
   receive(d) {
     if (this.ended || !d || d.v !== NET.PROTOCOL) return;
     const now = performance.now();
@@ -458,6 +532,7 @@ class Client {
         else { this.rttDev = 0.75 * this.rttDev + 0.25 * Math.abs(this.rtt - sample); this.rtt = 0.875 * this.rtt + 0.125 * sample; }
       }
     }
+    if (d.ce && typeof d.ce[this.me] === "number") this.clockErr = d.ce[this.me];
     // The clock: the host's time when it sent this, plus half a round trip.
     // Messages held up on the way would make us think the host is behind, so
     // trust the most hopeful of the recent ones, and move there gently.
@@ -474,6 +549,9 @@ class Client {
       if (Array.isArray(e) && typeof e[0] === "number" && e[0] > this.final && Array.isArray(e[1])) this.bundles.set(e[0], e[1]);
     }
     if (typeof d.upTo === "number" && d.upTo > this.got) this.got = d.upTo;
+    for (const e of Array.isArray(d.early) ? d.early : []) {
+      if (Array.isArray(e) && e.length >= 7 && e.slice(0, 3).every(v => typeof v === "number")) this.early(e[0], e[1], Math.floor(e[2]), cleanCmd(e.slice(3)));
+    }
     if (Array.isArray(d.sum)) { this.hostSums.set(d.sum[0], d.sum[1]); this.checkSum(d.sum[0]); }
   }
 
@@ -487,7 +565,8 @@ class Client {
       cmds.push(p);
     }
     const echo = this.echoT === null ? null : [this.echoT, Math.round(performance.now() - this.echoAt)];
-    const msg = { v: NET.PROTOCOL, from: this.me, token: this.token, cmds, ack: this.got, sum: this.latestSum(), echo, gt: Math.round(performance.now()) };
+    const est = this.target();
+    const msg = { v: NET.PROTOCOL, from: this.me, token: this.token, cmds, ack: this.got, sum: this.latestSum(), echo, gt: Math.round(performance.now()), est: est === null ? null : Math.round(est * 100) / 100 };
     this.t.emit("cmd", msg);
     Trace.msgOut(JSON.stringify(msg).length);
     this.lastSend = performance.now();
@@ -524,8 +603,13 @@ class Client {
     return { steps, stalled };
   }
 
+  // Run one live tick, with friends' early commands that are due on it.
   stepLive() {
     const k = this.live;
+    const due = [];
+    for (const f of this.foreign.values()) if (!f.applied && this.eff(f.stamp) === k) due.push(f);
+    due.sort((a, b) => a.p - b.p || a.seq - b.seq);
+    for (const f of due) { this.hooks.apply(f.p, f.cmd); this.note(k, [f.p, f.seq, ...f.cmd]); f.applied = true; }
     W.tick();
     this.liveSums.set(k, [W.checksum(), W.checksum_owner(this.me)]);
     this.live++;
@@ -538,17 +622,22 @@ class Client {
       const k = this.final + 1;
       const bundle = this.bundles.get(k) || [];
       this.bundles.delete(k);
-      const assumed = this.mine.get(k) || [];
+      const assumed = (this.assumed.get(k) || []).slice().sort(byPlayerThenSeq);
       const same = bundle.length === assumed.length &&
         bundle.every((e, i) => e.length === assumed[i].length && e.every((v, j) => v === assumed[i][j]));
       if (!same && !this.dirty) {
-        this.dirty = bundle.some(e => e[0] !== this.me && e[0] !== 0) ? "remote"
-          : bundle.some(e => e[0] === 0) ? "system" : "moved";
+        const has = (list, e) => list.some(a => a[0] === e[0] && a[1] === e[1]);
+        this.dirty = bundle.some(e => e[0] === 0) ? "system"
+          : bundle.some(e => e[0] !== this.me && !has(assumed, e)) ? "remote" : "moved";
       }
       for (const e of bundle) {
         if (e[0] === this.me) this.pending = this.pending.filter(p => p[0] !== e[1]);
-        else if (e[0] !== 0) { this.stats.seenLate.push(this.live - k); if (this.stats.seenLate.length > 50) this.stats.seenLate.shift(); }
-        else if (e[2] === 7) this.hooks.system(e.slice(2));
+        else if (e[0] !== 0) {
+          const key = e[0] + ":" + e[1];
+          if (!this.foreign.has(key)) { this.stats.seenLate.push(this.live - k); if (this.stats.seenLate.length > 50) this.stats.seenLate.shift(); }
+          this.foreign.delete(key);
+          this.doneSeq.set(e[0], Math.max(this.doneSeq.get(e[0]) || 0, e[1]));
+        } else if (e[2] === 7) this.hooks.system(e.slice(2));
       }
       // Step the confirmed copy: swap it in, run the tick, swap it back.
       W.mp_swap();
@@ -570,15 +659,15 @@ class Client {
         this.stats.compared++;
         if (ls[0] === whole) this.stats.matched++;
         if (ls[1] === own) this.stats.mineMatched++;
-        if (same && ls[0] !== whole && !this.dirty) { this.stats.unexplained++; this.dirty = "unexplained"; Trace.event("unexplained", { tick: k }); }
+        if (same && ls[0] !== whole && !this.dirty) { this.dirty = "unexplained"; Trace.event("unexplained", { tick: k }); }
       } else if (k >= this.live && !this.dirty) this.dirty = "behind"; // confirmed overtook live
       this.liveSums.delete(k);
-      this.mine.delete(k);
+      this.assumed.delete(k);
     }
   }
 
   // Replace the live copy with the confirmed one and run the ticks since
-  // again, with my commands the host hasn't confirmed yet.
+  // again, with every command not confirmed yet: mine, and friends' early news.
   correct() {
     const why = this.dirty;
     this.dirty = null;
@@ -587,16 +676,17 @@ class Client {
     const ownBefore = this.live > from ? W.checksum_owner(this.me) : null;
     W.mp_restore();
     if (this.live < from) this.live = from; // we were behind: jump
-    this.mine.clear();
+    this.assumed.clear();
     this.liveSums.clear();
-    // Each of my commands goes in on its own tick, or, if that tick is
-    // already final (it's on its way, late), on the first one still open.
-    const due = k => this.pending.filter(p => Math.max(p[1], from) === k);
+    const open = [];
+    for (const p of this.pending) open.push({ p: this.me, seq: p[0], stamp: p[1], cmd: p[2] });
+    for (const f of this.foreign.values()) { f.applied = false; open.push(f); }
+    open.sort((a, b) => a.p - b.p || a.seq - b.seq);
     for (let k = from; k <= this.live; k++) {
-      for (const p of due(k)) {
-        this.hooks.apply(this.me, p[2]);
-        if (!this.mine.has(k)) this.mine.set(k, []);
-        this.mine.get(k).push([this.me, p[0], ...p[2]]);
+      for (const c of open) if (this.eff(c.stamp) === k) {
+        this.hooks.apply(c.p, c.cmd);
+        this.note(k, [c.p, c.seq, ...c.cmd]);
+        if (c.p !== this.me) c.applied = true;
       }
       if (k === this.live) break; // commands for the next tick are in; it hasn't run yet
       W.tick();
@@ -608,7 +698,7 @@ class Client {
     s.resimTicks += this.live - from;
     s[why] = (s[why] || 0) + 1;
     if (ownBefore !== null && W.checksum_owner(this.me) !== ownBefore) s.mineChanged++;
-    if (this.hooks.restore(kept)) s.selChanged++;
+    if (this.hooks.restore(kept, this.alpha())) s.selChanged++;
     Trace.event("correct", { why, ticks: this.live - from });
   }
 
@@ -617,8 +707,8 @@ class Client {
     const late = s.seenLate.length ? Math.round(s.seenLate.reduce((a, b) => a + b, 0) / s.seenLate.length * NET.TICK_MS) : null;
     const out = {
       role: this.server ? "host" : "guest", live: this.live, final: this.final, ahead: this.live - this.final, window: this.window,
-      rtt: this.rtt === null ? null : Math.round(this.rtt), dev: Math.round(this.rttDev), pending: this.pending.length,
-      clockErr: this.server || this.offset === null ? 0 : Math.round((this.target() - this.live) * NET.TICK_MS),
+      rtt: this.rtt === null ? null : Math.round(this.rtt), dev: Math.round(this.rttDev), pending: this.pending.length, foreign: this.foreign.size,
+      clockErr: this.server ? 0 : this.clockErr,
       heardAgo: Math.round(performance.now() - this.lastHeard), friendsSeenAfter: late,
       stats: Object.assign({}, s, { seenLate: undefined }),
     };

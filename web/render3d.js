@@ -6,7 +6,10 @@
 // Hills are only visual: units walk on the same flat grid, and we just set
 // their height from the terrain under them.
 
+// How long a unit takes to slide to where a multiplayer correction put it.
+const NUDGE_MS = 150;
 const R3 = {
+  nudges: new Map(), // unit id -> { dx, dy, t }: offset to fade out (see mpHooks.restore in main.js)
   renderer: null, scene: null, camera: null, sun: null,
   terrain: null, water: null, heights: null,
   fowTex: null, fowData: null,
@@ -1050,8 +1053,15 @@ function render3d(alpha, now, dt) {
       setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
       continue;
     }
-    const x = E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha;
-    const y = E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha;
+    let x = E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha;
+    let y = E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha;
+    // Multiplayer: a correction moved this unit; slide there instead of jumping.
+    const nudge = R3.nudges.get(id);
+    if (nudge) {
+      const f = 1 - (now - nudge.t) / NUDGE_MS;
+      if (f <= 0) R3.nudges.delete(id);
+      else { x += nudge.dx * f; y += nudge.dy * f; }
+    }
     o.x = x; o.y = y;
     o.root.position.set(x, groundAt(x, y), y);
     // Turn smoothly toward the facing Rust reports (three.js turns the other way).
