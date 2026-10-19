@@ -33,8 +33,14 @@ conventions, which the game relies on:
   `Oak`, `Bush`, `Stone`, `Gold`, `Citizen`, `Spearman`, `Archer`,
   `Horseman`. The object's own location doesn't matter.
 - **Units** face +X with their feet at the ground. The weapon or tool is a
-  child object named `<Unit>.tool`; its origin is the point it swings
-  around.
+  child object named `<Unit>.tool`, with its origin in the hand that holds
+  it (the right hand, or the left for the Archer's bow).
+- **Unit skeletons:** every vertex of a unit has a `_BONE` float attribute,
+  the index of the bone it follows in this list: hips, body, head, armL,
+  armR, legL, legR, legFL, legFR, legBL, legBR, neck, tail. Each bone's
+  pivot is an empty child object named `<Unit>.<bone>` (e.g.
+  `Spearman.armR` at the shoulder). The game animates the bones itself
+  (`animateRig` in `web/render3d.js`); there are no animation clips.
 - **Buildings** are centred on their footprint (2, 3 or 4 tiles square,
   see `src/defs.rs`) with the ground at zero.
 - **Team colours:** paint parts pure magenta `#ff00ff` (team colour) or
@@ -43,6 +49,6 @@ conventions, which the game relies on:
 - **Flags** wave when their vertices have a `_WAVE` float attribute:
   0 at the pole, 1 at the free end.
 
-Export as glTF Binary with: Include > Data > Attributes on (for `_WAVE`),
+Export as glTF Binary with: Include > Data > Attributes on (for `_WAVE` and `_BONE`),
 Mesh > Vertex Color "Active", Materials "No export", +Y up. Then rebuild the
 page with `build.sh`. Rerunning `models.py` overwrites hand edits.

@@ -38,6 +38,12 @@ const timeUniform = { value: 0 };
 // How much things move in the wind (0 on the Low graphics setting).
 const swayUniform = { value: 1 };
 function withFow(mat, extra) {
+  // three.js reuses a compiled shader for any material whose onBeforeCompile
+  // has the same source text. This wrapper's text is the same for every
+  // material, so each patch needs its own key, or (say) the swaying trees
+  // would silently get the plain shader of whichever material compiled first.
+  const key = "fow:" + (extra ? extra.cacheKey || extra.toString() : "");
+  mat.customProgramCacheKey = () => key;
   mat.onBeforeCompile = sh => {
     if (extra) extra(sh);
     sh.uniforms.uFow = fowUniforms.uFow;
@@ -48,8 +54,15 @@ function withFow(mat, extra) {
         fowP = instanceMatrix * fowP;
       #endif
       vFowW = (modelMatrix * fowP).xz;`);
-    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nvarying vec2 vFowW;\n" + sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
+    sh.uniforms.uCloudT = timeUniform;
+    let fs = sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
       gl_FragColor.rgb *= texture2D(uFow, vFowW / uMapSize).r;`);
+    if (fs.includes("#include <lights_fragment_begin>")) {
+      fs = fs.replace("#include <lights_fragment_begin>", THREE.ShaderChunk.lights_fragment_begin.replace(
+        "getDirectionalLightInfo( directionalLight, directLight );",
+        "getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cloudShade(vFowW);"));
+    }
+    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nvarying vec2 vFowW;\n" + NOISE_GLSL + CLOUD_GLSL + fs;
   };
   return mat;
 }
@@ -106,6 +119,151 @@ function treePatch(sh) {
   sh.uniforms.uTime = timeUniform;
   sh.uniforms.uSway = swayUniform;
   sh.vertexShader = WIND_GLSL + sh.vertexShader.replace("#include <begin_vertex>", TREE_SWAY_GLSL);
+}
+
+// --- Surface detail in the shaders -------------------------------------------------
+// Smooth 3D value noise, for detail computed per pixel: the shoreline, sand
+// grain, stone and gold veins. Per pixel stays sharp however close the camera
+// gets, where a painted texture would blur.
+const NOISE_GLSL = `
+  #ifndef VC_NOISE
+  #define VC_NOISE
+  float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+  float vnoise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x), mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x), mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+  }
+  float vnoise2(vec2 p) { return vnoise3(vec3(p, 0.37)); }
+  #endif
+`;
+
+// --- Sky and clouds -------------------------------------------------------------------
+// One sun for everything: the light, the sky's glow, the glints on water.
+const SUN_DIR = new THREE.Vector3(-17, 21, 11).normalize();
+const SKY_GLSL = `
+  #ifndef VC_SKY
+  #define VC_SKY
+  const vec3 SUN_DIR = vec3(${SUN_DIR.x.toFixed(4)}, ${SUN_DIR.y.toFixed(4)}, ${SUN_DIR.z.toFixed(4)});
+  // The colour of the sky in a direction (world space, normalized), in linear light.
+  vec3 skyColor(vec3 d) {
+    vec3 zenith = vec3(0.1, 0.27, 0.62), horizon = vec3(0.42, 0.56, 0.68), below = vec3(0.05, 0.16, 0.24);
+    float h = d.y;
+    vec3 c = h > 0.0 ? mix(horizon, zenith, pow(min(h * 1.4, 1.0), 0.55)) : mix(horizon, below, min(-h * 5.0, 1.0));
+    float s = max(dot(d, SUN_DIR), 0.0);
+    c += vec3(1.0, 0.72, 0.4) * (pow(s, 6.0) * 0.35 + pow(s, 64.0) * 0.6);   // warm glow around the sun
+    c = mix(c, c * vec3(1.1, 1.0, 0.88), (1.0 - abs(h)) * 0.4);             // and a warm haze low down
+    return c;
+  }
+  #endif
+`;
+// Cloud shadows: patches of shade drifting across the land with the wind.
+// Computed per pixel in every lit material, as a dimmer on the sunlight only,
+// so shaded ground still gets the sky's light.
+const CLOUD_GLSL = `
+  uniform float uCloudT;
+  float cloudShade(vec2 p) {
+    vec2 q = p * 0.045 + vec2(0.82, 0.57) * uCloudT * 0.012;
+    float n = vnoise2(q) * 0.62 + vnoise2(q * 2.3 + 5.0) * 0.28 + vnoise2(q * 5.1 + 9.0) * 0.1;
+    return 1.0 - 0.55 * smoothstep(0.5, 0.66, n);
+  }
+`;
+// Pass the world position of each pixel to the fragment shader as vGW.
+function worldPosPatch(sh) {
+  sh.vertexShader = "varying vec3 vGW;\n" + sh.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
+    vec4 gwP = vec4(transformed, 1.0);
+    #ifdef USE_INSTANCING
+      gwP = instanceMatrix * gwP;
+    #endif
+    vGW = (modelMatrix * gwP).xyz;`);
+  sh.fragmentShader = "varying vec3 vGW;\n" + NOISE_GLSL + sh.fragmentShader;
+}
+
+// The ground: beaches are drawn here from each pixel's height, so the line
+// between grass and sand is crisp, a little ragged, and darker where the sand
+// is wet. Grass and sand get a fine grain. The painted texture only provides
+// the broad colours (meadow patches, earth and rock on slopes).
+function groundPatch(sh) {
+  worldPosPatch(sh);
+  sh.fragmentShader = sh.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+    {
+      vec2 g = vGW.xz;
+      float gn = vnoise2(g * 0.8) * 0.6 + vnoise2(g * 2.6) * 0.3 + vnoise2(g * 7.0) * 0.1;
+      float line = 0.13 + (gn - 0.5) * 0.18;               // the height where grass gives way to sand
+      float sandAmt = 1.0 - smoothstep(line - 0.008, line + 0.008, vGW.y);
+      float grain = vnoise2(g * 40.0), grain2 = vnoise2(g * 13.0);
+      vec3 dry = vec3(0.60, 0.49, 0.24), wet = vec3(0.33, 0.25, 0.12);
+      vec3 sand = mix(dry, wet, smoothstep(${(WATER_Y + 0.14).toFixed(3)}, ${(WATER_Y + 0.01).toFixed(3)}, vGW.y));
+      sand *= 0.9 + 0.12 * grain + 0.08 * grain2;
+      // Below the waterline the painted seabed shows through.
+      sandAmt *= smoothstep(${(WATER_Y - 0.3).toFixed(3)}, ${(WATER_Y - 0.08).toFixed(3)}, vGW.y);
+      // A slightly darker rim of grass along the beach makes the edge read.
+      float rim = smoothstep(line + 0.008, line + 0.02, vGW.y) * (1.0 - smoothstep(line + 0.03, line + 0.07, vGW.y));
+      vec3 grass = diffuseColor.rgb * (0.9 + 0.2 * vnoise2(g * 11.0) - 0.16 * rim);
+      diffuseColor.rgb = mix(grass, sand, sandAmt);
+    }`);
+}
+
+// Stone: keeps its flat facets, with a stony surface painted on per pixel:
+// mottled tone, faint layers, hairline cracks and dark specks. Gold ore is the
+// same stone with branching gold veins over about half of it, which catch the
+// light.
+function rockPatch(gold) {
+  const patch = sh => {
+    worldPosPatch(sh);
+    sh.fragmentShader = sh.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+      vec3 rp = vGW * 5.0;
+      float n1 = vnoise3(rp), n2 = vnoise3(rp * 3.1), n3 = vnoise3(rp * 9.7);
+      float layers = 0.5 + 0.5 * sin(vGW.y * 26.0 + n1 * 5.0);
+      diffuseColor.rgb *= 0.8 + 0.24 * n1 + 0.1 * n2 + 0.06 * layers;
+      float crack = 1.0 - smoothstep(0.0, 0.025, abs(vnoise3(rp * 1.6 + 4.0) - 0.5));
+      diffuseColor.rgb *= 1.0 - 0.4 * crack - 0.35 * smoothstep(0.8, 0.86, n3);
+      float vein = 0.0;
+      ${gold ? `
+      // Two networks of thin lines (where a noise field crosses 0.5) make
+      // branching veins; together they cover about half the stone.
+      float va = vnoise3(vGW * 6.0) * 0.7 + vnoise3(vGW * 14.0 + 2.0) * 0.3;
+      float vb = vnoise3(vGW * 5.0 + 7.0) * 0.7 + vnoise3(vGW * 12.0 + 9.0) * 0.3;
+      vein = max(1.0 - smoothstep(0.045, 0.07, abs(va - 0.5)), 1.0 - smoothstep(0.035, 0.06, abs(vb - 0.5)));
+      vec3 goldCol = vec3(0.82, 0.5, 0.07) * (0.7 + 0.5 * n2);
+      diffuseColor.rgb = mix(diffuseColor.rgb, goldCol, vein);` : ""}`)
+      .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+      ${gold ? `totalEmissiveRadiance += vec3(0.5, 0.32, 0.04) * vein * (0.15 + 0.85 * smoothstep(0.8, 0.9, vnoise3(vGW * 30.0)));` : ""}`);
+  };
+  patch.cacheKey = gold ? "gold" : "stone";
+  return patch;
+}
+
+// A big sphere around the camera, painted with the sky colour, the sun's
+// glow and drifting clouds. Drawn first, behind everything.
+function buildSky(scene) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uCloudT: timeUniform },
+    side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+    vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: NOISE_GLSL + SKY_GLSL + `
+      uniform float uCloudT; varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        vec3 c = skyColor(d);
+        if (d.y > 0.0) {
+          // Clouds on a flat layer above: the same pattern that shades the ground.
+          vec2 p = d.xz / (d.y + 0.08) * 40.0;
+          vec2 q = p * 0.045 + vec2(0.82, 0.57) * uCloudT * 0.012;
+          float n = vnoise2(q) * 0.62 + vnoise2(q * 2.3 + 5.0) * 0.28 + vnoise2(q * 5.1 + 9.0) * 0.1;
+          float cl = smoothstep(0.48, 0.7, n) * smoothstep(0.0, 0.25, d.y);
+          vec3 lit = vec3(1.0, 0.95, 0.88) * (0.85 + 0.4 * pow(max(dot(d, SUN_DIR), 0.0), 4.0));
+          c = mix(c, lit, cl * 0.85);
+        }
+        gl_FragColor = vec4(c, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  R3.sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), mat);
+  R3.sky.renderOrder = -10;
+  R3.sky.frustumCulled = false;
+  scene.add(R3.sky);
 }
 
 // --- Model building ----------------------------------------------------------
@@ -443,7 +601,9 @@ function parseGlb(buf) {
     geo.setAttribute("aWave", new THREE.BufferAttribute(at._WAVE != null ? read(at._WAVE).data : new Float32Array(count), 1));
     if (prim.indices != null) geo.setIndex(Array.from(read(prim.indices).data));
     geo.computeBoundingBox(); geo.computeBoundingSphere();
-    return { geo, team, ao };
+    // Units: which bone each vertex follows (see RIG_BONES).
+    const bone = at._BONE != null ? read(at._BONE).data : null;
+    return { geo, team, ao, bone };
   };
   const out = {};
   const children = new Set();
@@ -454,6 +614,7 @@ function parseGlb(buf) {
     for (const c of nd.children || []) {
       const cn = json.nodes[c];
       if (cn.mesh != null && /\.tool$/.test(cn.name)) { m.tool = meshGeo(cn.mesh); m.pivot = cn.translation || [0, 0, 0]; }
+      else if (cn.mesh == null) (m.pivots ||= {})[cn.name.slice(cn.name.lastIndexOf(".") + 1)] = cn.translation || [0, 0, 0];
     }
     out[nd.name] = m;
   });
@@ -470,6 +631,13 @@ function teamGeo(m, owner) {
     const c = m.team[k] === 1 ? c1 : c2, a = m.ao[k];
     col[k * 3] = c.r * a; col[k * 3 + 1] = c.g * a; col[k * 3 + 2] = c.b * a;
   }
+  if (m.bone) {
+    // Rigid skinning: every vertex follows exactly one bone.
+    const n = m.bone.length, idx = new Uint16Array(n * 4), wgt = new Float32Array(n * 4);
+    for (let k = 0; k < n; k++) { idx[k * 4] = Math.round(m.bone[k]); wgt[k * 4] = 1; }
+    geo.setAttribute("skinIndex", new THREE.BufferAttribute(idx, 4));
+    geo.setAttribute("skinWeight", new THREE.BufferAttribute(wgt, 4));
+  }
   return geo;
 }
 
@@ -478,14 +646,17 @@ function glbModel(kind, owner) {
   if (!m) return null;
   if (kind >= 10) return { body: teamGeo(m, owner) };
   if (!m.tool) return null;
-  // Keep the code model's animation settings (tool tilt, carrying), swap the shapes.
+  // Keep the code model's settings (tool tilt, carrying), swap the shapes.
   const code = unitModel(kind, owner);
   code.body.dispose(); code.tool.dispose();
-  return Object.assign(code, { body: teamGeo(m, owner), tool: teamGeo(m.tool, owner), pivot: m.pivot, height: m.geo.boundingBox.max.y });
+  const out = Object.assign(code, { body: teamGeo(m, owner), tool: teamGeo(m.tool, owner), pivot: m.pivot, height: m.geo.boundingBox.max.y });
+  // A rigged unit: the game animates its skeleton (see animateRig).
+  if (m.bone && m.pivots) out.rig = { pivots: m.pivots, toolAt: m.pivot, toolBone: kind === K.Archer ? "armL" : "armR" };
+  return out;
 }
 
 // --- Setup -------------------------------------------------------------------
-let entMat, ghostMat, hitMat, treeMat, treeDepthMat;
+let entMat, ghostMat, hitMat, treeMat, treeDepthMat, stoneMat, goldMat;
 const modelCache = new Map();
 function cachedModel(kind, owner) {
   const key = kind * 8 + owner;
@@ -504,10 +675,11 @@ function initRenderer() {
   r.shadowMap.type = THREE.PCFSoftShadowMap;
   R3.renderer = r;
   const scene = new THREE.Scene();
-  // Past the sea's edge, the far distance is deep blue rather than black.
-  scene.background = new THREE.Color("#12303f");
-  // A light haze in the distance gives the view depth when the camera tilts up.
-  scene.fog = new THREE.Fog("#12303f", 60, 200);
+  scene.background = new THREE.Color("#12303f"); // under the sky dome; only seen if it fails
+  // A light, sky-coloured haze in the distance gives the view depth, and
+  // melts the far sea into the horizon.
+  scene.fog = new THREE.Fog(new THREE.Color().setRGB(0.44, 0.56, 0.66), 60, 200);
+  buildSky(scene);
   R3.scene = scene;
   R3.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 400);
 
@@ -530,6 +702,8 @@ function initRenderer() {
   treeMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), treePatch);
   treeDepthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   treeDepthMat.onBeforeCompile = treePatch;
+  stoneMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), rockPatch(false));
+  goldMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), rockPatch(true));
   ghostMat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false });
   R3.raycaster = new THREE.Raycaster();
 
@@ -648,7 +822,7 @@ function buildWorld() {
   const tex = new THREE.CanvasTexture(terrainCanvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = R3.renderer.capabilities.getMaxAnisotropy();
-  const terrain = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ map: tex })));
+  const terrain = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ map: tex }), groundPatch));
   terrain.receiveShadow = true;
   scene.add(terrain);
   R3.terrain = terrain;
@@ -676,12 +850,12 @@ function buildWorld() {
   // Room for every resource on the map. (Sizing this from the resources
   // explored so far was a bug: trees discovered later had no room and vanished.)
   const n = W.res_total() + 16;
-  const mk = (g, cnt, sways) => {
-    const m = new THREE.InstancedMesh(g, sways ? treeMat : entMat, cnt);
+  const mk = (g, cnt, sways, mat) => {
+    const m = new THREE.InstancedMesh(g, mat || (sways ? treeMat : entMat), cnt);
     if (sways) m.customDepthMaterial = treeDepthMat;
     m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m;
   };
-  R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n), gold: mk(R3.resGeo.gold, n) };
+  R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -728,7 +902,7 @@ function buildShore() {
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const shore = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ vertexColors: true })));
+  const shore = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), groundPatch));
   shore.receiveShadow = true;
   R3.scene.add(shore);
   R3.shore = shore;
@@ -751,33 +925,76 @@ function buildWater() {
     depth[i] = Math.max(-0.2, WATER_Y - heightAnywhere(x, z));
   }
   geo.setAttribute("aDepth", new THREE.BufferAttribute(depth, 1));
+  // The ground's height under the water, 4 samples per tile, so the shader
+  // knows the depth at every pixel: the foam line then follows the real
+  // shoreline crisply instead of smearing across the mesh's coarse vertices.
+  const HR = 4, hw = (MW + pad * 2) * HR, hh = (MH + pad * 2) * HR, hdata = new Uint16Array(hw * hh);
+  for (let j = 0; j < hh; j++) for (let i = 0; i < hw; i++) hdata[j * hw + i] = THREE.DataUtils.toHalfFloat(heightAnywhere((i + 0.5) / HR - pad, (j + 0.5) / HR - pad));
+  const htex = new THREE.DataTexture(hdata, hw, hh, THREE.RedFormat, THREE.HalfFloatType);
+  htex.magFilter = htex.minFilter = THREE.LinearFilter;
+  htex.needsUpdate = true;
+  R3.heightTex = htex;
   const mat = new THREE.MeshPhongMaterial({ color: "#2b6f8c", specular: "#5d7a88", shininess: 180, transparent: true, opacity: 0.88, depthWrite: false });
   withFow(mat, sh => {
     sh.uniforms.uTime = timeUniform;
+    sh.uniforms.uHeight = { value: htex };
     sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
       vDepth = aDepth;
       vWPos = position.xz;
       transformed.y += (sin(position.x * 1.3 + uTime * 1.1) + cos(position.z * 1.1 + uTime * 0.8)) * 0.02 * clamp(aDepth * 3.0, 0.0, 1.0);`);
-    sh.fragmentShader = "uniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.fragmentShader
+    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
-        float d = clamp(vDepth, 0.0, 2.0);
+        float ground = texture2D(uHeight, (vWPos + ${pad}.0) / vec2(${MW + pad * 2}.0, ${MH + pad * 2}.0)).r;
+        float dRaw = ${WATER_Y.toFixed(3)} - ground;
+        if (dRaw < -0.01) discard;
+        float d = clamp(dRaw, 0.0, 2.0);
         vec3 shallow = vec3(0.13, 0.42, 0.43), deep = vec3(0.05, 0.18, 0.3);
         diffuseColor.rgb = mix(shallow, deep, smoothstep(0.05, 1.1, d));
-        float ripple = 0.5 + 0.5 * sin(uTime * 1.8 - d * 40.0 + sin(vWPos.x * 2.1) + cos(vWPos.y * 1.7));
-        float foam = (1.0 - smoothstep(0.0, 0.07, d)) * (0.35 + 0.45 * ripple);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.93, 0.92), foam);
-        diffuseColor.a = mix(0.62, 0.94, smoothstep(0.0, 0.6, d));
-        diffuseColor.a = max(diffuseColor.a, foam * 0.85);
-        if (vDepth < -0.05) discard;`)
+        // A crisp line of foam where the water meets the sand, and a wave of
+        // foam washing in and out just beyond it.
+        float edge = 1.0 - smoothstep(0.0, 0.012, d);
+        float wash = sin(uTime * 1.5 - d * 70.0 + sin(vWPos.x * 1.7) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
+        float wave = smoothstep(0.75, 0.95, wash) * (1.0 - smoothstep(0.015, 0.07, d));
+        float foam = max(edge, wave * 0.7);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.94, 0.93), foam);
+        diffuseColor.a = mix(0.7, 0.95, smoothstep(0.0, 0.5, d));
+        diffuseColor.a = max(diffuseColor.a, foam * 0.92);`)
       .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
         vec2 wp = vWPos * 3.2;
-        normal = normalize(normal + vec3(
+        // Small waves fade out with distance: there they're finer than a pixel and would shimmer in stripes.
+        float waveAmt = 1.0 - smoothstep(25.0, 70.0, length(vViewPosition));
+        normal = normalize(normal + waveAmt * vec3(
           sin(wp.x + uTime * 1.3) * 0.12 + sin(wp.y * 1.9 - uTime * 0.9) * 0.08,
-          cos(wp.y + uTime * 1.1) * 0.12 + cos(wp.x * 1.7 + uTime * 0.7) * 0.08, 0.0));`);
+          cos(wp.y + uTime * 1.1) * 0.12 + cos(wp.x * 1.7 + uTime * 0.7) * 0.08, 0.0));`)
+      // The water mirrors the sky, more so at a glancing angle (Fresnel).
+      .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+        {
+          vec3 V = normalize(vViewPosition);
+          vec3 R = (vec4(reflect(-V, normal), 0.0) * viewMatrix).xyz;   // to world space
+          R.y = abs(R.y);
+          float fres = 0.04 + 0.96 * pow(1.0 - max(dot(normal, V), 0.0), 5.0);
+          totalEmissiveRadiance += skyColor(normalize(R)) * fres * 0.55 * (1.0 - foam);
+        }`);
+    sh.fragmentShader = SKY_GLSL + sh.fragmentShader;
   });
   const water = new THREE.Mesh(geo, mat);
   water.renderOrder = 1;
   water.receiveShadow = true;
+  // Open sea out to the horizon: four big flat quads around the detailed
+  // water, with the same material (the height texture reads as deep there).
+  const far = 1500, x0 = -pad, x1 = MW + pad, z0 = -pad, z1 = MH + pad;
+  const ring = [], quad = (ax, az, bx, bz) => ring.push(ax, WATER_Y, az, bx, WATER_Y, az, bx, WATER_Y, bz, ax, WATER_Y, az, bx, WATER_Y, bz, ax, WATER_Y, bz);
+  quad(-far, -far, far, z0); quad(-far, z1, far, far); quad(-far, z0, x0, z1); quad(x1, z0, far, z1);
+  const rg = new THREE.BufferGeometry();
+  rg.setAttribute("position", new THREE.Float32BufferAttribute(ring, 3));
+  rg.setAttribute("aDepth", new THREE.Float32BufferAttribute(new Array(ring.length / 3).fill(2), 1));
+  rg.setAttribute("normal", new THREE.Float32BufferAttribute(new Array(ring.length / 3).fill(0).flatMap(() => [0, 1, 0]), 3));
+  // wind the triangles to face up
+  const pa = rg.attributes.position.array;
+  for (let i = 0; i < pa.length; i += 9) for (let k = 0; k < 3; k++) { const t = pa[i + 3 + k]; pa[i + 3 + k] = pa[i + 6 + k]; pa[i + 6 + k] = t; }
+  const sea = new THREE.Mesh(rg, mat);
+  sea.renderOrder = 1;
+  water.add(sea);
   R3.scene.add(water);
   R3.water = water;
 }
@@ -843,7 +1060,8 @@ function placeTufts() {
   const blocked = t => { const b = R3.flattened; return b && b.has(t); };
   const put = (mesh, spots) => {
     spots.forEach((s, i) => {
-      const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0])));
+      // no grass on the beach (the ground shader turns low ground to sand)
+      const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0]))) || hAt(s[0], s[1]) < 0.24;
       _p.set(s[0], hAt(s[0], s[1]) - 0.01, s[1]);
       _q.setFromAxisAngle(_up, s[2] * 40);
       _s.setScalar(hidden ? 0 : 0.6 + s[2] * 0.5);
@@ -916,6 +1134,7 @@ function placeCamera() {
   s.position.set(cam.x - 17, gy + 21, cam.y + 11);
   // Haze starts past what you're looking at, so it only softens the far distance.
   R3.scene.fog.near = cam.dist * 1.6; R3.scene.fog.far = cam.dist * 5 + 40;
+  if (R3.sky) R3.sky.position.copy(c.position);
   s.target.position.set(cam.x, gy, cam.y);
   s.target.updateMatrixWorld();
   const sc = s.shadow.camera;
@@ -1002,6 +1221,9 @@ function makeObj(i) {
     o.height = { [K.Farm]: 0.3, [K.Tower]: 3, [K.Wonder]: 4, [K.Temple]: 1.9, [K.Granary]: 1.6 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
+  } else if (mdl.rig) {
+    root.remove(body);
+    makeRigged(o, mdl);
   } else {
     const pivot = new THREE.Group();
     pivot.position.set(...mdl.pivot);
@@ -1023,6 +1245,170 @@ function makeObj(i) {
   R3.scene.add(root);
   R3.objs.set(id, o);
   return o;
+}
+
+// --- Rigged units ----------------------------------------------------------------------
+// Units from Blender carry a small skeleton: every vertex follows one bone.
+// The bones are animated here each frame, procedurally, for a Totally
+// Accurate Battle Simulator feel: a waddling walk, a body that wobbles on a
+// spring when starting and stopping, big wind-ups when working or fighting,
+// a flinch when hit, and a floppy fall when killed. This is drawing only;
+// the simulation doesn't know about any of it.
+const RIG_BONES = ["hips", "body", "head", "armL", "armR", "legL", "legR", "legFL", "legFR", "legBL", "legBR", "neck", "tail"];
+const RIG_PARENT = { body: "hips", head: "body", armL: "body", armR: "body", legL: "hips", legR: "hips",
+  legFL: "hips", legFR: "hips", legBL: "hips", legBR: "hips", neck: "hips", tail: "hips" };
+
+function makeRigged(o, mdl) {
+  const pv = mdl.rig.pivots, at = n => pv[n] || pv.hips || [0, 0, 0];
+  const bones = {};
+  for (const n of RIG_BONES) { bones[n] = new THREE.Bone(); bones[n].name = n; }
+  for (const n of RIG_BONES) {
+    const p = at(n), par = RIG_PARENT[n];
+    if (par) { const q = at(par); bones[n].position.set(p[0] - q[0], p[1] - q[1], p[2] - q[2]); bones[par].add(bones[n]); }
+    else bones[n].position.set(p[0], p[1], p[2]);
+  }
+  const mesh = new THREE.SkinnedMesh(mdl.body, entMat);
+  mesh.castShadow = mesh.receiveShadow = true;
+  mesh.add(bones.hips);
+  mesh.updateMatrixWorld(true);
+  mesh.bind(new THREE.Skeleton(RIG_BONES.map(n => bones[n])));
+  mesh.userData.obj = o;
+  o.body = mesh;
+  o.root.add(mesh);
+  o.bones = bones;
+  o.hipsY = bones.hips.position.y;
+  // The tool sits in its hand and turns with its arm.
+  const tb = mdl.rig.toolBone, ta = mdl.rig.toolAt, tp = at(tb);
+  const tool = new THREE.Mesh(mdl.tool, entMat);
+  tool.castShadow = true;
+  tool.position.set(ta[0] - tp[0], ta[1] - tp[1], ta[2] - tp[2]);
+  bones[tb].add(tool);
+  o.toolMesh = tool; o.toolBone = tb;
+  o.height = mdl.height * UNIT_SCALE;
+  mesh.scale.setScalar(UNIT_SCALE);
+  if (mdl.carry) {
+    o.bundle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.1), entMat);
+    const bp = at("body");
+    o.bundle.position.set(-0.17 - bp[0], 0.38 - bp[1], -bp[2]);
+    o.bundle.visible = false;
+    bones.body.add(o.bundle);
+  }
+  Object.assign(o, { seed: (o.id * 0.6180339) % 1 * 100, lean: 0, leanV: 0, flinch: 0, flinchV: 0, wasHit: false, speed: 0, prevX: o.x, prevY: o.y });
+}
+
+// One frame of a rigged unit. anim: 0 idle, 1 walking, 2 working, 3 attacking.
+function animateRig(o, kind, anim, t, dt, hit) {
+  const B = o.bones;
+  for (const n of RIG_BONES) B[n].rotation.set(0, 0, 0);
+  B.body.scale.set(1, 1, 1);
+  B.hips.position.y = o.hipsY;
+  dt = Math.min(dt, 0.05);
+  // How fast it's really moving, smoothed (tiles per second).
+  const v = Math.hypot(o.x - o.prevX, o.y - o.prevY) / Math.max(dt, 1e-3);
+  o.prevX = o.x; o.prevY = o.y;
+  o.speed += (Math.min(v, 6) - o.speed) * Math.min(1, dt * 10);
+  const walking = anim === 1 || o.speed > 0.4;
+  // The body leans into the walk on a springy joint, so it wobbles when
+  // starting and stopping.
+  const leanTo = walking ? -0.2 : anim === 3 ? -0.12 : 0;
+  o.leanV += ((leanTo - o.lean) * 70 - o.leanV * 8) * dt; o.lean += o.leanV * dt;
+  // A flinch when hit: a kick backwards on another spring.
+  if (hit && !o.wasHit) o.flinchV += 9;
+  o.wasHit = hit;
+  o.flinchV += (-o.flinch * 140 - o.flinchV * 11) * dt; o.flinch += o.flinchV * dt;
+  const f = o.flinch;
+  const T = t + o.seed;
+  const horse = kind === K.Horseman;
+  if (horse) {
+    const ph = T * (walking ? 13 : 0);
+    if (walking) {
+      B.legFL.rotation.z = Math.sin(ph) * 0.75; B.legFR.rotation.z = Math.sin(ph + 0.7) * 0.75;
+      B.legBL.rotation.z = Math.sin(ph + Math.PI) * 0.75; B.legBR.rotation.z = Math.sin(ph + Math.PI + 0.7) * 0.75;
+      B.hips.position.y = o.hipsY + Math.abs(Math.sin(ph)) * 0.05;
+      B.hips.rotation.z = Math.sin(ph) * 0.07;
+      B.neck.rotation.z = Math.sin(ph + 0.5) * 0.15;
+      B.body.rotation.z = -Math.sin(ph + 0.8) * 0.12 + o.lean * 0.6;
+      B.head.rotation.z = Math.sin(ph + 1.4) * 0.12;
+    } else {
+      B.neck.rotation.z = Math.sin(T * 0.8) * 0.06 - 0.05;   // idle: head bobs, grazes now and then
+      B.body.rotation.z = o.lean * 0.6;
+    }
+    B.tail.rotation.z = Math.sin(T * (walking ? 9 : 2.5)) * (walking ? 0.35 : 0.2);
+    B.tail.rotation.x = Math.sin(T * 1.7) * 0.25;
+    B.armL.rotation.z = 0.5; B.armL.rotation.x = 0.2;           // holding the reins
+    let arm = 0.9, jab = 0;
+    if (anim === 3) { jab = Math.max(0, Math.sin(T * 7)); arm = 1.0 + jab * 0.5; B.body.rotation.z -= jab * 0.25; }
+    B.armR.rotation.z = arm;
+    o.toolMesh.rotation.z = -arm - B.body.rotation.z + 0.12 - jab * 0.15;  // the lance stays couched, pointing forward
+  } else {
+    const ph = T * 10;
+    const s = Math.sin(ph);
+    if (walking) {
+      B.legL.rotation.z = s * 0.8; B.legR.rotation.z = -s * 0.8;
+      B.armL.rotation.z = -s * 0.65; B.armR.rotation.z = s * 0.65;
+      B.hips.position.y = o.hipsY + Math.abs(Math.cos(ph)) * 0.035;
+      B.hips.rotation.x = s * 0.13;                              // the waddle
+      B.head.rotation.x = -s * 0.1;
+    } else {
+      B.body.scale.y = 1 + Math.sin(T * 2.2) * 0.025;            // breathing
+      B.head.rotation.y = Math.sin(T * 0.7) * 0.35 * Math.max(0, Math.sin(T * 0.23));  // looks around now and then
+    }
+    B.armL.rotation.x += 0.12; B.armR.rotation.x -= 0.12;      // arms a little out from the body
+    B.body.rotation.z = o.lean;
+    B.head.rotation.z = -o.lean * 0.4;
+    const tb = B[o.toolBone];
+    let toolWorld = null; // the tool's angle in the unit's frame, or null to follow the arm
+    if (anim === 2 || (anim === 3 && kind === K.Citizen)) {
+      // A big overhead chop: wind up, strike, recover.
+      const c = (T * 1.5) % 1;
+      const a = c < 0.55 ? 0.3 + (c / 0.55) * 2.4 : c < 0.68 ? 2.7 - ((c - 0.55) / 0.13) * 2.6 : 0.1 + ((c - 0.68) / 0.32) * 0.2;
+      B.armR.rotation.z = a;
+      B.body.rotation.z += c > 0.55 && c < 0.75 ? -0.3 : 0.08;
+      if (!walking) { B.legL.rotation.z = 0.25; B.legR.rotation.z = -0.15; }
+      o.toolMesh.rotation.z = -Math.PI / 2;                     // the head points out of the fist
+    } else if (anim === 3 && kind === K.Spearman) {
+      // Jab with the spear, leaning in, shield up.
+      const jab = Math.max(0, Math.sin(T * 8));
+      B.armR.rotation.z = 1.2 + jab * 0.4;
+      B.body.rotation.z += -jab * 0.3;
+      B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
+      if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
+      toolWorld = -1.45 - jab * 0.1;
+    } else if (anim === 3 && kind === K.Archer) {
+      // Bow arm out front, string hand drawn back to the chest, then loose.
+      const draw = Math.min(1, ((T * 0.6) % 1) * 1.6);
+      B.armL.rotation.z = 1.45; B.armL.rotation.x = 0.25;
+      B.armR.rotation.z = 1.2 + (1 - draw) * 0.3; B.armR.rotation.x = 0.55 * draw;
+      B.body.rotation.y = 0.35;
+      toolWorld = 0;
+    } else {
+      toolWorld = kind === K.Spearman ? -0.25 : kind === K.Archer ? 0 : null;
+      if (kind === K.Citizen) o.toolMesh.rotation.z = -0.4;
+    }
+    if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
+  }
+  // The flinch: knocked back and squashed for a moment.
+  B.body.rotation.z += f * 0.6;
+  B.head.rotation.z += f * 0.5;
+  B.body.scale.y *= 1 - f * 0.12;
+  B.body.scale.x *= 1 + f * 0.06; B.body.scale.z *= 1 + f * 0.06;
+}
+
+// A rigged unit's death: it topples over sideways with a bounce, its limbs
+// flailing and settling, lies there a moment, then sinks away.
+const RIG_DEATH_MS = 3200;
+function animateRigDeath(d, p, dt) {
+  const B = d.o.bones, mesh = d.o.body;
+  const fall = Math.min(1, p * 3.5);
+  const bounce = fall < 1 ? fall * fall : 1 + Math.sin((p * 3.5 - 1) * 12) * 0.08 * Math.max(0, 1 - (p * 3.5 - 1) * 1.5);
+  mesh.rotation.x = d.dir * Math.min(bounce, 1.08) * Math.PI / 2;
+  const damp = Math.exp(-p * 7);
+  for (const n of ["armL", "armR", "legL", "legR", "legFL", "legFR", "legBL", "legBR"]) {
+    B[n].rotation.z = Math.sin(p * 38 + n.length) * 1.1 * damp + (n.startsWith("arm") ? 0.6 : 0.2);
+  }
+  B.head.rotation.x = Math.sin(p * 30) * 0.7 * damp + d.dir * 0.3;
+  if (B.neck) B.neck.rotation.z = -0.5 * fall;
+  if (p > 0.78) d.root.position.y -= dt * 0.35;
 }
 
 const CARRY_COL = ["#c9473a", "#8a5a33", "#a8a297", "#e6be4b"].map(c => new THREE.Color(c));
@@ -1078,8 +1464,11 @@ function render3d(alpha, now, dt) {
     o.root.rotation.y = o.face;
     const anim = E(i, F.anim);
     const ph = t + id * 0.37;
-    o.body.position.y = anim === 1 ? Math.abs(Math.sin(ph * 11)) * 0.035 : 0;
-    o.body.rotation.z = anim === 1 ? -0.06 : 0;
+    if (o.bones) animateRig(o, kind, anim, t, dt, !!(flags & 8));
+    else {
+      o.body.position.y = anim === 1 ? Math.abs(Math.sin(ph * 11)) * 0.035 : 0;
+      o.body.rotation.z = anim === 1 ? -0.06 : 0;
+    }
     if (o.tool) {
       let swing = 0;
       if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
@@ -1103,15 +1492,16 @@ function render3d(alpha, now, dt) {
     if (o.mark === mark) continue;
     R3.objs.delete(o.id);
     if (o.ring) o.ring.visible = false;
-    if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10 });
+    if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10, o, dir: hash2(o.id, 3) < 0.5 ? 1 : -1 });
     else R3.scene.remove(o.root);
   }
   // (Kept in place rather than filtered into a new array each frame.)
   let keep = 0;
   for (const d of R3.dying) {
-    const p = (now - d.t0) / (d.building ? 1600 : 1200);
+    const p = (now - d.t0) / (d.building ? 1600 : d.o.bones ? RIG_DEATH_MS : 1200);
     if (p >= 1) { R3.scene.remove(d.root); continue; }
-    if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
+    if (d.o.bones) animateRigDeath(d, p, dt);
+    else if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
     else { d.root.children[0].rotation.x = -Math.min(1, p * 3) * Math.PI / 2; d.root.position.y -= p > 0.6 ? dt * 0.4 : 0; }
     R3.dying[keep++] = d;
   }
@@ -1248,10 +1638,10 @@ function entScreen(i, atTop) {
 // never the simulation, so players in one multiplayer game can each pick
 // their own. Saved per browser.
 const GFX_LEVELS = {
-  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, ao: false },
-  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  ao: false },
-  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  ao: false },
-  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  ao: true },
+  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, post: false, bloom: false, ao: false },
+  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  post: true,  bloom: false, ao: false },
+  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  post: true,  bloom: true,  ao: false },
+  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  post: true,  bloom: true,  ao: true },
 };
 let gfxName = (() => {
   try { const v = localStorage.getItem("vibecraftGraphics"); if (GFX_LEVELS[v]) return v; } catch (e) {}
@@ -1281,7 +1671,7 @@ function applyGraphics() {
       sun.shadow.mapSize.set(GFX.shadows, GFX.shadows);
       r.shadowMap.type = GFX.shadows >= 2048 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     }
-    for (const m of [entMat, hitMat, treeMat, ghostMat, ...bundleMats]) m.needsUpdate = true;
+    for (const m of [entMat, hitMat, treeMat, stoneMat, goldMat, ghostMat, ...bundleMats]) m.needsUpdate = true;
     R3.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   }
   applyGrass();
@@ -1408,23 +1798,35 @@ function updateSmoke() {
   R3.smoke.material.uniforms.uScale.value = view._h * R3.renderer.getPixelRatio() * 0.5 * R3.camera.projectionMatrix.elements[5];
 }
 
-// --- Ambient occlusion (Ultra) -------------------------------------------------------
-// The scene is drawn into a texture with its depth, then a full-screen pass
-// darkens creases and contact points: where a building meets the ground,
-// between huddled units, under eaves. It works from depth alone, sampling a
-// small disc around each pixel to see how much nearby geometry rises above
-// it. That pass also applies the tone mapping, which three.js skips when
-// drawing into a texture.
-const Post = { rt: null, scene: null, cam: null, mat: null };
+// --- After the scene is drawn: grading, bloom, ambient occlusion ---------------------
+// From Medium up, the scene is drawn into an off-screen image first, and one
+// last full-screen pass finishes it:
+// - colour grading: warm light, cool slightly teal shade, a touch more
+//   colour, and a soft vignette (Medium and up);
+// - bloom: bright things (sunlit roofs, glints on water, the forge, gold
+//   veins) glow softly (High and up);
+// - ambient occlusion: creases and contact points darken, worked out from
+//   the depth image (Ultra).
+// That pass also applies the tone mapping, which three.js skips when drawing
+// into an image. On Low the scene goes straight to the screen.
+const Post = { rt: null, scene: null, cam: null, mat: null, bloom: null, quad: null };
+const FULLSCREEN_VS = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
 function buildPost() {
   Post.rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
   Post.rt.depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
   Post.mat = new THREE.ShaderMaterial({
-    uniforms: { tColor: { value: null }, tDepth: { value: null }, uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() }, uRadius: { value: 0.55 } },
+    uniforms: {
+      tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
+      uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
+      uRadius: { value: 0.55 }, uBloom: { value: 0 },
+    },
+    defines: { USE_AO: 0 },
     depthTest: false, depthWrite: false,
-    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+    vertexShader: FULLSCREEN_VS,
     fragmentShader: `
-      uniform sampler2D tColor; uniform sampler2D tDepth; uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius;
+      uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
+      uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
         float d = texture2D(tDepth, uv).x;
@@ -1432,9 +1834,9 @@ function buildPost() {
         return p.xyz / p.w;
       }
       void main() {
-        vec4 col = texture2D(tColor, vUv);
+        vec3 col = texture2D(tColor, vUv).rgb;
+        #if USE_AO
         float d = texture2D(tDepth, vUv).x;
-        float ao = 1.0;
         if (d < 1.0) {
           vec3 P = viewPos(vUv);
           vec3 N = normalize(cross(dFdx(P), dFdy(P)));
@@ -1451,31 +1853,107 @@ function buildPost() {
             // Nearby geometry above this pixel's surface occludes it; far-away geometry doesn't count.
             occ += max(0.0, dot(v, N) - 0.015) / (vv + 0.05) * smoothstep(uRadius * uRadius * 4.0, uRadius * uRadius, vv);
           }
-          ao = clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
+          col *= clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
         }
-        gl_FragColor = vec4(col.rgb * ao, 1.0);
+        #endif
+        col += texture2D(tBloom, vUv).rgb * uBloom;
+        // Grading, in linear light before tone mapping: cool the shade, warm the light.
+        float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col *= mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
+        col = max(mix(vec3(lum), col, 1.12), 0.0);
+        gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
+        // A soft vignette pulls the eye to the middle of the view.
+        vec2 q = vUv - 0.5;
+        gl_FragColor.rgb *= 1.0 - 0.28 * smoothstep(0.25, 0.85, dot(q, q) * 2.2);
       }`,
   });
+  Post.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat);
+  Post.quad.frustumCulled = false;
   Post.scene = new THREE.Scene();
-  Post.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat));
+  Post.scene.add(Post.quad);
   Post.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 }
 
+// Bloom: keep only what's brighter than a threshold, shrink it step by step
+// to a sixteenth of the screen, then grow it back, adding each level: a wide,
+// soft glow for very little work (the "dual filter" method).
+function buildBloom() {
+  const levels = [];
+  for (let i = 0; i < 5; i++) levels.push(new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+  const mk = (frag, extra = {}) => new THREE.ShaderMaterial({
+    uniforms: Object.assign({ tSrc: { value: null }, uTexel: { value: new THREE.Vector2() } }, extra),
+    depthTest: false, depthWrite: false, vertexShader: FULLSCREEN_VS, fragmentShader: frag,
+  });
+  const down = `
+    uniform sampler2D tSrc; uniform vec2 uTexel; varying vec2 vUv;
+    vec3 tap(vec2 o) { return texture2D(tSrc, vUv + o * uTexel).rgb; }`;
+  const bright = mk(down + `
+    uniform float uThreshold;
+    void main() {
+      vec3 c = (tap(vec2(-1.0)) + tap(vec2(1.0)) + tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, -1.0))) * 0.25;
+      float l = max(c.r, max(c.g, c.b));
+      float k = smoothstep(uThreshold, uThreshold * 1.6, l);   // a soft knee, so the glow fades in
+      gl_FragColor = vec4(min(c * k, vec3(8.0)), 1.0);
+    }`, { uThreshold: { value: 1.05 } });
+  const shrink = mk(down + `
+    void main() {
+      vec3 c = tap(vec2(0.0)) * 4.0 + tap(vec2(-1.0)) + tap(vec2(1.0)) + tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, -1.0));
+      gl_FragColor = vec4(c / 8.0, 1.0);
+    }`);
+  const grow = mk(down + `
+    void main() {
+      vec3 c = tap(vec2(-2.0, 0.0)) + tap(vec2(2.0, 0.0)) + tap(vec2(0.0, -2.0)) + tap(vec2(0.0, 2.0))
+             + (tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, 1.0)) + tap(vec2(-1.0, -1.0)) + tap(vec2(1.0, -1.0))) * 2.0;
+      gl_FragColor = vec4(c / 12.0, 1.0);
+    }`);
+  grow.blending = THREE.AdditiveBlending;
+  Post.bloom = { levels, bright, shrink, grow };
+}
+
+function blit(r, mat, src, dst) {
+  mat.uniforms.tSrc.value = src.texture || src;
+  const w = (src.width || src.image.width), h = (src.height || src.image.height);
+  mat.uniforms.uTexel.value.set(1 / w, 1 / h);
+  Post.quad.material = mat;
+  r.setRenderTarget(dst);
+  r.render(Post.scene, Post.cam);
+}
+
+function renderBloom(r, sz) {
+  if (!Post.bloom) buildBloom();
+  const { levels, bright, shrink, grow } = Post.bloom;
+  levels.forEach((t, i) => { const w = Math.max(1, sz.x >> (i + 1)), h = Math.max(1, sz.y >> (i + 1)); if (t.width !== w || t.height !== h) t.setSize(w, h); });
+  blit(r, bright, Post.rt, levels[0]);
+  for (let i = 1; i < levels.length; i++) blit(r, shrink, levels[i - 1], levels[i]);
+  r.autoClear = false;
+  for (let i = levels.length - 1; i > 0; i--) blit(r, grow, levels[i], levels[i - 1]);
+  r.autoClear = true;
+  return levels[0].texture;
+}
+
+const _black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+_black.needsUpdate = true;
+
 function renderScene() {
   const r = R3.renderer;
-  if (!GFX.ao) { r.render(R3.scene, R3.camera); return; }
+  if (!GFX.post) { r.render(R3.scene, R3.camera); return; }
   if (!Post.rt) buildPost();
   const sz = r.getDrawingBufferSize(_v2);
   if (Post.rt.width !== sz.x || Post.rt.height !== sz.y) Post.rt.setSize(sz.x, sz.y);
   r.setRenderTarget(Post.rt);
   r.render(R3.scene, R3.camera);
-  r.setRenderTarget(null);
   const u = Post.mat.uniforms;
+  u.tBloom.value = GFX.bloom ? renderBloom(r, sz) : _black;
+  u.uBloom.value = GFX.bloom ? 0.32 : 0;
+  r.setRenderTarget(null);
+  const ao = GFX.ao ? 1 : 0;
+  if (Post.mat.defines.USE_AO !== ao) { Post.mat.defines.USE_AO = ao; Post.mat.needsUpdate = true; }
   u.tColor.value = Post.rt.texture; u.tDepth.value = Post.rt.depthTexture;
   u.uProj.value.copy(R3.camera.projectionMatrix); u.uProjInv.value.copy(R3.camera.projectionMatrixInverse);
   u.uRes.value.set(sz.x, sz.y);
+  Post.quad.material = Post.mat;
   r.render(Post.scene, Post.cam);
 }
 const _v2 = new THREE.Vector2();
@@ -1508,7 +1986,12 @@ function icon(k, owner, px) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(mdl.body, mat);
   g.add(body);
-  if (mdl.tool) { const t = new THREE.Mesh(mdl.tool, mat); t.position.set(...mdl.pivot); t.rotation.z = -(mdl.toolTilt || 0); g.add(t); }
+  if (mdl.tool) {
+    const t = new THREE.Mesh(mdl.tool, mat);
+    t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
+    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Citizen ? -0.4 : 0) : -(mdl.toolTilt || 0);
+    g.add(t);
+  }
   g.rotation.y = k >= 10 ? -0.6 : -0.9;
   scene.add(g);
   // Frame the model: fit its bounding box in view.

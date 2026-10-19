@@ -69,6 +69,18 @@ class Model:
         self.bm = bmesh.new()
         self.col = self.bm.loops.layers.float_color.new("Col")
         self.wave = self.bm.verts.layers.float.new("_WAVE")
+        # Units: which bone of the skeleton each vertex follows (see UNIT_BONES), and
+        # whether new faces are shaded smooth (round units) or flat (everything else).
+        self.bone = self.bm.verts.layers.float.new("_BONE")
+        self.cur_bone = 0
+        self.smooth = False
+
+    def part(self, bone, smooth=None):
+        """Faces added from now on belong to this bone."""
+        self.cur_bone = UNIT_BONES.index(bone)
+        if smooth is not None:
+            self.smooth = smooth
+        return self
 
     # Copy a temporary bmesh into this model, transformed and coloured.
     def _take(self, tmp, color, m, vary=0.0, wave=None, bevel=0.0):
@@ -79,6 +91,7 @@ class Model:
         vmap = {}
         for v in tmp.verts:
             nv = self.bm.verts.new(v.co)
+            nv[self.bone] = self.cur_bone
             if wave:
                 nv[self.wave] = wave(v.co)
             vmap[v] = nv
@@ -87,6 +100,7 @@ class Model:
                 nf = self.bm.faces.new([vmap[v] for v in f.verts])
             except ValueError:
                 continue
+            nf.smooth = self.smooth
             k = 1.0 + (random.random() * 2 - 1) * vary
             c = (min(1, base[0] * k), min(1, base[1] * k), min(1, base[2] * k), 1.0)
             for l in nf.loops:
@@ -123,7 +137,8 @@ class Model:
         bmesh.ops.create_icosphere(t, subdivisions=1, radius=r)
         for v in t.verts:
             v.co *= 1.0 + (random.random() * 2 - 1) * jitter
-        bmesh.ops.dissolve_limit(t, angle_limit=0.35, verts=list(t.verts), edges=list(t.edges))
+        # merge nearly flat neighbours into bigger facets, like split stone
+        bmesh.ops.dissolve_limit(t, angle_limit=0.3, verts=list(t.verts), edges=list(t.edges))
         bmesh.ops.triangulate(t, faces=list(t.faces))
         return self._take(t, color, Matrix.Translation(P(x, y + r * flat * 0.55, z)) @ rot(0, random.random() * 6.28, 0) @ scale3(1, flat, 1), vary)
 
@@ -184,8 +199,6 @@ class Model:
         bmesh.ops.recalc_face_normals(self.bm, faces=list(self.bm.faces))
         self.bm.to_mesh(me)
         self.bm.free()
-        for p in me.polygons:
-            p.use_smooth = False
         ob = bpy.data.objects.new(self.name, me)
         bpy.context.scene.collection.objects.link(ob)
         if parent:
@@ -681,124 +694,170 @@ def bush():
     return m
 
 def stone():
+    """Grey boulders. The game's shader paints a stony surface on the facets."""
     m = Model("Stone")
-    for x, z, r in [(0, 0, 0.32), (0.24, 0.13, 0.22), (-0.2, -0.14, 0.2), (0.05, -0.25, 0.14)]:
-        m.rock(r, "#857f74", x, 0, z)
+    for x, z, r in [(0, 0, 0.33), (0.25, 0.13, 0.22), (-0.21, -0.14, 0.2), (0.05, -0.26, 0.14), (-0.16, 0.2, 0.11)]:
+        m.rock(r, "#99928a", x, 0, z, vary=0.06)
     return m
 
 def gold():
+    """The same stone; the game's shader runs gold veins through it. A few loose nuggets."""
     m = Model("Gold")
-    for x, z, r in [(0, 0, 0.32), (0.24, 0.13, 0.22), (-0.2, -0.14, 0.2)]:
-        m.rock(r, "#7d6a45", x, 0, z)
-    for x, y, z in [(0.1, 0.33, 0.2), (-0.15, 0.2, 0.22), (0.27, 0.25, -0.03), (-0.05, 0.42, -0.12), (0.18, 0.18, 0.28), (-0.25, 0.25, -0.05)]:
-        m.ball(0.055, "#f4d462", x, y, z, sub=0, jitter=0.2, vary=0.1)
+    for x, z, r in [(0, 0, 0.33), (0.25, 0.13, 0.22), (-0.21, -0.14, 0.2), (0.08, -0.25, 0.13)]:
+        m.rock(r, "#948c80", x, 0, z, vary=0.06)
+    for x, y, z in [(-0.3, 0.04, 0.12), (0.34, 0.04, -0.1), (0.15, 0.04, 0.3)]:
+        m.ball(0.045, "#f4d462", x, y, z, sub=0, jitter=0.25, vary=0.1)
     return m
 
 # --- Units -----------------------------------------------------------------------------------
-def humanoid(m, tunic, belt, legs_col=DARKWOOD, arms=True):
-    """A small person facing +x, about 0.62 tall."""
-    for sz in (-1, 1):
-        m.box(0.08, 0.22, 0.075, legs_col, 0, 0.11, sz * 0.055, vary=0)
-        m.box(0.1, 0.04, 0.08, "#3a2a1c", 0.01, 0.02, sz * 0.055, vary=0)
-    m.box(0.15, 0.24, 0.21, tunic, 0, 0.34, 0, taper=0.88, vary=0)
-    m.box(0.17, 0.08, 0.23, tunic, 0, 0.24, 0, vary=0)  # skirt flare
-    m.box(0.155, 0.04, 0.215, belt, 0, 0.28, 0, vary=0)
-    if arms:
-        for sz in (-1, 1):
-            m.box(0.05, 0.19, 0.05, tunic, 0.01, 0.36, sz * 0.125, rx=sz * 0.08, vary=0)
-            m.ball(0.028, SKIN, 0.01, 0.265, sz * 0.13, sub=0, vary=0)
-    m.ball(0.07, SKIN, 0, 0.53, 0, sub=1, vary=0)
-    m.box(0.03, 0.03, 0.025, SKIN, 0.07, 0.52, 0, vary=0)  # nose: shows which way it faces
+# Units are round and chunky, inspired by Totally Accurate Battle Simulator:
+# an egg of a body, a big round head with dot eyes, sausage arms, stubby legs.
+# Each part follows one bone of a small skeleton that the game animates
+# (waddling, swinging, flinching, flopping over). UNIT_BONES is the bone
+# order the game expects; each unit says where its bones' pivots are.
+UNIT_BONES = ["hips", "body", "head", "armL", "armR", "legL", "legR", "legFL", "legFR", "legBL", "legBR", "neck", "tail"]
 
-def cap(m, col, y=0.545, r=0.078):
+def sphere(m, r, color, x=0, y=0, z=0, sx=1, sy=1, sz=1, seg=10, rings=6, vary=0.0, rx=0, ry=0, rz=0):
     t = bmesh.new()
-    bmesh.ops.create_uvsphere(t, u_segments=8, v_segments=4, radius=r)
+    bmesh.ops.create_uvsphere(t, u_segments=seg, v_segments=rings, radius=r)
+    return m._take(t, color, Matrix.Translation(P(x, y, z)) @ rot(rx, ry, rz) @ scale3(sx, sy, sz), vary)
+
+def sausage(m, r, length, color, x, y, z, rx=0, rz=0, seg=6):
+    """A capsule hanging down from (x, y, z): a limb."""
+    mm = Matrix.Translation(P(x, y, z)) @ rot(rx, 0, rz)
+    t = bmesh.new()
+    bmesh.ops.create_cone(t, cap_ends=False, segments=seg, radius1=r, radius2=r, depth=length)
+    m._take(t, color, mm @ Matrix.Translation(P(0, -length / 2, 0)), 0)
+    for yy in (0.0, -length):
+        t = bmesh.new()
+        bmesh.ops.create_uvsphere(t, u_segments=seg, v_segments=4, radius=r)
+        m._take(t, color, mm @ Matrix.Translation(P(0, yy, 0)), 0)
+
+HUMAN_PIVOTS = {"hips": (0, 0.2, 0), "body": (0, 0.22, 0), "head": (0, 0.47, 0), "armL": (0, 0.43, -0.13), "armR": (0, 0.43, 0.13),
+                "legL": (0, 0.2, -0.055), "legR": (0, 0.2, 0.055)}
+
+def tabs_person(m, tunic, belt=None, legs_col="#4a3a2a", skin=SKIN, sleeves=None):
+    """The shared body: egg torso, round head with eyes and brows, arms, legs."""
+    m.smooth = True
+    for side, z in (("legL", -0.055), ("legR", 0.055)):
+        m.part(side)
+        sausage(m, 0.042, 0.13, legs_col, 0, 0.19, z)
+        sphere(m, 0.05, "#3a2a1c", 0.02, 0.035, z, sx=1.3, sy=0.7, sz=0.95, seg=6, rings=4)  # boot
+    m.part("body")
+    sphere(m, 0.13, tunic, 0, 0.33, 0, sx=0.95, sy=1.15, sz=1.05)
+    if belt:
+        m.cyl(0.128, 0.128, 0.035, belt, 0, 0.27, 0, seg=14, vary=0)
+    for side, z in (("armL", -0.13), ("armR", 0.13)):
+        m.part(side)
+        sausage(m, 0.035, 0.13, sleeves or tunic, 0, 0.43, z)
+        sphere(m, 0.04, skin, 0, 0.29, z, seg=6, rings=4)  # hand
+    m.part("head")
+    sphere(m, 0.105, skin, 0, 0.56, 0)
+    m.smooth = False
+    for z in (-0.036, 0.036):
+        sphere(m, 0.016, "#1a1410", 0.096, 0.575, z, seg=6, rings=4)
+        m.box(0.012, 0.012, 0.04, "#3a2a1c", 0.095, 0.605, z * 1.1, rz=0.0, rx=(0.35 if z > 0 else -0.35), vary=0)
+    m.smooth = True
+
+def dome(m, r, col, y, x=0.0, sy=0.85):
+    """A helmet or cap: the top half of a sphere."""
+    t = bmesh.new()
+    bmesh.ops.create_uvsphere(t, u_segments=10, v_segments=6, radius=r)
     bmesh.ops.delete(t, geom=[v for v in t.verts if v.co.z < -0.001], context="VERTS")
-    m._take(t, col, Matrix.Translation(P(0, y, 0)), 0)
+    m._take(t, col, Matrix.Translation(P(x, y, 0)) @ scale3(1, sy, 1), 0)
 
 def citizen():
     m = Model("Citizen")
-    humanoid(m, "#b89a6c", TEAM)
-    cap(m, TEAM)
-    m.box(0.12, 0.02, 0.12, TEAM_DARK, 0, 0.55, 0, vary=0)
-    t = Model("Citizen.tool")
-    t.cyl(0.013, 0.013, 0.36, WOOD, 0, 0.0, 0, seg=5, vary=0)
-    t.box(0.05, 0.05, 0.12, IRON, 0, 0.17, 0.035, vary=0)
-    return m, t, (0.05, 0.36, 0.13)
+    tabs_person(m, "#c4a676", belt=TEAM)
+    m.part("head"); dome(m, 0.11, TEAM, 0.585); m.cyl(0.115, 0.115, 0.025, TEAM_DARK, 0, 0.585, 0, seg=12, vary=0)
+    t = Model("Citizen.tool")  # a hammer, held in the right hand
+    t.cyl(0.014, 0.014, 0.34, WOOD, 0, 0.1, 0, seg=6, vary=0)
+    t.box(0.06, 0.06, 0.13, IRON, 0, 0.26, 0.03, bevel=0.008, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.0, 0.29, 0.13), tool_bone="armR", pivots=HUMAN_PIVOTS)
 
 def spearman():
     m = Model("Spearman")
-    humanoid(m, TEAM, TEAM_DARK, legs_col="#5a4632")
-    m.box(0.16, 0.14, 0.22, IRON, 0, 0.4, 0, taper=0.9, vary=0)  # chest plate
-    cap(m, IRON, r=0.08)
-    m.box(0.03, 0.06, 0.12, TEAM, -0.01, 0.65, 0, vary=0)  # crest
-    m.box(0.02, 0.05, 0.02, IRON, 0.07, 0.52, 0, vary=0)  # nose guard
-    m.cyl(0.12, 0.12, 0.03, TEAM_DARK, 0.03, 0.36, -0.15, seg=12, rx=math.pi / 2, vary=0)
-    m.cyl(0.13, 0.13, 0.02, IRON, 0.03, 0.36, -0.145, seg=12, rx=math.pi / 2, vary=0)
-    m.cyl(0.035, 0.035, 0.04, GOLD, 0.03, 0.36, -0.17, seg=6, rx=math.pi / 2, vary=0)
+    tabs_person(m, TEAM, belt="#5a4632", sleeves=TEAM_DARK)
+    m.part("body"); sphere(m, 0.12, IRON, 0.02, 0.37, 0, sx=0.9, sy=0.7, sz=1.05)  # breastplate
+    m.part("head"); dome(m, 0.112, IRON, 0.58)
+    m.box(0.03, 0.06, 0.16, TEAM, -0.01, 0.69, 0, vary=0)  # crest
+    m.box(0.015, 0.06, 0.02, IRON, 0.105, 0.56, 0, vary=0)  # nose guard
+    m.part("armL", smooth=False)  # the shield rides on the left arm
+    m.cyl(0.12, 0.12, 0.03, TEAM_DARK, 0.04, 0.33, -0.18, seg=14, rx=math.pi / 2, vary=0)
+    m.cyl(0.13, 0.13, 0.02, IRON, 0.04, 0.33, -0.172, seg=14, rx=math.pi / 2, vary=0)
+    m.ball(0.035, GOLD, 0.04, 0.33, -0.2, sub=1, vary=0)
     t = Model("Spearman.tool")
-    t.cyl(0.014, 0.014, 0.95, WOOD, 0, 0.12, 0, seg=5, vary=0)
-    t.cyl(0.035, 0.0, 0.13, IRON, 0, 0.655, 0, seg=4, vary=0)
-    return m, t, (0.06, 0.34, 0.13)
+    t.cyl(0.015, 0.015, 0.95, WOOD, 0, 0.1, 0, seg=6, vary=0)
+    t.cyl(0.035, 0.0, 0.14, IRON, 0, 0.64, 0, seg=4, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.0, 0.29, 0.13), tool_bone="armR", pivots=HUMAN_PIVOTS)
 
 def archer():
     m = Model("Archer")
-    humanoid(m, "#5d6a3a", TEAM, legs_col="#4a3a28")
-    cap(m, "#4f5a30", r=0.082)
-    m.box(0.06, 0.1, 0.16, "#4f5a30", -0.05, 0.5, 0, vary=0)  # hood at the back
-    m.box(0.16, 0.025, 0.215, TEAM, 0, 0.47, 0, vary=0)  # scarf
-    m.cyl(0.04, 0.035, 0.26, DARKWOOD, -0.1, 0.42, 0.05, seg=6, rz=0.3, vary=0)  # quiver
+    tabs_person(m, "#617040", belt=TEAM, legs_col="#4a3a28")
+    m.part("head"); dome(m, 0.115, "#4f5a30", 0.575, sy=1.0)
+    m.cyl(0.06, 0.0, 0.12, "#4f5a30", -0.08, 0.6, 0, seg=6, rz=1.2, vary=0)  # hood tip
+    m.part("body"); m.cyl(0.11, 0.12, 0.04, TEAM, 0, 0.45, 0, seg=12, vary=0)  # scarf
+    m.cyl(0.04, 0.035, 0.26, DARKWOOD, -0.12, 0.4, 0.04, seg=8, rz=0.3, vary=0)  # quiver
     for i in range(3):
-        m.box(0.012, 0.08, 0.012, CLOTH, -0.15 + i * 0.012, 0.57, 0.03 + i * 0.02, rz=0.3, vary=0)
-    t = Model("Archer.tool")
-    # the bow: a curved row of short segments, and its string
+        m.box(0.012, 0.08, 0.012, CLOTH, -0.17 + i * 0.012, 0.55, 0.02 + i * 0.02, rz=0.3, vary=0)
+    t = Model("Archer.tool")  # the bow, held upright in the left hand
     for i in range(9):
         a = -1.25 + i * (2.5 / 8)
-        t.box(0.025, 0.06, 0.025, "#6b4a2a", math.cos(a) * 0.18 - 0.1, math.sin(a) * 0.2, 0, rz=a, vary=0)
-    t.cyl(0.004, 0.004, 0.38, CLOTH, -0.1, 0, 0, seg=3, vary=0)
-    return m, t, (0.08, 0.38, 0.11)
+        t.box(0.025, 0.065, 0.025, "#6b4a2a", math.cos(a) * 0.18 - 0.12, math.sin(a) * 0.21, 0, rz=a, vary=0)
+    t.cyl(0.004, 0.004, 0.4, CLOTH, -0.12, 0, 0, seg=3, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.02, 0.29, -0.13), tool_bone="armL", pivots=HUMAN_PIVOTS)
+
+HORSE_PIVOTS = {"hips": (0, 0.42, 0), "body": (-0.02, 0.62, 0), "head": (-0.02, 0.78, 0), "armL": (-0.02, 0.76, -0.11), "armR": (-0.02, 0.76, 0.11),
+                "legFL": (0.17, 0.36, -0.07), "legFR": (0.17, 0.36, 0.07), "legBL": (-0.17, 0.36, -0.07), "legBR": (-0.17, 0.36, 0.07),
+                "neck": (0.22, 0.5, 0), "tail": (-0.28, 0.5, 0)}
 
 def horseman():
     m = Model("Horseman")
-    HORSE, HDARK, HAIR = "#7a5232", "#5d3e25", "#2a1e14"
-    # barrel of the body, a deeper chest, and the rump
-    m.box(0.44, 0.2, 0.2, HORSE, -0.02, 0.45, 0, bevel=0.035, vary=0)
-    m.box(0.18, 0.23, 0.21, HORSE, 0.17, 0.46, 0, bevel=0.04, vary=0)
-    m.box(0.17, 0.21, 0.21, HORSE, -0.2, 0.47, 0, bevel=0.04, vary=0)
-    # legs: upper and lower parts, hooves
-    for x, z, lean in [(0.2, 0.065, 0.12), (0.2, -0.065, -0.05), (-0.22, 0.065, -0.1), (-0.22, -0.065, 0.06)]:
-        m.box(0.07, 0.17, 0.07, HORSE, x + lean * 0.3, 0.29, z, rz=lean, vary=0)
-        m.box(0.05, 0.17, 0.05, HDARK, x + lean * 0.6, 0.11, z, rz=lean * 0.5, vary=0)
-        m.box(0.065, 0.035, 0.065, HAIR, x + lean * 0.7, 0.018, z, vary=0)
-    # neck and head
-    m.box(0.13, 0.3, 0.12, HORSE, 0.31, 0.62, 0, rz=-0.6, taper=0.8, vary=0)
-    m.box(0.24, 0.1, 0.1, HORSE, 0.45, 0.74, 0, rz=0.35, taper=0.85, vary=0)
-    m.box(0.07, 0.075, 0.09, HDARK, 0.56, 0.69, 0, rz=0.35, vary=0)
-    for sz in (-1, 1):
-        m.box(0.03, 0.07, 0.025, HORSE, 0.38, 0.82, sz * 0.035, rz=-0.2, vary=0)
-    m.box(0.26, 0.05, 0.035, HAIR, 0.28, 0.7, 0, rz=-0.6, vary=0)  # mane
-    m.box(0.05, 0.24, 0.05, HAIR, -0.31, 0.4, 0, rz=0.4, taper=0.6, vary=0)  # tail
-    # saddle cloth in team colours, with a gold trim
-    m.box(0.25, 0.04, 0.27, TEAM, 0, 0.565, 0, vary=0)
-    m.box(0.26, 0.015, 0.285, GOLD, 0, 0.54, 0, vary=0)
-    # rider: legs down the horse's sides, body, armour, helmet with crest
-    for sz in (-1, 1):
-        m.box(0.12, 0.06, 0.06, "#5a4632", 0.03, 0.6, sz * 0.12, vary=0)
-        m.box(0.055, 0.15, 0.055, "#5a4632", 0.07, 0.5, sz * 0.13, rz=-0.15, vary=0)
-        m.box(0.07, 0.04, 0.06, HAIR, 0.09, 0.42, sz * 0.13, vary=0)
-    m.box(0.13, 0.22, 0.18, TEAM, -0.02, 0.71, 0, taper=0.88, vary=0)
-    m.box(0.14, 0.12, 0.19, IRON, -0.02, 0.74, 0, taper=0.9, vary=0)
-    for sz in (-1, 1):
-        m.box(0.045, 0.16, 0.045, TEAM, 0.02, 0.72, sz * 0.11, rz=-0.5, vary=0)
-    m.ball(0.065, SKIN, -0.02, 0.87, 0, sub=1, vary=0)
-    m.box(0.03, 0.03, 0.025, SKIN, 0.045, 0.865, 0, vary=0)
-    cap(m, IRON, y=0.885, r=0.072)
-    m.box(0.13, 0.04, 0.025, TEAM, -0.03, 0.97, 0, vary=0)
-    t = Model("Horseman.tool")
-    t.cyl(0.015, 0.015, 0.85, WOOD, 0.3, 0.12, 0, seg=5, rz=-1.2, vary=0)
-    t.cyl(0.03, 0.0, 0.12, IRON, 0.71, 0.27, 0, seg=4, rz=-1.2, vary=0)
-    t.flag(0.12, 0.07, TEAM, 0.6, 0.18, 0.0)
-    return m, t, (0, 0.7, 0.13)
+    HORSE, HDARK, HAIR = "#8a5c36", "#6a4528", "#2a1e14"
+    m.smooth = True
+    m.part("hips")
+    sphere(m, 0.17, HORSE, 0, 0.44, 0, sx=1.7, sy=0.9, sz=0.85)  # a round barrel of a horse
+    for leg, (x, z) in (("legFL", (0.17, -0.07)), ("legFR", (0.17, 0.07)), ("legBL", (-0.17, -0.07)), ("legBR", (-0.17, 0.07))):
+        m.part(leg)
+        sausage(m, 0.045, 0.27, HORSE, x, 0.36, z)
+        m.cyl(0.05, 0.055, 0.05, HAIR, x, 0.045, z, seg=8, vary=0)  # hoof
+    m.part("neck")
+    sausage(m, 0.075, 0.2, HORSE, 0.22, 0.5, 0, rz=math.pi - 0.6)
+    sphere(m, 0.085, HORSE, 0.42, 0.75, 0, sx=1.5, sy=0.85, sz=0.85, rz=-0.35)  # head
+    sphere(m, 0.05, HDARK, 0.53, 0.71, 0, sx=1.1, sy=0.9, sz=1.3)  # muzzle
+    m.smooth = False
+    for z in (-0.04, 0.04):
+        sphere(m, 0.013, "#1a1410", 0.46, 0.79, z * 1.6, seg=6, rings=4)
+        m.cyl(0.02, 0.0, 0.08, HORSE, 0.36, 0.86, z, seg=5, vary=0)  # ears
+    m.box(0.3, 0.06, 0.035, HAIR, 0.3, 0.7, 0, rz=-0.95, vary=0)  # mane
+    m.part("tail")
+    m.cyl(0.04, 0.015, 0.26, HAIR, -0.33, 0.4, 0, seg=6, rz=0.5, vary=0)
+    m.part("hips")
+    m.box(0.26, 0.04, 0.3, TEAM, 0, 0.58, 0, vary=0)  # saddle cloth
+    m.box(0.27, 0.015, 0.31, GOLD, 0, 0.555, 0, vary=0)
+    m.smooth = True
+    for z in (-0.12, 0.12):  # rider's legs down the horse's sides
+        sausage(m, 0.036, 0.13, "#5a4632", 0.04, 0.6, z, rx=(0.25 if z > 0 else -0.25))
+        sphere(m, 0.042, HAIR, 0.06, 0.46, z * 1.25, sx=1.3, sy=0.7)
+    m.part("body")
+    sphere(m, 0.11, TEAM, -0.02, 0.69, 0, sx=0.95, sy=1.15, sz=1.05)
+    sphere(m, 0.1, IRON, 0.0, 0.72, 0, sx=0.9, sy=0.7, sz=1.05)
+    for side, z in (("armL", -0.11), ("armR", 0.11)):
+        m.part(side)
+        sausage(m, 0.032, 0.11, TEAM_DARK, -0.02, 0.76, z)
+        sphere(m, 0.036, SKIN, -0.02, 0.64, z)
+    m.part("head")
+    sphere(m, 0.09, SKIN, -0.02, 0.87, 0)
+    dome(m, 0.097, IRON, 0.885, x=-0.02)
+    m.smooth = False
+    m.box(0.03, 0.05, 0.14, TEAM, -0.03, 0.98, 0, vary=0)
+    for z in (-0.03, 0.03):
+        sphere(m, 0.014, "#1a1410", 0.062, 0.875, z, seg=6, rings=4)
+    t = Model("Horseman.tool")  # a lance with a pennant, couched under the right arm
+    t.cyl(0.016, 0.016, 0.9, WOOD, 0.25, 0.04, 0, seg=6, rz=-1.35, vary=0)
+    t.cyl(0.032, 0.0, 0.13, IRON, 0.7, 0.13, 0, seg=4, rz=-1.35, vary=0)
+    t.flag(0.12, 0.07, TEAM, 0.56, 0.17, 0.0)
+    return dict(body=m, tool=t, tool_at=(-0.02, 0.64, 0.11), tool_bone="armR", pivots=HORSE_PIVOTS)
 
 
 # --- Build, bake and export --------------------------------------------------------------------
@@ -905,10 +964,11 @@ def pack_glb(path):
             na["NORMAL"] = add(values(at["NORMAL"]), 5120, "VEC3", normalized=True, target=34962, stride=4)
             if "COLOR_0" in at:
                 na["COLOR_0"] = add(values(at["COLOR_0"]), 5121, "VEC4", normalized=True, target=34962)
-            if "_WAVE" in at:
-                w = values(at["_WAVE"])
-                if any(v[0] > 0 for v in w):
-                    na["_WAVE"] = add(w, 5126, "SCALAR", target=34962)  # float: Blender's importer needs it, and with padding it's no bigger
+            for name in ("_WAVE", "_BONE"):
+                if name in at:
+                    w = values(at[name])
+                    if any(v[0] > 0 for v in w):
+                        na[name] = add(w, 5126, "SCALAR", target=34962)  # float: Blender's importer needs it, and with padding it's no bigger
             idx = [v[0] for v in values(prim["indices"])]
             ct = 5123 if max(idx) < 65536 else 5125
             prim["indices"] = add([(i,) for i in idx], ct, "SCALAR", target=34963)
@@ -941,16 +1001,24 @@ def main():
         "units": [citizen, spearman, archer, horseman],
     }
     ao_dist = {"buildings": 0.5, "resources": 0.2, "units": 0.1}
-    all_objs = []
+    all_objs, pivots_all = [], []
     for row, (g, makers) in enumerate(groups.items()):
         objs = []
         for i, mk in enumerate(makers):
             at = Vector((i * spacing, -row * spacing * 2, 0))
             r = mk()
-            if isinstance(r, tuple):
-                body, tool, pivot = r
-                ob = body.object(at=at)
-                tob = tool.object(parent=ob, at=P(*pivot))
+            if isinstance(r, dict):
+                # A unit: the body, its tool (origin at the hand that holds it), and
+                # an empty per bone named "<Unit>.<bone>" at that bone's pivot.
+                ob = r["body"].object(at=at)
+                tob = r["tool"].object(parent=ob, at=P(*r["tool_at"]))
+                tob["bone"] = r["tool_bone"]
+                for bone, pv in r["pivots"].items():
+                    e = bpy.data.objects.new(f"{ob.name}.{bone}", None)
+                    bpy.context.scene.collection.objects.link(e)
+                    e.parent = ob
+                    e.location = P(*pv)
+                    pivots_all.append(e)
                 objs += [ob, tob]
             else:
                 objs.append(r.object(at=at))
@@ -960,7 +1028,7 @@ def main():
 
     bpy.data.objects.remove(ground, do_unlink=True)
     bpy.ops.object.select_all(action="DESELECT")
-    for ob in all_objs:
+    for ob in all_objs + pivots_all:
         ob.select_set(True)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     bpy.ops.export_scene.gltf(
