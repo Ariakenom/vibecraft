@@ -599,7 +599,9 @@ function parseGlb(buf) {
     geo.setAttribute("aWave", new THREE.BufferAttribute(at._WAVE != null ? read(at._WAVE).data : new Float32Array(count), 1));
     if (prim.indices != null) geo.setIndex(Array.from(read(prim.indices).data));
     geo.computeBoundingBox(); geo.computeBoundingSphere();
-    return { geo, team, ao };
+    // Units: which bone each vertex follows (see RIG_BONES).
+    const bone = at._BONE != null ? read(at._BONE).data : null;
+    return { geo, team, ao, bone };
   };
   const out = {};
   const children = new Set();
@@ -610,6 +612,7 @@ function parseGlb(buf) {
     for (const c of nd.children || []) {
       const cn = json.nodes[c];
       if (cn.mesh != null && /\.tool$/.test(cn.name)) { m.tool = meshGeo(cn.mesh); m.pivot = cn.translation || [0, 0, 0]; }
+      else if (cn.mesh == null) (m.pivots ||= {})[cn.name.slice(cn.name.lastIndexOf(".") + 1)] = cn.translation || [0, 0, 0];
     }
     out[nd.name] = m;
   });
@@ -626,6 +629,13 @@ function teamGeo(m, owner) {
     const c = m.team[k] === 1 ? c1 : c2, a = m.ao[k];
     col[k * 3] = c.r * a; col[k * 3 + 1] = c.g * a; col[k * 3 + 2] = c.b * a;
   }
+  if (m.bone) {
+    // Rigid skinning: every vertex follows exactly one bone.
+    const n = m.bone.length, idx = new Uint16Array(n * 4), wgt = new Float32Array(n * 4);
+    for (let k = 0; k < n; k++) { idx[k * 4] = Math.round(m.bone[k]); wgt[k * 4] = 1; }
+    geo.setAttribute("skinIndex", new THREE.BufferAttribute(idx, 4));
+    geo.setAttribute("skinWeight", new THREE.BufferAttribute(wgt, 4));
+  }
   return geo;
 }
 
@@ -634,10 +644,13 @@ function glbModel(kind, owner) {
   if (!m) return null;
   if (kind >= 10) return { body: teamGeo(m, owner) };
   if (!m.tool) return null;
-  // Keep the code model's animation settings (tool tilt, carrying), swap the shapes.
+  // Keep the code model's settings (tool tilt, carrying), swap the shapes.
   const code = unitModel(kind, owner);
   code.body.dispose(); code.tool.dispose();
-  return Object.assign(code, { body: teamGeo(m, owner), tool: teamGeo(m.tool, owner), pivot: m.pivot, height: m.geo.boundingBox.max.y });
+  const out = Object.assign(code, { body: teamGeo(m, owner), tool: teamGeo(m.tool, owner), pivot: m.pivot, height: m.geo.boundingBox.max.y });
+  // A rigged unit: the game animates its skeleton (see animateRig).
+  if (m.bone && m.pivots) out.rig = { pivots: m.pivots, toolAt: m.pivot, toolBone: kind === K.Archer ? "armL" : "armR" };
+  return out;
 }
 
 // --- Setup -------------------------------------------------------------------
@@ -1201,6 +1214,9 @@ function makeObj(i) {
     o.height = { [K.Farm]: 0.3, [K.Tower]: 3, [K.Wonder]: 4, [K.Temple]: 1.9, [K.Granary]: 1.6 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
+  } else if (mdl.rig) {
+    root.remove(body);
+    makeRigged(o, mdl);
   } else {
     const pivot = new THREE.Group();
     pivot.position.set(...mdl.pivot);
@@ -1222,6 +1238,170 @@ function makeObj(i) {
   R3.scene.add(root);
   R3.objs.set(id, o);
   return o;
+}
+
+// --- Rigged units ----------------------------------------------------------------------
+// Units from Blender carry a small skeleton: every vertex follows one bone.
+// The bones are animated here each frame, procedurally, for a Totally
+// Accurate Battle Simulator feel: a waddling walk, a body that wobbles on a
+// spring when starting and stopping, big wind-ups when working or fighting,
+// a flinch when hit, and a floppy fall when killed. This is drawing only;
+// the simulation doesn't know about any of it.
+const RIG_BONES = ["hips", "body", "head", "armL", "armR", "legL", "legR", "legFL", "legFR", "legBL", "legBR", "neck", "tail"];
+const RIG_PARENT = { body: "hips", head: "body", armL: "body", armR: "body", legL: "hips", legR: "hips",
+  legFL: "hips", legFR: "hips", legBL: "hips", legBR: "hips", neck: "hips", tail: "hips" };
+
+function makeRigged(o, mdl) {
+  const pv = mdl.rig.pivots, at = n => pv[n] || pv.hips || [0, 0, 0];
+  const bones = {};
+  for (const n of RIG_BONES) { bones[n] = new THREE.Bone(); bones[n].name = n; }
+  for (const n of RIG_BONES) {
+    const p = at(n), par = RIG_PARENT[n];
+    if (par) { const q = at(par); bones[n].position.set(p[0] - q[0], p[1] - q[1], p[2] - q[2]); bones[par].add(bones[n]); }
+    else bones[n].position.set(p[0], p[1], p[2]);
+  }
+  const mesh = new THREE.SkinnedMesh(mdl.body, entMat);
+  mesh.castShadow = mesh.receiveShadow = true;
+  mesh.add(bones.hips);
+  mesh.updateMatrixWorld(true);
+  mesh.bind(new THREE.Skeleton(RIG_BONES.map(n => bones[n])));
+  mesh.userData.obj = o;
+  o.body = mesh;
+  o.root.add(mesh);
+  o.bones = bones;
+  o.hipsY = bones.hips.position.y;
+  // The tool sits in its hand and turns with its arm.
+  const tb = mdl.rig.toolBone, ta = mdl.rig.toolAt, tp = at(tb);
+  const tool = new THREE.Mesh(mdl.tool, entMat);
+  tool.castShadow = true;
+  tool.position.set(ta[0] - tp[0], ta[1] - tp[1], ta[2] - tp[2]);
+  bones[tb].add(tool);
+  o.toolMesh = tool; o.toolBone = tb;
+  o.height = mdl.height * UNIT_SCALE;
+  mesh.scale.setScalar(UNIT_SCALE);
+  if (mdl.carry) {
+    o.bundle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.1), entMat);
+    const bp = at("body");
+    o.bundle.position.set(-0.17 - bp[0], 0.38 - bp[1], -bp[2]);
+    o.bundle.visible = false;
+    bones.body.add(o.bundle);
+  }
+  Object.assign(o, { seed: (o.id * 0.6180339) % 1 * 100, lean: 0, leanV: 0, flinch: 0, flinchV: 0, wasHit: false, speed: 0, prevX: o.x, prevY: o.y });
+}
+
+// One frame of a rigged unit. anim: 0 idle, 1 walking, 2 working, 3 attacking.
+function animateRig(o, kind, anim, t, dt, hit) {
+  const B = o.bones;
+  for (const n of RIG_BONES) B[n].rotation.set(0, 0, 0);
+  B.body.scale.set(1, 1, 1);
+  B.hips.position.y = o.hipsY;
+  dt = Math.min(dt, 0.05);
+  // How fast it's really moving, smoothed (tiles per second).
+  const v = Math.hypot(o.x - o.prevX, o.y - o.prevY) / Math.max(dt, 1e-3);
+  o.prevX = o.x; o.prevY = o.y;
+  o.speed += (Math.min(v, 6) - o.speed) * Math.min(1, dt * 10);
+  const walking = anim === 1 || o.speed > 0.4;
+  // The body leans into the walk on a springy joint, so it wobbles when
+  // starting and stopping.
+  const leanTo = walking ? -0.2 : anim === 3 ? -0.12 : 0;
+  o.leanV += ((leanTo - o.lean) * 70 - o.leanV * 8) * dt; o.lean += o.leanV * dt;
+  // A flinch when hit: a kick backwards on another spring.
+  if (hit && !o.wasHit) o.flinchV += 9;
+  o.wasHit = hit;
+  o.flinchV += (-o.flinch * 140 - o.flinchV * 11) * dt; o.flinch += o.flinchV * dt;
+  const f = o.flinch;
+  const T = t + o.seed;
+  const horse = kind === K.Horseman;
+  if (horse) {
+    const ph = T * (walking ? 13 : 0);
+    if (walking) {
+      B.legFL.rotation.z = Math.sin(ph) * 0.75; B.legFR.rotation.z = Math.sin(ph + 0.7) * 0.75;
+      B.legBL.rotation.z = Math.sin(ph + Math.PI) * 0.75; B.legBR.rotation.z = Math.sin(ph + Math.PI + 0.7) * 0.75;
+      B.hips.position.y = o.hipsY + Math.abs(Math.sin(ph)) * 0.05;
+      B.hips.rotation.z = Math.sin(ph) * 0.07;
+      B.neck.rotation.z = Math.sin(ph + 0.5) * 0.15;
+      B.body.rotation.z = -Math.sin(ph + 0.8) * 0.12 + o.lean * 0.6;
+      B.head.rotation.z = Math.sin(ph + 1.4) * 0.12;
+    } else {
+      B.neck.rotation.z = Math.sin(T * 0.8) * 0.06 - 0.05;   // idle: head bobs, grazes now and then
+      B.body.rotation.z = o.lean * 0.6;
+    }
+    B.tail.rotation.z = Math.sin(T * (walking ? 9 : 2.5)) * (walking ? 0.35 : 0.2);
+    B.tail.rotation.x = Math.sin(T * 1.7) * 0.25;
+    B.armL.rotation.z = 0.5; B.armL.rotation.x = 0.2;           // holding the reins
+    let arm = 0.9, jab = 0;
+    if (anim === 3) { jab = Math.max(0, Math.sin(T * 7)); arm = 1.0 + jab * 0.5; B.body.rotation.z -= jab * 0.25; }
+    B.armR.rotation.z = arm;
+    o.toolMesh.rotation.z = -arm - B.body.rotation.z + 0.12 - jab * 0.15;  // the lance stays couched, pointing forward
+  } else {
+    const ph = T * 10;
+    const s = Math.sin(ph);
+    if (walking) {
+      B.legL.rotation.z = s * 0.8; B.legR.rotation.z = -s * 0.8;
+      B.armL.rotation.z = -s * 0.65; B.armR.rotation.z = s * 0.65;
+      B.hips.position.y = o.hipsY + Math.abs(Math.cos(ph)) * 0.035;
+      B.hips.rotation.x = s * 0.13;                              // the waddle
+      B.head.rotation.x = -s * 0.1;
+    } else {
+      B.body.scale.y = 1 + Math.sin(T * 2.2) * 0.025;            // breathing
+      B.head.rotation.y = Math.sin(T * 0.7) * 0.35 * Math.max(0, Math.sin(T * 0.23));  // looks around now and then
+    }
+    B.armL.rotation.x += 0.12; B.armR.rotation.x -= 0.12;      // arms a little out from the body
+    B.body.rotation.z = o.lean;
+    B.head.rotation.z = -o.lean * 0.4;
+    const tb = B[o.toolBone];
+    let toolWorld = null; // the tool's angle in the unit's frame, or null to follow the arm
+    if (anim === 2 || (anim === 3 && kind === K.Citizen)) {
+      // A big overhead chop: wind up, strike, recover.
+      const c = (T * 1.5) % 1;
+      const a = c < 0.55 ? 0.3 + (c / 0.55) * 2.4 : c < 0.68 ? 2.7 - ((c - 0.55) / 0.13) * 2.6 : 0.1 + ((c - 0.68) / 0.32) * 0.2;
+      B.armR.rotation.z = a;
+      B.body.rotation.z += c > 0.55 && c < 0.75 ? -0.3 : 0.08;
+      if (!walking) { B.legL.rotation.z = 0.25; B.legR.rotation.z = -0.15; }
+      o.toolMesh.rotation.z = -Math.PI / 2;                     // the head points out of the fist
+    } else if (anim === 3 && kind === K.Spearman) {
+      // Jab with the spear, leaning in, shield up.
+      const jab = Math.max(0, Math.sin(T * 8));
+      B.armR.rotation.z = 1.2 + jab * 0.4;
+      B.body.rotation.z += -jab * 0.3;
+      B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
+      if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
+      toolWorld = -1.45 - jab * 0.1;
+    } else if (anim === 3 && kind === K.Archer) {
+      // Bow arm out front, string hand drawn back to the chest, then loose.
+      const draw = Math.min(1, ((T * 0.6) % 1) * 1.6);
+      B.armL.rotation.z = 1.45; B.armL.rotation.x = 0.25;
+      B.armR.rotation.z = 1.2 + (1 - draw) * 0.3; B.armR.rotation.x = 0.55 * draw;
+      B.body.rotation.y = 0.35;
+      toolWorld = 0;
+    } else {
+      toolWorld = kind === K.Spearman ? -0.25 : kind === K.Archer ? 0 : null;
+      if (kind === K.Citizen) o.toolMesh.rotation.z = -0.4;
+    }
+    if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
+  }
+  // The flinch: knocked back and squashed for a moment.
+  B.body.rotation.z += f * 0.6;
+  B.head.rotation.z += f * 0.5;
+  B.body.scale.y *= 1 - f * 0.12;
+  B.body.scale.x *= 1 + f * 0.06; B.body.scale.z *= 1 + f * 0.06;
+}
+
+// A rigged unit's death: it topples over sideways with a bounce, its limbs
+// flailing and settling, lies there a moment, then sinks away.
+const RIG_DEATH_MS = 3200;
+function animateRigDeath(d, p, dt) {
+  const B = d.o.bones, mesh = d.o.body;
+  const fall = Math.min(1, p * 3.5);
+  const bounce = fall < 1 ? fall * fall : 1 + Math.sin((p * 3.5 - 1) * 12) * 0.08 * Math.max(0, 1 - (p * 3.5 - 1) * 1.5);
+  mesh.rotation.x = d.dir * Math.min(bounce, 1.08) * Math.PI / 2;
+  const damp = Math.exp(-p * 7);
+  for (const n of ["armL", "armR", "legL", "legR", "legFL", "legFR", "legBL", "legBR"]) {
+    B[n].rotation.z = Math.sin(p * 38 + n.length) * 1.1 * damp + (n.startsWith("arm") ? 0.6 : 0.2);
+  }
+  B.head.rotation.x = Math.sin(p * 30) * 0.7 * damp + d.dir * 0.3;
+  if (B.neck) B.neck.rotation.z = -0.5 * fall;
+  if (p > 0.78) d.root.position.y -= dt * 0.35;
 }
 
 const CARRY_COL = ["#c9473a", "#8a5a33", "#a8a297", "#e6be4b"].map(c => new THREE.Color(c));
@@ -1277,8 +1457,11 @@ function render3d(alpha, now, dt) {
     o.root.rotation.y = o.face;
     const anim = E(i, F.anim);
     const ph = t + id * 0.37;
-    o.body.position.y = anim === 1 ? Math.abs(Math.sin(ph * 11)) * 0.035 : 0;
-    o.body.rotation.z = anim === 1 ? -0.06 : 0;
+    if (o.bones) animateRig(o, kind, anim, t, dt, !!(flags & 8));
+    else {
+      o.body.position.y = anim === 1 ? Math.abs(Math.sin(ph * 11)) * 0.035 : 0;
+      o.body.rotation.z = anim === 1 ? -0.06 : 0;
+    }
     if (o.tool) {
       let swing = 0;
       if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
@@ -1302,13 +1485,14 @@ function render3d(alpha, now, dt) {
     if (seen.has(id)) continue;
     R3.objs.delete(id);
     if (o.ring) o.ring.visible = false;
-    if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10 });
+    if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10, o, dir: hash2(id, 3) < 0.5 ? 1 : -1 });
     else R3.scene.remove(o.root);
   }
   R3.dying = R3.dying.filter(d => {
-    const p = (now - d.t0) / (d.building ? 1600 : 1200);
+    const p = (now - d.t0) / (d.building ? 1600 : d.o.bones ? RIG_DEATH_MS : 1200);
     if (p >= 1) { R3.scene.remove(d.root); return false; }
-    if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
+    if (d.o.bones) animateRigDeath(d, p, dt);
+    else if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
     else { d.root.children[0].rotation.x = -Math.min(1, p * 3) * Math.PI / 2; d.root.position.y -= p > 0.6 ? dt * 0.4 : 0; }
     return true;
   });
@@ -1787,7 +1971,12 @@ function icon(k, owner, px) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(mdl.body, mat);
   g.add(body);
-  if (mdl.tool) { const t = new THREE.Mesh(mdl.tool, mat); t.position.set(...mdl.pivot); t.rotation.z = -(mdl.toolTilt || 0); g.add(t); }
+  if (mdl.tool) {
+    const t = new THREE.Mesh(mdl.tool, mat);
+    t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
+    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Citizen ? -0.4 : 0) : -(mdl.toolTilt || 0);
+    g.add(t);
+  }
   g.rotation.y = k >= 10 ? -0.6 : -0.9;
   scene.add(g);
   // Frame the model: fit its bounding box in view.
