@@ -9,6 +9,8 @@
 // How long a unit takes to slide to where a multiplayer correction put it.
 const NUDGE_MS = 150;
 const R3 = {
+  gpuMs: 0,
+  mark: 0,
   nudges: new Map(), // unit id -> { dx, dy, t }: offset to fade out (see mpHooks.restore in main.js)
   renderer: null, scene: null, camera: null, sun: null,
   terrain: null, water: null, heights: null,
@@ -920,7 +922,10 @@ function placeCamera() {
   if (sc.right !== ext) { sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 1; sc.far = 80; sc.updateProjectionMatrix(); }
 }
 
-function ndc(sx, sy) { return new THREE.Vector2((sx / view._w) * 2 - 1, -(sy / view._h) * 2 + 1); }
+// Screen pixel -> the -1..1 coordinates three.js wants. One vector, reused:
+// raycasting runs often, and every new object is garbage to clean up later.
+const _ndc = new THREE.Vector2();
+function ndc(sx, sy) { return _ndc.set((sx / view._w) * 2 - 1, -(sy / view._h) * 2 + 1); }
 
 // Screen pixel -> map position on the ground (or null if off the map).
 function screenToGround(sx, sy) {
@@ -969,12 +974,14 @@ function pickAt(sx, sy) {
 }
 
 // The ground area the camera sees, as 4 map points (for the minimap).
+const _quad = { p: new THREE.Vector3(), plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3), pts: [[0, 0], [0, 0], [0, 0], [0, 0]], out: [] };
 function viewQuad() {
-  const out = [];
-  const p = new THREE.Vector3(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3);
-  for (const [sx, sy] of [[0, 0], [view._w, 0], [view._w, view._h], [0, view._h]]) {
+  const Q = _quad, out = Q.out;
+  out.length = 0;
+  for (let n = 0; n < 4; n++) {
+    const sx = n === 1 || n === 2 ? view._w : 0, sy = n >= 2 ? view._h : 0;
     R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
-    if (R3.raycaster.ray.intersectPlane(plane, p)) out.push([p.x, p.z]);
+    if (R3.raycaster.ray.intersectPlane(Q.plane, Q.p)) { const pt = Q.pts[out.length]; pt[0] = Q.p.x; pt[1] = Q.p.z; out.push(pt); }
   }
   return out;
 }
@@ -1036,14 +1043,14 @@ function render3d(alpha, now, dt) {
   const t = now / 1000;
   timeUniform.value = t;
   placeCamera();
-  const seen = new Set();
+  const mark = ++R3.mark; // objects still in the world this frame get this mark
 
   for (let i = 0; i < entCount; i++) {
     const id = E(i, F.id), kind = E(i, F.kind);
     let o = R3.objs.get(id);
     if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; }
     if (!o) o = makeObj(i);
-    seen.add(id);
+    o.mark = mark;
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
     if (kind >= 10) {
@@ -1092,20 +1099,23 @@ function render3d(alpha, now, dt) {
 
   // Things that vanished: badly hurt units and buildings get a short death
   // animation; anything else just walked into the fog.
-  for (const [id, o] of R3.objs) {
-    if (seen.has(id)) continue;
-    R3.objs.delete(id);
+  for (const o of R3.objs.values()) { // (values(), not [id, o] pairs: no array per object per frame)
+    if (o.mark === mark) continue;
+    R3.objs.delete(o.id);
     if (o.ring) o.ring.visible = false;
     if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10 });
     else R3.scene.remove(o.root);
   }
-  R3.dying = R3.dying.filter(d => {
+  // (Kept in place rather than filtered into a new array each frame.)
+  let keep = 0;
+  for (const d of R3.dying) {
     const p = (now - d.t0) / (d.building ? 1600 : 1200);
-    if (p >= 1) { R3.scene.remove(d.root); return false; }
+    if (p >= 1) { R3.scene.remove(d.root); continue; }
     if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
     else { d.root.children[0].rotation.x = -Math.min(1, p * 3) * Math.PI / 2; d.root.position.y -= p > 0.6 ? dt * 0.4 : 0; }
-    return true;
-  });
+    R3.dying[keep++] = d;
+  }
+  R3.dying.length = keep;
 
   updateResources();
   updateArrows(alpha);
@@ -1113,16 +1123,21 @@ function render3d(alpha, now, dt) {
   updateGhost();
   updateMarkers(now);
   updateSmoke();
+  // Timed for the trace: handing the frame to the graphics card (and
+  // compiling any shader it hasn't needed before).
+  const g = performance.now();
   renderScene();
+  R3.gpuMs = performance.now() - g;
 }
 
 // Rebuild the resource instances when anything about them changed.
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _c = new THREE.Color();
 function updateResources() {
   if (!R3.res) return;
-  let key = resCount + ":";
-  for (let i = 0; i < resCount; i += 7) key += (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0);
-  if (frame % 15 !== 0 && key === R3.resKey) return;
+  // A number that changes when resources do (was a string: garbage every frame).
+  let key = resCount;
+  for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
+  if (key === R3.resKey) return;
   R3.resKey = key;
   const lists = { pine: [], oak: [], bush: [], stone: [], gold: [] };
   for (const m of Object.values(R3.res)) m.count = 0;

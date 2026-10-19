@@ -117,7 +117,8 @@ function openSocket(url, name) {
     let opened = false;
     const api = {
       kind: "socket",
-      emit: (t, d) => { if (ws.readyState === 1) ws.send(JSON.stringify({ topic: t, data: d })); },
+      // Returns the message's size, for the trace.
+      emit: (t, d) => { if (ws.readyState !== 1) return 0; const s = JSON.stringify({ topic: t, data: d }); ws.send(s); return s.length; },
       on: (t, f) => (handlers[t] ||= []).push(f),
       presence: p => { if (ws.readyState === 1) ws.send(JSON.stringify({ presence: p })); },
       onPeers: f => peerFns.push(f),
@@ -127,6 +128,7 @@ function openSocket(url, name) {
     ws.onerror = () => { if (!opened) reject(new Error(`Can't reach the relay server at ${url}`)); };
     ws.onclose = () => peerFns.forEach(f => f([]));
     ws.onmessage = ev => {
+      Trace.inBytes = ev.data.length; // for the trace: the size, without serialising it again
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.peers) peerFns.forEach(f => f(m.peers));
       else if (m.topic) (handlers[m.topic] || []).forEach(f => f(m.data, m.from));
@@ -183,6 +185,7 @@ const Net = {
 // and "Copy trace" puts the whole recording on the clipboard as JSON.
 const Trace = {
   t0: 0, samples: [], events: [], issued: [], cur: null, curAt: 0, info: {},
+  inBytes: 0, // size of the message being handled (0 where the transport can't tell)
   start(info) {
     this.t0 = this.curAt = performance.now();
     this.samples = []; this.events = []; this.issued = [];
@@ -204,7 +207,7 @@ const Trace = {
     this.lastIn = now;
     this.cur.inMsgs++; this.cur.inBytes += bytes;
   },
-  msgOut(bytes) { if (this.cur) { this.cur.outMsgs++; this.cur.outBytes += bytes; } },
+  msgOut(bytes) { if (this.cur) { this.cur.outMsgs++; this.cur.outBytes += typeof bytes === "number" ? bytes : 0; } },
   // Once a second: close this second's numbers, with a snapshot of the lockstep.
   roll(now, snapshot) {
     if (!this.cur || now - this.curAt < 1000) return false;
@@ -349,8 +352,7 @@ class Server {
     for (const [s, q] of this.lastSeq) if (s !== this.local.me) acks[s] = q;
     // `upTo`: every tick up to here is final; those not listed had no commands.
     const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
-    this.t.emit("frame", msg);
-    Trace.msgOut(JSON.stringify(msg).length);
+    Trace.msgOut(this.t.emit("frame", msg));
     this.lastSend = now;
   }
   receive(d) {
@@ -358,7 +360,7 @@ class Server {
     const s = d.from, now = performance.now();
     this.heard.set(s, now);
     this.started.add(s);
-    Trace.msgIn(JSON.stringify(d).length);
+    Trace.msgIn(Trace.inBytes);
     if (typeof d.gt === "number") this.guestClock.set(s, [d.gt, now]);
     for (const e of Array.isArray(d.cmds) ? d.cmds : []) {
       if (!Array.isArray(e) || typeof e[0] !== "number" || typeof e[1] !== "number") continue;
@@ -520,7 +522,7 @@ class Client {
     if (this.ended || !d || d.v !== NET.PROTOCOL) return;
     const now = performance.now();
     this.lastHeard = now;
-    Trace.msgIn(JSON.stringify(d).length);
+    Trace.msgIn(Trace.inBytes);
     if (d.end) { this.onEnd(d.end); return; }
     if (typeof d.t === "number" && (this.echoT === null || d.t > this.echoT)) { this.echoT = d.t; this.echoAt = now; }
     const echo = d.ge && d.ge[this.me];
@@ -567,8 +569,7 @@ class Client {
     const echo = this.echoT === null ? null : [this.echoT, Math.round(performance.now() - this.echoAt)];
     const est = this.target();
     const msg = { v: NET.PROTOCOL, from: this.me, token: this.token, cmds, ack: this.got, sum: this.latestSum(), echo, gt: Math.round(performance.now()), est: est === null ? null : Math.round(est * 100) / 100 };
-    this.t.emit("cmd", msg);
-    Trace.msgOut(JSON.stringify(msg).length);
+    Trace.msgOut(this.t.emit("cmd", msg));
     this.lastSend = performance.now();
   }
 
@@ -669,6 +670,7 @@ class Client {
   // Replace the live copy with the confirmed one and run the ticks since
   // again, with every command not confirmed yet: mine, and friends' early news.
   correct() {
+    const t0 = performance.now();
     const why = this.dirty;
     this.dirty = null;
     const kept = this.hooks.keep();
@@ -699,7 +701,7 @@ class Client {
     s[why] = (s[why] || 0) + 1;
     if (ownBefore !== null && W.checksum_owner(this.me) !== ownBefore) s.mineChanged++;
     if (this.hooks.restore(kept, this.alpha())) s.selChanged++;
-    Trace.event("correct", { why, ticks: this.live - from });
+    Trace.event("correct", { why, ticks: this.live - from, ms: Math.round((performance.now() - t0) * 10) / 10 });
   }
 
   snapshot() {

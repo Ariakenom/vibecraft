@@ -122,7 +122,22 @@ let difficulty = 1, seed = 1;
 let cam = { x: 40, y: 40, dist: 24, pitch: 0.95, yaw: 0 };
 let paused = false, speed = 1, running = false;
 let acc = 0, last = performance.now(), simTime = 0;
-let ents = new Float32Array(0), entCount = 0, byId = new Map();
+let ents = new Float32Array(0), entCount = 0;
+// Entity id -> its row in `ents` this frame. Like a Map, but emptying it is
+// just bumping `gen` (a Map's clear() makes garbage every frame).
+const byId = {
+  row: new Int32Array(1024), stamp: new Int32Array(1024), gen: 1,
+  reset() { this.gen++; },
+  set(id, i) {
+    if (id >= this.row.length) {
+      const n = Math.max(id + 1, this.row.length * 2), row = new Int32Array(n), stamp = new Int32Array(n);
+      row.set(this.row); stamp.set(this.stamp); this.row = row; this.stamp = stamp;
+    }
+    this.row[id] = i; this.stamp[id] = this.gen;
+  },
+  get(id) { return id >= 0 && id < this.row.length && this.stamp[id] === this.gen ? this.row[id] : undefined; },
+  has(id) { return this.get(id) !== undefined; },
+};
 let resBuf = new Float32Array(0), resCount = 0;
 let projBuf = new Float32Array(0), projCount = 0;
 let mouse = { x: 0, y: 0, inside: false };
@@ -276,14 +291,23 @@ function updateFog() {
 
 // ===========================================================================
 // Reading the world from wasm memory
+// The buffers' views into wasm memory are made again only when the buffer
+// moved (Rust grew it, or wasm memory grew) or got longer: making them every
+// frame is garbage the browser has to clean up.
+const views = {};
+function viewOf(name, ptr, n) {
+  const v = views[name];
+  if (v && v.buffer === mem.buffer && v.byteOffset === ptr && v.length >= n) return v;
+  return (views[name] = f32(ptr, Math.max(n, 64)));
+}
 function readWorld() {
   entCount = W.render();
-  ents = f32(W.ents_ptr(), entCount * ENT_STRIDE);
+  ents = viewOf("ents", W.ents_ptr(), entCount * ENT_STRIDE);
   resCount = W.res_count();
-  resBuf = f32(W.res_ptr(), resCount * 5);
+  resBuf = viewOf("res", W.res_ptr(), resCount * 5);
   projCount = W.proj_count();
-  projBuf = f32(W.proj_ptr(), projCount * 4);
-  byId.clear();
+  projBuf = viewOf("proj", W.proj_ptr(), projCount * 4);
+  byId.reset();
   for (let i = 0; i < entCount; i++) byId.set(ents[i * ENT_STRIDE], i);
 }
 const E = (i, f) => ents[i * ENT_STRIDE + f];
@@ -323,10 +347,11 @@ function drawMinimap() {
   const s = mini.width / MW;
   mctx.imageSmoothingEnabled = true;
   mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
-  for (let i = 0; i < resCount; i++) {
-    const kd = resBuf[i * 5 + 2];
-    mctx.fillStyle = ["#d04848", "#24451f", "#b8b2a6", "#f0c94a"][kd];
-    mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, Math.max(1.5, s), Math.max(1.5, s));
+  // One colour at a time (setting the colour for every dot is slow and makes garbage).
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#f0c94a"], dot = Math.max(1.5, s);
+  for (let kd = 0; kd < 4; kd++) {
+    mctx.fillStyle = RES_DOT[kd];
+    for (let i = 0; i < resCount; i++) if (resBuf[i * 5 + 2] === kd) mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, dot, dot);
   }
   mctx.drawImage(fogCanvas, 0, 0, mini.width, mini.height);
   for (let i = 0; i < entCount; i++) {
@@ -340,7 +365,7 @@ function drawMinimap() {
   if (q.length === 4) {
     mctx.strokeStyle = "#efe6d1"; mctx.lineWidth = 1;
     mctx.beginPath();
-    q.forEach(([x, y], n) => n ? mctx.lineTo(x * s, y * s) : mctx.moveTo(x * s, y * s));
+    for (let n = 0; n < 4; n++) { const x = q[n][0] * s, y = q[n][1] * s; if (n) mctx.lineTo(x, y); else mctx.moveTo(x, y); }
     mctx.closePath(); mctx.stroke();
   }
 }
@@ -994,6 +1019,7 @@ function loop(now) {
   if (mp && Trace.cur && last) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
   last = now;
   if (running) {
+    const f0 = performance.now();
     scrollCamera(dt);
     if (mp) pumpMultiplayer(performance.now(), false);
     else if (!paused) {
@@ -1003,16 +1029,20 @@ function loop(now) {
       if (steps === 8) acc = 0;
       if (steps) handleEvents();
     }
+    const f1 = performance.now();
     readWorld();
     if (frame % 3 === 0) updateFog();
     // How far between the last tick and the next one we are. In multiplayer,
     // count the time since the clock last moved, so motion stays smooth.
     const along = mp ? mp.alpha() * SIM_MS : acc;
+    const f2 = performance.now();
     render3d(paused && !mp ? 1 : Math.min(1, along / SIM_MS), now, dt);
+    const f3 = performance.now();
     drawOverlay();
     updateHoverCursor(now);
     if (frame % 4 === 0) drawMinimap();
     if (frame % 6 === 0) { renderTopBar(); renderSelection(false); }
+    if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
     if (W.state() !== 0) endGame();
     frame++;
   } else if (titleSpin) {
@@ -1073,6 +1103,41 @@ function stepMultiplayer(now) {
   if (mp && mp.server) for (const s of mp.server.silent(20000)) dropPlayer(s);
 }
 
+// ---- where frames' time goes (for the trace) ----
+// A frame that comes late was held up either by our own work in the frame
+// before (the game, drawing, the HUD), or by something outside the page:
+// the browser cleaning up memory, another tab, the computer. So each frame's
+// work is timed, part by part, and a late frame is recorded with the work of
+// the frame before it. Where the browser tells (Chrome, Edge), the memory in
+// use is noted too: a sudden drop means it just cleaned up.
+let lastWork = null, lastFrameNow = 0, lastHeap = 0, lastPrograms = 0;
+function frameTrace(now, sim, world, draw, gpu, hud) {
+  const c = Trace.cur;
+  const work = { sim: Math.round(sim), world: Math.round(world), draw: Math.round(draw), gpu: Math.round(gpu), hud: Math.round(hud) };
+  const total = sim + world + draw + gpu + hud;
+  const heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  const programs = R3.renderer.info.programs ? R3.renderer.info.programs.length : 0;
+  if (c) {
+    c.maxWork = Math.max(c.maxWork || 0, Math.round(total));
+    if (heap && lastHeap - heap > 512 * 1024) { c.cleanups = (c.cleanups || 0) + 1; c.freedMB = Math.round(((c.freedMB || 0) + (lastHeap - heap) / 1048576) * 10) / 10; }
+  }
+  const gap = lastFrameNow ? now - lastFrameNow : 0;
+  if (gap > 70 && lastWork) {
+    const ours = lastWork.sim + lastWork.world + lastWork.draw + lastWork.gpu + lastWork.hud;
+    Trace.event("slow frame", {
+      gap: Math.round(gap), ourWork: ours, outside: Math.max(0, Math.round(gap - ours)), before: lastWork, now: work,
+      newShaders: programs - lastPrograms || undefined,
+      heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
+      freedMB: heap && lastHeap > heap ? Math.round((lastHeap - heap) / 104857.6) / 10 : undefined,
+    });
+  }
+  lastWork = work; lastFrameNow = now; lastHeap = heap; lastPrograms = programs;
+}
+// Chrome and Edge report tasks that block the page for over 50 ms.
+try {
+  new PerformanceObserver(list => { if (mp) for (const e of list.getEntries()) Trace.event("long task", { ms: Math.round(e.duration) }); }).observe({ type: "longtask", buffered: false });
+} catch { /* not in this browser */ }
+
 // ---- the trace panel (F8) ----
 function renderTrace() {
   const box = $("netTrace");
@@ -1097,7 +1162,10 @@ function renderTrace() {
   lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
   lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);
   lines.push(`Messages in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, longest gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`);
-  lines.push(`Longest frame ${ms(s.maxFrameGap)} · longest clock gap ${ms(s.maxClockGap)}`);
+  lines.push(`Longest frame ${ms(s.maxFrameGap)} (our work at most ${ms(s.maxWork)}) · longest clock gap ${ms(s.maxClockGap)}`);
+  const slow = Trace.events.filter(e => e.kind === "slow frame");
+  if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
+  if (s.cleanups) lines.push(`Browser memory clean-ups: ${s.cleanups} this second (${s.freedMB} MB)`);
   $("netTraceBody").textContent = lines.join("\n");
 }
 function toggleTrace(show = $("netTrace").hidden) {

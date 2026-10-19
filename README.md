@@ -229,7 +229,13 @@ Press F8, or Net, during a game. It shows:
 - corrections and their causes, and whether a correction ever changed your
   own things or your selection;
 - how soon friends' commands showed up;
-- late commands, drift, stalls and message rates.
+- late commands, drift, stalls and message rates;
+- slow frames: for any frame that came more than 70 ms after the one
+  before, how much of that time was our own work, split into the game,
+  drawing, the graphics card and the HUD. The rest was spent outside the
+  page: the browser cleaning up memory, another tab, or the computer. Where
+  the browser reports it (Chrome, Edge), memory freed at that moment and
+  long tasks are recorded too.
 
 "Copy trace" copies a second-by-second recording as JSON, for debugging.
 

@@ -669,7 +669,8 @@ function openSocket(url, name) {
     let opened = false;
     const api = {
       kind: "socket",
-      emit: (t, d) => { if (ws.readyState === 1) ws.send(JSON.stringify({ topic: t, data: d })); },
+      // Returns the message's size, for the trace.
+      emit: (t, d) => { if (ws.readyState !== 1) return 0; const s = JSON.stringify({ topic: t, data: d }); ws.send(s); return s.length; },
       on: (t, f) => (handlers[t] ||= []).push(f),
       presence: p => { if (ws.readyState === 1) ws.send(JSON.stringify({ presence: p })); },
       onPeers: f => peerFns.push(f),
@@ -679,6 +680,7 @@ function openSocket(url, name) {
     ws.onerror = () => { if (!opened) reject(new Error(`Can't reach the relay server at ${url}`)); };
     ws.onclose = () => peerFns.forEach(f => f([]));
     ws.onmessage = ev => {
+      Trace.inBytes = ev.data.length; // for the trace: the size, without serialising it again
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.peers) peerFns.forEach(f => f(m.peers));
       else if (m.topic) (handlers[m.topic] || []).forEach(f => f(m.data, m.from));
@@ -735,6 +737,7 @@ const Net = {
 // and "Copy trace" puts the whole recording on the clipboard as JSON.
 const Trace = {
   t0: 0, samples: [], events: [], issued: [], cur: null, curAt: 0, info: {},
+  inBytes: 0, // size of the message being handled (0 where the transport can't tell)
   start(info) {
     this.t0 = this.curAt = performance.now();
     this.samples = []; this.events = []; this.issued = [];
@@ -756,7 +759,7 @@ const Trace = {
     this.lastIn = now;
     this.cur.inMsgs++; this.cur.inBytes += bytes;
   },
-  msgOut(bytes) { if (this.cur) { this.cur.outMsgs++; this.cur.outBytes += bytes; } },
+  msgOut(bytes) { if (this.cur) { this.cur.outMsgs++; this.cur.outBytes += typeof bytes === "number" ? bytes : 0; } },
   // Once a second: close this second's numbers, with a snapshot of the lockstep.
   roll(now, snapshot) {
     if (!this.cur || now - this.curAt < 1000) return false;
@@ -901,8 +904,7 @@ class Server {
     for (const [s, q] of this.lastSeq) if (s !== this.local.me) acks[s] = q;
     // `upTo`: every tick up to here is final; those not listed had no commands.
     const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
-    this.t.emit("frame", msg);
-    Trace.msgOut(JSON.stringify(msg).length);
+    Trace.msgOut(this.t.emit("frame", msg));
     this.lastSend = now;
   }
   receive(d) {
@@ -910,7 +912,7 @@ class Server {
     const s = d.from, now = performance.now();
     this.heard.set(s, now);
     this.started.add(s);
-    Trace.msgIn(JSON.stringify(d).length);
+    Trace.msgIn(Trace.inBytes);
     if (typeof d.gt === "number") this.guestClock.set(s, [d.gt, now]);
     for (const e of Array.isArray(d.cmds) ? d.cmds : []) {
       if (!Array.isArray(e) || typeof e[0] !== "number" || typeof e[1] !== "number") continue;
@@ -1072,7 +1074,7 @@ class Client {
     if (this.ended || !d || d.v !== NET.PROTOCOL) return;
     const now = performance.now();
     this.lastHeard = now;
-    Trace.msgIn(JSON.stringify(d).length);
+    Trace.msgIn(Trace.inBytes);
     if (d.end) { this.onEnd(d.end); return; }
     if (typeof d.t === "number" && (this.echoT === null || d.t > this.echoT)) { this.echoT = d.t; this.echoAt = now; }
     const echo = d.ge && d.ge[this.me];
@@ -1119,8 +1121,7 @@ class Client {
     const echo = this.echoT === null ? null : [this.echoT, Math.round(performance.now() - this.echoAt)];
     const est = this.target();
     const msg = { v: NET.PROTOCOL, from: this.me, token: this.token, cmds, ack: this.got, sum: this.latestSum(), echo, gt: Math.round(performance.now()), est: est === null ? null : Math.round(est * 100) / 100 };
-    this.t.emit("cmd", msg);
-    Trace.msgOut(JSON.stringify(msg).length);
+    Trace.msgOut(this.t.emit("cmd", msg));
     this.lastSend = performance.now();
   }
 
@@ -1221,6 +1222,7 @@ class Client {
   // Replace the live copy with the confirmed one and run the ticks since
   // again, with every command not confirmed yet: mine, and friends' early news.
   correct() {
+    const t0 = performance.now();
     const why = this.dirty;
     this.dirty = null;
     const kept = this.hooks.keep();
@@ -1251,7 +1253,7 @@ class Client {
     s[why] = (s[why] || 0) + 1;
     if (ownBefore !== null && W.checksum_owner(this.me) !== ownBefore) s.mineChanged++;
     if (this.hooks.restore(kept, this.alpha())) s.selChanged++;
-    Trace.event("correct", { why, ticks: this.live - from });
+    Trace.event("correct", { why, ticks: this.live - from, ms: Math.round((performance.now() - t0) * 10) / 10 });
   }
 
   snapshot() {
@@ -1282,6 +1284,8 @@ class Client {
 // How long a unit takes to slide to where a multiplayer correction put it.
 const NUDGE_MS = 150;
 const R3 = {
+  gpuMs: 0,
+  mark: 0,
   nudges: new Map(), // unit id -> { dx, dy, t }: offset to fade out (see mpHooks.restore in main.js)
   renderer: null, scene: null, camera: null, sun: null,
   terrain: null, water: null, heights: null,
@@ -2193,7 +2197,10 @@ function placeCamera() {
   if (sc.right !== ext) { sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 1; sc.far = 80; sc.updateProjectionMatrix(); }
 }
 
-function ndc(sx, sy) { return new THREE.Vector2((sx / view._w) * 2 - 1, -(sy / view._h) * 2 + 1); }
+// Screen pixel -> the -1..1 coordinates three.js wants. One vector, reused:
+// raycasting runs often, and every new object is garbage to clean up later.
+const _ndc = new THREE.Vector2();
+function ndc(sx, sy) { return _ndc.set((sx / view._w) * 2 - 1, -(sy / view._h) * 2 + 1); }
 
 // Screen pixel -> map position on the ground (or null if off the map).
 function screenToGround(sx, sy) {
@@ -2242,12 +2249,14 @@ function pickAt(sx, sy) {
 }
 
 // The ground area the camera sees, as 4 map points (for the minimap).
+const _quad = { p: new THREE.Vector3(), plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3), pts: [[0, 0], [0, 0], [0, 0], [0, 0]], out: [] };
 function viewQuad() {
-  const out = [];
-  const p = new THREE.Vector3(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3);
-  for (const [sx, sy] of [[0, 0], [view._w, 0], [view._w, view._h], [0, view._h]]) {
+  const Q = _quad, out = Q.out;
+  out.length = 0;
+  for (let n = 0; n < 4; n++) {
+    const sx = n === 1 || n === 2 ? view._w : 0, sy = n >= 2 ? view._h : 0;
     R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
-    if (R3.raycaster.ray.intersectPlane(plane, p)) out.push([p.x, p.z]);
+    if (R3.raycaster.ray.intersectPlane(Q.plane, Q.p)) { const pt = Q.pts[out.length]; pt[0] = Q.p.x; pt[1] = Q.p.z; out.push(pt); }
   }
   return out;
 }
@@ -2309,14 +2318,14 @@ function render3d(alpha, now, dt) {
   const t = now / 1000;
   timeUniform.value = t;
   placeCamera();
-  const seen = new Set();
+  const mark = ++R3.mark; // objects still in the world this frame get this mark
 
   for (let i = 0; i < entCount; i++) {
     const id = E(i, F.id), kind = E(i, F.kind);
     let o = R3.objs.get(id);
     if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; }
     if (!o) o = makeObj(i);
-    seen.add(id);
+    o.mark = mark;
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
     if (kind >= 10) {
@@ -2365,20 +2374,23 @@ function render3d(alpha, now, dt) {
 
   // Things that vanished: badly hurt units and buildings get a short death
   // animation; anything else just walked into the fog.
-  for (const [id, o] of R3.objs) {
-    if (seen.has(id)) continue;
-    R3.objs.delete(id);
+  for (const o of R3.objs.values()) { // (values(), not [id, o] pairs: no array per object per frame)
+    if (o.mark === mark) continue;
+    R3.objs.delete(o.id);
     if (o.ring) o.ring.visible = false;
     if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: o.kind >= 10 });
     else R3.scene.remove(o.root);
   }
-  R3.dying = R3.dying.filter(d => {
+  // (Kept in place rather than filtered into a new array each frame.)
+  let keep = 0;
+  for (const d of R3.dying) {
     const p = (now - d.t0) / (d.building ? 1600 : 1200);
-    if (p >= 1) { R3.scene.remove(d.root); return false; }
+    if (p >= 1) { R3.scene.remove(d.root); continue; }
     if (d.building) { d.root.position.y -= dt * 1.6; d.root.rotation.z = Math.sin(p * 30) * 0.02; }
     else { d.root.children[0].rotation.x = -Math.min(1, p * 3) * Math.PI / 2; d.root.position.y -= p > 0.6 ? dt * 0.4 : 0; }
-    return true;
-  });
+    R3.dying[keep++] = d;
+  }
+  R3.dying.length = keep;
 
   updateResources();
   updateArrows(alpha);
@@ -2386,16 +2398,21 @@ function render3d(alpha, now, dt) {
   updateGhost();
   updateMarkers(now);
   updateSmoke();
+  // Timed for the trace: handing the frame to the graphics card (and
+  // compiling any shader it hasn't needed before).
+  const g = performance.now();
   renderScene();
+  R3.gpuMs = performance.now() - g;
 }
 
 // Rebuild the resource instances when anything about them changed.
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _c = new THREE.Color();
 function updateResources() {
   if (!R3.res) return;
-  let key = resCount + ":";
-  for (let i = 0; i < resCount; i += 7) key += (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0);
-  if (frame % 15 !== 0 && key === R3.resKey) return;
+  // A number that changes when resources do (was a string: garbage every frame).
+  let key = resCount;
+  for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
+  if (key === R3.resKey) return;
   R3.resKey = key;
   const lists = { pine: [], oak: [], bush: [], stone: [], gold: [] };
   for (const m of Object.values(R3.res)) m.count = 0;
@@ -2918,7 +2935,22 @@ let difficulty = 1, seed = 1;
 let cam = { x: 40, y: 40, dist: 24, pitch: 0.95, yaw: 0 };
 let paused = false, speed = 1, running = false;
 let acc = 0, last = performance.now(), simTime = 0;
-let ents = new Float32Array(0), entCount = 0, byId = new Map();
+let ents = new Float32Array(0), entCount = 0;
+// Entity id -> its row in `ents` this frame. Like a Map, but emptying it is
+// just bumping `gen` (a Map's clear() makes garbage every frame).
+const byId = {
+  row: new Int32Array(1024), stamp: new Int32Array(1024), gen: 1,
+  reset() { this.gen++; },
+  set(id, i) {
+    if (id >= this.row.length) {
+      const n = Math.max(id + 1, this.row.length * 2), row = new Int32Array(n), stamp = new Int32Array(n);
+      row.set(this.row); stamp.set(this.stamp); this.row = row; this.stamp = stamp;
+    }
+    this.row[id] = i; this.stamp[id] = this.gen;
+  },
+  get(id) { return id >= 0 && id < this.row.length && this.stamp[id] === this.gen ? this.row[id] : undefined; },
+  has(id) { return this.get(id) !== undefined; },
+};
 let resBuf = new Float32Array(0), resCount = 0;
 let projBuf = new Float32Array(0), projCount = 0;
 let mouse = { x: 0, y: 0, inside: false };
@@ -3072,14 +3104,23 @@ function updateFog() {
 
 // ===========================================================================
 // Reading the world from wasm memory
+// The buffers' views into wasm memory are made again only when the buffer
+// moved (Rust grew it, or wasm memory grew) or got longer: making them every
+// frame is garbage the browser has to clean up.
+const views = {};
+function viewOf(name, ptr, n) {
+  const v = views[name];
+  if (v && v.buffer === mem.buffer && v.byteOffset === ptr && v.length >= n) return v;
+  return (views[name] = f32(ptr, Math.max(n, 64)));
+}
 function readWorld() {
   entCount = W.render();
-  ents = f32(W.ents_ptr(), entCount * ENT_STRIDE);
+  ents = viewOf("ents", W.ents_ptr(), entCount * ENT_STRIDE);
   resCount = W.res_count();
-  resBuf = f32(W.res_ptr(), resCount * 5);
+  resBuf = viewOf("res", W.res_ptr(), resCount * 5);
   projCount = W.proj_count();
-  projBuf = f32(W.proj_ptr(), projCount * 4);
-  byId.clear();
+  projBuf = viewOf("proj", W.proj_ptr(), projCount * 4);
+  byId.reset();
   for (let i = 0; i < entCount; i++) byId.set(ents[i * ENT_STRIDE], i);
 }
 const E = (i, f) => ents[i * ENT_STRIDE + f];
@@ -3119,10 +3160,11 @@ function drawMinimap() {
   const s = mini.width / MW;
   mctx.imageSmoothingEnabled = true;
   mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
-  for (let i = 0; i < resCount; i++) {
-    const kd = resBuf[i * 5 + 2];
-    mctx.fillStyle = ["#d04848", "#24451f", "#b8b2a6", "#f0c94a"][kd];
-    mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, Math.max(1.5, s), Math.max(1.5, s));
+  // One colour at a time (setting the colour for every dot is slow and makes garbage).
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#f0c94a"], dot = Math.max(1.5, s);
+  for (let kd = 0; kd < 4; kd++) {
+    mctx.fillStyle = RES_DOT[kd];
+    for (let i = 0; i < resCount; i++) if (resBuf[i * 5 + 2] === kd) mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, dot, dot);
   }
   mctx.drawImage(fogCanvas, 0, 0, mini.width, mini.height);
   for (let i = 0; i < entCount; i++) {
@@ -3136,7 +3178,7 @@ function drawMinimap() {
   if (q.length === 4) {
     mctx.strokeStyle = "#efe6d1"; mctx.lineWidth = 1;
     mctx.beginPath();
-    q.forEach(([x, y], n) => n ? mctx.lineTo(x * s, y * s) : mctx.moveTo(x * s, y * s));
+    for (let n = 0; n < 4; n++) { const x = q[n][0] * s, y = q[n][1] * s; if (n) mctx.lineTo(x, y); else mctx.moveTo(x, y); }
     mctx.closePath(); mctx.stroke();
   }
 }
@@ -3790,6 +3832,7 @@ function loop(now) {
   if (mp && Trace.cur && last) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
   last = now;
   if (running) {
+    const f0 = performance.now();
     scrollCamera(dt);
     if (mp) pumpMultiplayer(performance.now(), false);
     else if (!paused) {
@@ -3799,16 +3842,20 @@ function loop(now) {
       if (steps === 8) acc = 0;
       if (steps) handleEvents();
     }
+    const f1 = performance.now();
     readWorld();
     if (frame % 3 === 0) updateFog();
     // How far between the last tick and the next one we are. In multiplayer,
     // count the time since the clock last moved, so motion stays smooth.
     const along = mp ? mp.alpha() * SIM_MS : acc;
+    const f2 = performance.now();
     render3d(paused && !mp ? 1 : Math.min(1, along / SIM_MS), now, dt);
+    const f3 = performance.now();
     drawOverlay();
     updateHoverCursor(now);
     if (frame % 4 === 0) drawMinimap();
     if (frame % 6 === 0) { renderTopBar(); renderSelection(false); }
+    if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
     if (W.state() !== 0) endGame();
     frame++;
   } else if (titleSpin) {
@@ -3869,6 +3916,41 @@ function stepMultiplayer(now) {
   if (mp && mp.server) for (const s of mp.server.silent(20000)) dropPlayer(s);
 }
 
+// ---- where frames' time goes (for the trace) ----
+// A frame that comes late was held up either by our own work in the frame
+// before (the game, drawing, the HUD), or by something outside the page:
+// the browser cleaning up memory, another tab, the computer. So each frame's
+// work is timed, part by part, and a late frame is recorded with the work of
+// the frame before it. Where the browser tells (Chrome, Edge), the memory in
+// use is noted too: a sudden drop means it just cleaned up.
+let lastWork = null, lastFrameNow = 0, lastHeap = 0, lastPrograms = 0;
+function frameTrace(now, sim, world, draw, gpu, hud) {
+  const c = Trace.cur;
+  const work = { sim: Math.round(sim), world: Math.round(world), draw: Math.round(draw), gpu: Math.round(gpu), hud: Math.round(hud) };
+  const total = sim + world + draw + gpu + hud;
+  const heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  const programs = R3.renderer.info.programs ? R3.renderer.info.programs.length : 0;
+  if (c) {
+    c.maxWork = Math.max(c.maxWork || 0, Math.round(total));
+    if (heap && lastHeap - heap > 512 * 1024) { c.cleanups = (c.cleanups || 0) + 1; c.freedMB = Math.round(((c.freedMB || 0) + (lastHeap - heap) / 1048576) * 10) / 10; }
+  }
+  const gap = lastFrameNow ? now - lastFrameNow : 0;
+  if (gap > 70 && lastWork) {
+    const ours = lastWork.sim + lastWork.world + lastWork.draw + lastWork.gpu + lastWork.hud;
+    Trace.event("slow frame", {
+      gap: Math.round(gap), ourWork: ours, outside: Math.max(0, Math.round(gap - ours)), before: lastWork, now: work,
+      newShaders: programs - lastPrograms || undefined,
+      heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
+      freedMB: heap && lastHeap > heap ? Math.round((lastHeap - heap) / 104857.6) / 10 : undefined,
+    });
+  }
+  lastWork = work; lastFrameNow = now; lastHeap = heap; lastPrograms = programs;
+}
+// Chrome and Edge report tasks that block the page for over 50 ms.
+try {
+  new PerformanceObserver(list => { if (mp) for (const e of list.getEntries()) Trace.event("long task", { ms: Math.round(e.duration) }); }).observe({ type: "longtask", buffered: false });
+} catch { /* not in this browser */ }
+
 // ---- the trace panel (F8) ----
 function renderTrace() {
   const box = $("netTrace");
@@ -3893,7 +3975,10 @@ function renderTrace() {
   lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
   lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);
   lines.push(`Messages in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, longest gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`);
-  lines.push(`Longest frame ${ms(s.maxFrameGap)} · longest clock gap ${ms(s.maxClockGap)}`);
+  lines.push(`Longest frame ${ms(s.maxFrameGap)} (our work at most ${ms(s.maxWork)}) · longest clock gap ${ms(s.maxClockGap)}`);
+  const slow = Trace.events.filter(e => e.kind === "slow frame");
+  if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
+  if (s.cleanups) lines.push(`Browser memory clean-ups: ${s.cleanups} this second (${s.freedMB} MB)`);
   $("netTraceBody").textContent = lines.join("\n");
 }
 function toggleTrace(show = $("netTrace").hidden) {
