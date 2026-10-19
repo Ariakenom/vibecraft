@@ -123,7 +123,8 @@ class Model:
         bmesh.ops.create_icosphere(t, subdivisions=1, radius=r)
         for v in t.verts:
             v.co *= 1.0 + (random.random() * 2 - 1) * jitter
-        bmesh.ops.dissolve_limit(t, angle_limit=0.35, verts=list(t.verts), edges=list(t.edges))
+        # merge nearly flat neighbours into bigger facets, like split stone
+        bmesh.ops.dissolve_limit(t, angle_limit=0.3, verts=list(t.verts), edges=list(t.edges))
         bmesh.ops.triangulate(t, faces=list(t.faces))
         return self._take(t, color, Matrix.Translation(P(x, y + r * flat * 0.55, z)) @ rot(0, random.random() * 6.28, 0) @ scale3(1, flat, 1), vary)
 
@@ -681,17 +682,19 @@ def bush():
     return m
 
 def stone():
+    """Grey boulders. The game's shader paints a stony surface on the facets."""
     m = Model("Stone")
-    for x, z, r in [(0, 0, 0.32), (0.24, 0.13, 0.22), (-0.2, -0.14, 0.2), (0.05, -0.25, 0.14)]:
-        m.rock(r, "#857f74", x, 0, z)
+    for x, z, r in [(0, 0, 0.33), (0.25, 0.13, 0.22), (-0.21, -0.14, 0.2), (0.05, -0.26, 0.14), (-0.16, 0.2, 0.11)]:
+        m.rock(r, "#99928a", x, 0, z, vary=0.06)
     return m
 
 def gold():
+    """The same stone; the game's shader runs gold veins through it. A few loose nuggets."""
     m = Model("Gold")
-    for x, z, r in [(0, 0, 0.32), (0.24, 0.13, 0.22), (-0.2, -0.14, 0.2)]:
-        m.rock(r, "#7d6a45", x, 0, z)
-    for x, y, z in [(0.1, 0.33, 0.2), (-0.15, 0.2, 0.22), (0.27, 0.25, -0.03), (-0.05, 0.42, -0.12), (0.18, 0.18, 0.28), (-0.25, 0.25, -0.05)]:
-        m.ball(0.055, "#f4d462", x, y, z, sub=0, jitter=0.2, vary=0.1)
+    for x, z, r in [(0, 0, 0.33), (0.25, 0.13, 0.22), (-0.21, -0.14, 0.2), (0.08, -0.25, 0.13)]:
+        m.rock(r, "#948c80", x, 0, z, vary=0.06)
+    for x, y, z in [(-0.3, 0.04, 0.12), (0.34, 0.04, -0.1), (0.15, 0.04, 0.3)]:
+        m.ball(0.045, "#f4d462", x, y, z, sub=0, jitter=0.25, vary=0.1)
     return m
 
 # --- Units -----------------------------------------------------------------------------------

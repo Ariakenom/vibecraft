@@ -191,7 +191,9 @@ function bakeTerrain() {
   // Colour at any map position. Grass blends lush, dark and sun-dried greens
   // in big soft patches; slopes turn to earth and rock; shores to sand.
   const LUSH = [86, 140, 58], DARK = [58, 104, 44], DRY = [146, 152, 76], EARTH = [122, 104, 72], ROCK = [132, 126, 112], SAND = [204, 186, 132], SEABED = [120, 132, 96];
-  const colourAt = (x, y) => {
+  // `beach`: paint the sand in. The 3D view draws its own crisp beaches in
+  // the ground shader (render3d.js), so only the minimap wants it.
+  const colourAt = (x, y, beach = true) => {
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
     const n1 = vnoise(x / 9, y / 9, 3), n2 = vnoise(x / 3.5, y / 3.5, 11), n3 = vnoise(x * 1.3, y * 1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.5)));
@@ -201,7 +203,7 @@ function bakeTerrain() {
     c = mixc(c, ROCK, Math.max(0, Math.min(1, (sl - 0.38) * 4)));
     c = mixc(c, [c[0] * 1.08, c[1] * 1.05, c[2] * 0.95], Math.max(0, Math.min(1, ht - 0.8))); // sunnier up high
     // Beaches follow the (smooth) height near the water, not the square tiles.
-    c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
+    if (beach) c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
     if (t === 1) c = mixc(SAND, SEABED, Math.min(1, -ht));
     const k = 0.92 + n3 * 0.16;
     return [c[0] * k, c[1] * k, c[2] * k];
@@ -221,7 +223,7 @@ function bakeTerrain() {
   const mid = document.createElement("canvas"); mid.width = MW * MID; mid.height = MH * MID;
   const mc = mid.getContext("2d"), mi = mc.createImageData(mid.width, mid.height);
   for (let py = 0; py < mid.height; py++) for (let px = 0; px < mid.width; px++) {
-    const c = colourAt((px + 0.5) / MID, (py + 0.5) / MID);
+    const c = colourAt((px + 0.5) / MID, (py + 0.5) / MID, false);
     mi.data.set([c[0], c[1], c[2], 255], (py * mid.width + px) * 4);
   }
   mc.putImageData(mi, 0, 0);
