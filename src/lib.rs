@@ -11,6 +11,7 @@ mod defs;
 mod game;
 mod map;
 mod path;
+mod save;
 
 use defs::Kind;
 use defs::Res;
@@ -29,6 +30,8 @@ struct World {
     proj: Vec<f32>,
     events: Vec<f32>,
     scratch: Vec<u32>,
+    /// Bytes going out of (`save_game`) or into (`load_game`) a saved game.
+    save: Vec<u8>,
 }
 
 // Global mutable state, the safe way: a thread-local `RefCell`. Wasm here is
@@ -55,7 +58,7 @@ fn game<R: Default>(f: impl FnOnce(&mut Game) -> R) -> R {
 /// Start a new game for `players` (2 to 4). Player 1 is this computer;
 /// the others are computer players until `setup_multiplayer` says otherwise.
 pub extern "C" fn init(seed: u32, difficulty: u32, players: u32) {
-    let world = World { game: Game::new(seed, difficulty, players.clamp(2, 4) as u8), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512] };
+    let world = World { game: Game::new(seed, difficulty, players.clamp(2, 4) as u8), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
     WORLD.with(|w| *w.borrow_mut() = Some(world));
 }
 
@@ -600,4 +603,86 @@ pub extern "C" fn res_total() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn winner_player() -> u32 {
     game(|g| g.winner as u32)
+}
+
+// ---------------------------------------------------------------------------
+// Saving and loading (single player). See save.rs for the format.
+//
+// Saving: `save_game()` returns the byte count, and JS copies that many bytes
+// from `save_ptr()`. Loading: JS asks `load_buffer(n)` for room for n bytes,
+// writes the save there, then calls `load_game(n)`.
+
+/// Write the current game into the save buffer; returns its length in bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn save_game() -> u32 {
+    with(|w| {
+        w.save = w.game.save();
+        w.save.len() as u32
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn save_ptr() -> *const u8 {
+    with(|w| w.save.as_ptr() as usize) as *const u8
+}
+
+/// Room for `n` bytes of a save to load. Works before any game has started.
+#[unsafe(no_mangle)]
+pub extern "C" fn load_buffer(n: u32) -> *mut u8 {
+    LOAD.with(|b| {
+        let mut b = b.borrow_mut();
+        *b = vec![0; n as usize];
+        b.as_mut_ptr() as usize
+    }) as *mut u8
+}
+
+/// Replace the current game with the save in the load buffer. Returns 1 on
+/// success, 0 if the bytes aren't a save this version can read (the current
+/// game is then left as it was).
+#[unsafe(no_mangle)]
+pub extern "C" fn load_game(n: u32) -> u32 {
+    let bytes = LOAD.with(|b| std::mem::take(&mut *b.borrow_mut()));
+    let Some(game) = Game::load(&bytes[..(n as usize).min(bytes.len())]) else { return 0 };
+    let world = World { game, other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
+    WORLD.with(|w| *w.borrow_mut() = Some(world));
+    1
+}
+
+thread_local! {
+    static LOAD: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The current game's map seed (the page uses it to colour the terrain).
+#[unsafe(no_mangle)]
+pub extern "C" fn game_seed() -> u32 {
+    game(|g| g.seed)
+}
+/// The computer players' difficulty: 0 easy, 1 normal, 2 hard.
+#[unsafe(no_mangle)]
+pub extern "C" fn game_difficulty() -> u32 {
+    game(|g| g.ais.last().map_or(1, |a| a.difficulty))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The JS round trip: save_game/save_ptr out, load_buffer/load_game in.
+    #[test]
+    fn exported_save_and_load() {
+        init(99, 2, 3);
+        for _ in 0..400 {
+            tick();
+        }
+        let n = save_game();
+        let bytes = unsafe { std::slice::from_raw_parts(save_ptr(), n as usize) }.to_vec();
+        let sum = checksum();
+        init(5, 0, 2); // a different game in between
+        assert_ne!(checksum(), sum);
+        let dst = load_buffer(n);
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, n as usize) };
+        assert_eq!(load_game(n), 1);
+        assert_eq!((checksum(), game_seed(), game_difficulty(), n_players()), (sum, 99, 2, 3));
+        assert_eq!(load_game(0), 0, "an empty buffer is refused");
+        assert_eq!(checksum(), sum, "a refused load leaves the game alone");
+    }
 }

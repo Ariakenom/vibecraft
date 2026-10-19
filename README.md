@@ -21,6 +21,7 @@ cdn.jsdelivr.net, so the page needs an internet connection.
 | src/path.rs     | A* pathfinding                                                   |
 | src/game.rs     | The simulation: orders, movement, gathering, combat, fog          |
 | src/ai.rs       | The computer opponent                                            |
+| src/save.rs     | Saving and loading: the whole game to bytes and back              |
 | src/lib.rs      | The Rust/JavaScript boundary (exported functions, render buffers)|
 | web/index.html  | Page layout and styles; lists the scripts below                  |
 | web/main.js     | Game loop, camera, input, HUD, minimap                           |
@@ -50,7 +51,21 @@ WASD / arrows / screen edges move the camera, the wheel zooms, middle-drag
 rotates and tilts. Build: Q farm, E settlement, R barracks, T granary,
 Y sawmill, U range, I stonemason, O tower, F smithy, G stable, C market,
 V temple, B wonder. Train: Q. K tech tree. Z attack-move, X stop, H home, `.` idle
-citizen, Ctrl+1–9 groups, P pause, M sound.
+citizen, Ctrl+1–9 groups, P pause, M sound, Ctrl+S save.
+
+## Saving
+
+Single player only. Menu → Save game (or Ctrl+S) stores the game in the
+browser (localStorage, the newest 8); Menu → Load game, or "Load a saved
+game" on the title screen, lists them. Download turns a save into a
+`.vibecraft` file that "Load from a file…" reads back, on any computer.
+
+`Game::save` in `src/save.rs` writes the complete simulation state as
+little-endian bytes, floats bit for bit, so a loaded game carries on exactly
+as the saved one would have (`cargo test` checks this). The page wraps those
+bytes, gzipped, in a JSON envelope with the camera and control groups.
+Change any saved struct and you must update `save`/`load` together and bump
+`VERSION`; older saves are then refused rather than misread.
 
 ## Multiplayer
 

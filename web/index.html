@@ -148,6 +148,16 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .ghost:hover { border-color: var(--bronze); }
 .note { color: var(--muted); font-size: 13px; margin: 0; }
 
+/* saved games */
+.saves { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: min(46vh, 380px); overflow: auto; }
+.saves li { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 3px; padding: 8px 10px; background: #1a150f; }
+.saves .what { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.saves .what b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saves .what small { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.saves .ghost { padding: 6px 12px; font-size: 14px; }
+.saves .go { padding: 6px 16px; font-size: 16px; }
+.saves .empty { justify-content: center; color: var(--muted); background: transparent; border-style: dashed; }
+
 /* tech tree */
 .tech { width: min(1080px, 100%); }
 #techBody { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
@@ -282,6 +292,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
         <p class="note net-status" id="netStatus"></p>
         <div class="row">
           <button class="go" id="startBtn">Begin</button>
+          <button class="ghost" id="startLoadBtn">Load a saved game</button>
           <button class="ghost" id="leaveLobbyBtn" hidden>Play my own game instead</button>
         </div>
       </section>
@@ -296,6 +307,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
         <div><dt><kbd class="k">W</kbd><kbd class="k">A</kbd><kbd class="k">S</kbd><kbd class="k">D</kbd>, edges</dt><dd>Move the camera; wheel zooms</dd></div>
         <div><dt>Middle-drag</dt><dd>Rotate and tilt the camera</dd></div>
         <div><dt><kbd class="k">M</kbd></dt><dd>Sound on or off</dd></div>
+        <div><dt><kbd class="k">Ctrl</kbd> + <kbd class="k">S</kbd></dt><dd>Save the game (Menu loads)</dd></div>
       </dl>
       <p class="note">Spears beat horsemen, horsemen beat archers, archers beat spears. Your Capitol and towers shoot back. Every unit eats food each minute: run out and your people starve. Grow from village to empire by building (<kbd class="k">K</kbd> shows the tech tree), and win by conquest or by finishing a Wonder.</p>
     </div>
@@ -328,9 +340,26 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
       <h1>Paused</h1>
       <div class="row">
         <button class="go" id="resumeBtn">Resume</button>
+        <button class="ghost" id="saveBtn" title="Save (Ctrl+S)">Save game</button>
+        <button class="ghost" id="menuLoadBtn">Load game</button>
         <button class="ghost" id="restartBtn">Restart</button>
         <button class="ghost" id="quitBtn">New game</button>
       </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="loadScreen" hidden>
+    <div class="card">
+      <div class="row" style="justify-content: space-between">
+        <h1 style="font-size: 30px">Saved games</h1>
+        <button class="ghost" id="loadClose">Back</button>
+      </div>
+      <ul class="saves" id="saveList"></ul>
+      <div class="row">
+        <button class="ghost" id="loadFileBtn">Load from a file…</button>
+        <input type="file" id="loadFile" accept=".vibecraft,application/json" hidden>
+      </div>
+      <p class="note">Saves are kept in this browser. Use Download to keep one as a file, or to carry it to another computer.</p>
     </div>
   </div>
 </div>

@@ -862,6 +862,7 @@ window.addEventListener("keydown", e => {
   if (SCROLL_KEYS.has(e.code)) { keys.add(e.code); e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
+  if (!$("loadScreen").hidden) { if (e.key === "Escape") closeLoadScreen(); return; }
   if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
@@ -877,6 +878,7 @@ window.addEventListener("keydown", e => {
     }
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && k === "s") { e.preventDefault(); if (!mp) saveGame(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (k === "p") { if (!mp) togglePause(); return; }
   if (k === "k") { toggleTech(); return; }
@@ -1106,6 +1108,12 @@ function newGame(seedArg, local = 0, players = 2) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
   W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
+  enterWorld(local);
+}
+
+// Set the page up for whatever game the wasm side now holds: a new one, or
+// one just loaded from a save.
+function enterWorld(local = 0) {
   ME = W.local_player();
   simTick = 0; stalledSince = 0; spectating = false;
   bakeTerrain();
@@ -1153,7 +1161,7 @@ function endGame() {
   }[st];
   Sfx.ui("fanfare", won);
   showEndStats();
-  if (mp) leaveMultiplayer();
+  if (mp) finishMultiplayer();
 }
 function showEndStats() {
   const ps = [...Array(W.n_players())].map((_, i) => i + 1);
@@ -1501,6 +1509,146 @@ function finishMultiplayer() {
   $("netWait").hidden = true;
 }
 
+// ===========================================================================
+// Saving and loading (single player)
+//
+// The Rust side turns the whole game into bytes (src/save.rs). Here we wrap
+// those bytes in a small JSON envelope with what the page needs on top
+// (camera, control groups, a description for the list), gzip them where the
+// browser can, and keep them in localStorage or a downloaded file.
+const SAVE_KEY = "vibecraft.saves", SAVE_MAX = 8, SAVE_FORMAT = 1;
+
+function readSaves() {
+  try { const v = JSON.parse(localStorage.getItem(SAVE_KEY) || "[]"); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+// Newest first. If the browser is out of room, drop the oldest and try again.
+function writeSaves(list) {
+  for (let keep = list.length; keep >= 1; keep--) {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(list.slice(0, keep))); return keep; }
+    catch { /* quota (or storage blocked): try with fewer */ }
+  }
+  return 0;
+}
+
+function toB64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+const fromB64 = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+async function pipeBytes(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+
+async function makeSave() {
+  const n = W.save_game();
+  let bytes = u8(W.save_ptr(), n).slice(), z = false;
+  if (window.CompressionStream) {
+    try { bytes = await pipeBytes(bytes, new CompressionStream("gzip")); z = true; } catch { /* keep it raw */ }
+  }
+  const players = W.n_players();
+  return {
+    format: SAVE_FORMAT, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    saved: Date.now(), time: W.game_time(), players, difficulty: W.game_difficulty(),
+    cam: { x: cam.x, y: cam.y, dist: cam.dist, pitch: cam.pitch, yaw: cam.yaw },
+    groups: Object.fromEntries(Object.entries(groups).filter(([g]) => /^[1-9]$/.test(g))),
+    z, data: toB64(bytes),
+  };
+}
+
+let saving = false;
+async function saveGame() {
+  if (mp || !running || saving || W.state() !== 0) return;
+  saving = true;
+  try {
+    const save = await makeSave();
+    const list = readSaves();
+    list.unshift(save);
+    const kept = writeSaves(list.slice(0, SAVE_MAX));
+    if (kept) toast(`Game saved (${fmtTime(save.time)})` + (kept < Math.min(list.length, SAVE_MAX) ? ". Older saves were removed to make room." : ""));
+    else { toast("This browser won't store the save. Downloading it instead.", "bad"); downloadSave(save); }
+  } catch (err) {
+    toast("Couldn't save the game.", "bad");
+  } finally { saving = false; }
+}
+
+function downloadSave(save) {
+  const d = new Date(save.saved), pad = v => String(v).padStart(2, "0");
+  const name = `vibecraft-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.vibecraft`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(save)], { type: "application/json" }));
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+async function loadSave(save) {
+  if (!save || save.format !== SAVE_FORMAT || typeof save.data !== "string") throw new Error("not a save");
+  let bytes = fromB64(save.data);
+  if (save.z) {
+    if (!window.DecompressionStream) { toast("This browser can't open compressed saves.", "bad"); return; }
+    bytes = await pipeBytes(bytes, new DecompressionStream("gzip"));
+  }
+  finishMultiplayer(); lastWasMultiplayer = false;
+  if (guestOf) openOwnLobby(); // we were waiting in someone's lobby: we're playing alone now
+  u8(W.load_buffer(bytes.length), bytes.length).set(bytes);
+  if (!W.load_game(bytes.length)) { toast("That save is damaged, or from another version of the game.", "bad"); return; }
+  seed = W.game_seed(); difficulty = W.game_difficulty();
+  enterWorld(0);
+  if (save.cam) { Object.assign(cam, save.cam); clampCam(); }
+  if (save.groups) groups = save.groups;
+  for (const id of ["loadScreen", "menuScreen", "startScreen", "endScreen"]) $(id).hidden = true;
+  running = true;
+  lastPlayers = W.n_players(); // for Restart and Play again
+  publishLobby(); // friends who open our link now wait for the next game
+  toast(`Loaded: ${fmtTime(W.game_time())} into the game`);
+}
+
+let loadReturn = "menuScreen";
+function openLoadScreen(from) {
+  loadReturn = from;
+  $(from).hidden = true;
+  renderSaveList();
+  $("loadScreen").hidden = false;
+}
+function closeLoadScreen() {
+  $("loadScreen").hidden = true;
+  $(loadReturn).hidden = false;
+}
+function renderSaveList() {
+  const ul = $("saveList"), list = readSaves();
+  ul.replaceChildren();
+  if (!list.length) {
+    const li = document.createElement("li"); li.className = "empty";
+    li.textContent = "No saved games in this browser yet. Save from the Menu during a game, or press Ctrl+S.";
+    ul.append(li);
+    return;
+  }
+  const DIFF = ["Easy", "Normal", "Hard"];
+  for (const save of list) {
+    const li = document.createElement("li");
+    const what = document.createElement("div"); what.className = "what";
+    const when = new Date(save.saved);
+    const title = document.createElement("b");
+    title.textContent = when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    const sub = document.createElement("small");
+    const opp = (save.players || 2) - 1;
+    sub.textContent = `${fmtTime(save.time || 0)} played · ${opp} opponent${opp === 1 ? "" : "s"} · ${DIFF[save.difficulty] ?? "Normal"}`;
+    what.append(title, sub);
+    const btn = (label, cls, fn) => { const b = document.createElement("button"); b.className = cls; b.textContent = label; b.onclick = fn; return b; };
+    li.append(what,
+      btn("Load", "go", () => loadSave(save).catch(() => toast("That save couldn't be read.", "bad"))),
+      btn("Download", "ghost", () => downloadSave(save)),
+      btn("Delete", "ghost", e => {
+        // Two clicks, so a slip doesn't lose a game.
+        if (e.target.dataset.sure) { writeSaves(readSaves().filter(s => s.id !== save.id)); renderSaveList(); }
+        else { e.target.dataset.sure = "1"; e.target.textContent = "Really delete?"; }
+      }));
+    ul.append(li);
+  }
+}
+
 // ---- buttons ----
 // Browsers only allow audio after the player interacts with the page.
 window.addEventListener("pointerdown", () => Sfx.init(), { capture: true });
@@ -1538,7 +1686,18 @@ $("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endS
 $("toMenuBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
 $("speedBtn").onclick = () => { speed = speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1; $("speedBtn").textContent = `${speed}×`; };
-$("menuBtn").onclick = () => { if (!running) return; if (!paused && !mp) togglePause(); $("menuScreen").hidden = false; };
+$("menuBtn").onclick = () => { if (!running) return; if (!paused && !mp) togglePause(); $("saveBtn").hidden = $("menuLoadBtn").hidden = !!mp; $("menuScreen").hidden = false; };
+$("saveBtn").onclick = () => saveGame();
+$("menuLoadBtn").onclick = () => openLoadScreen("menuScreen");
+$("startLoadBtn").onclick = () => openLoadScreen("startScreen");
+$("loadClose").onclick = () => closeLoadScreen();
+$("loadFileBtn").onclick = () => $("loadFile").click();
+$("loadFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try { await loadSave(JSON.parse(await f.text())); }
+  catch { toast("That file isn't a VibeCraft save.", "bad"); }
+};
 $("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused) togglePause(); };
 $("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers); };
 $("quitBtn").onclick = toMenu;
