@@ -313,7 +313,23 @@ nginx serves the page at `/vibecraft/` and proxies the WebSocket at
 closed). Only the freemyip name has a certificate; the Tailscale name
 redirects to HTTPS and fails the certificate check.
 
-To update:
+**Updates deploy themselves.** Every minute ginnu checks GitHub's `main`
+(`deploy/autodeploy.sh`, run by `vibecraft-autodeploy.timer`). When it has
+moved, ginnu copies over whichever of the page, `server.js`, the relay
+service and the nginx snippet changed, restarts or reloads what needs it,
+and writes the deployed commit to
+https://ginnu.freemyip.com/vibecraft/version.txt. So pushing to `main` is
+deploying: commit the rebuilt `dist/vibecraft.html` along with the source.
+Safeguards: a page without its wasm is refused, `server.js` must pass
+`node --check`, an nginx config `nginx -t` rejects is put back, and the
+previous files are kept in `/opt/vibecraft/backup/`. See what happened
+with `ssh ginnu journalctl -u vibecraft-autodeploy -n 30`.
+
+Set it up once (or again, after changing the autodeploy files):
+
+    ssh -t ginnu 'curl -fsSL https://raw.githubusercontent.com/Ariakenom/vibecraft/main/deploy/install-autodeploy.sh | sudo sh'
+
+To update by hand instead:
 
     ./build.sh && scp dist/vibecraft.html ginnu:/var/www/vibecraft/index.html
     # if server.js changed:
