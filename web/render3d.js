@@ -28,8 +28,10 @@ const R3 = {
 // what you can't see. three.js lets us patch its built-in shaders with
 // `onBeforeCompile`, so we keep normal lighting and shadows for free.
 const fowUniforms = { uFow: { value: null }, uMapSize: { value: null } };
-// Time in seconds, shared by the water and the swaying grass.
+// Time in seconds, shared by the water and the swaying grass, trees and flags.
 const timeUniform = { value: 0 };
+// How much things move in the wind (0 on the Low graphics setting).
+const swayUniform = { value: 1 };
 function withFow(mat, extra) {
   mat.onBeforeCompile = sh => {
     if (extra) extra(sh);
@@ -47,6 +49,60 @@ function withFow(mat, extra) {
   return mat;
 }
 
+// --- Wind ----------------------------------------------------------------------
+// Everything that moves in the wind is moved by the vertex shader, so it costs
+// no JavaScript per frame. The wind blows from the west-southwest, in gusts
+// that roll across the map.
+const WIND_GLSL = `
+  uniform float uTime;
+  uniform float uSway;
+  const vec2 WIND = vec2(0.82, 0.57);
+  // 0.4 .. 1: how strong the wind is at this spot right now.
+  float gustAt(vec2 p) { return 0.7 + 0.3 * sin(dot(p, WIND) * 0.18 - uTime * 0.9) * sin(p.y * 0.07 + uTime * 0.23); }
+`;
+
+// Flags: entity models carry an `aWave` attribute (0 except on flag cloth,
+// where it's the distance from the pole) and the cloth ripples sideways.
+function flagPatch(sh) {
+  sh.uniforms.uTime = timeUniform;
+  sh.uniforms.uSway = swayUniform;
+  sh.vertexShader = "attribute float aWave;\n" + WIND_GLSL + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+    if (aWave > 0.0) {
+      vec2 at = vec2(modelMatrix[3][0], modelMatrix[3][2]);
+      float ph = uTime * 6.0 - aWave * 4.5 + at.x * 1.7 + at.y * 1.3;
+      transformed.z += sin(ph) * 0.07 * aWave * uSway * gustAt(at);
+      transformed.y += sin(ph * 0.5 + 1.0) * 0.015 * aWave * uSway;
+    }`);
+}
+
+// Trees bend from the trunk, more toward the top, leaning downwind with a
+// slow sway; the leaves add a quick flutter. Each tree is turned at random,
+// so the world-space wind is turned into the tree's own frame first.
+const TREE_SWAY_GLSL = `#include <begin_vertex>
+  #ifdef USE_INSTANCING
+    vec2 base = vec2(instanceMatrix[3][0], instanceMatrix[3][2]);
+    mat3 toLocal = transpose(mat3(instanceMatrix));
+    float sc = length(instanceMatrix[0].xyz);
+    toLocal /= sc * sc;
+  #else
+    vec2 base = vec2(0.0);
+    mat3 toLocal = mat3(1.0);
+  #endif
+  float g = gustAt(base);
+  float bendH = max(position.y - 0.2, 0.0);
+  float bend = bendH * bendH * uSway;
+  float sway = 0.5 + 0.4 * sin(uTime * 1.4 + base.x * 0.9 + base.y * 0.7) + 0.1 * sin(uTime * 2.3 + base.y * 1.1); // 0..1
+  vec3 push = vec3(WIND.x, 0.0, WIND.y) * (0.025 + 0.045 * sway) * g * bend;
+  push.y -= dot(push, push) * 2.0; // keep the top on its arc instead of stretching
+  transformed += toLocal * push;
+  float leaf = smoothstep(0.45, 0.8, position.y) * uSway * g;
+  transformed += vec3(sin(uTime * 7.0 + position.y * 23.0 + base.x * 3.0), 0.0, cos(uTime * 6.3 + position.x * 19.0 + base.y * 3.0)) * 0.012 * leaf;`;
+function treePatch(sh) {
+  sh.uniforms.uTime = timeUniform;
+  sh.uniforms.uSway = swayUniform;
+  sh.vertexShader = WIND_GLSL + sh.vertexShader.replace("#include <begin_vertex>", TREE_SWAY_GLSL);
+}
+
 // --- Model building ----------------------------------------------------------
 // Every unit and building is made of simple shapes (boxes, cylinders, cones)
 // merged into ONE geometry with per-vertex colours. One mesh per model means
@@ -54,22 +110,30 @@ function withFow(mat, extra) {
 class Model {
   constructor() { this.parts = []; }
   // Add a shape. `geo` is already rotated/scaled as wanted; this places it.
-  add(geo, color, x = 0, y = 0, z = 0, ry = 0) {
+  add(geo, color, x = 0, y = 0, z = 0, ry = 0, wave = null) {
     geo = geo.index ? geo.toNonIndexed() : geo;
     if (ry) geo.rotateY(ry);
+    // How far each vertex is from the flagpole (0..1), before it's moved into place.
+    const w = wave ? Array.from({ length: geo.attributes.position.count }, (_, i) => wave(geo.attributes.position.getX(i))) : null;
     geo.translate(x, y, z);
-    this.parts.push([geo, new THREE.Color(color)]);
+    this.parts.push([geo, new THREE.Color(color), w]);
     return this;
+  }
+  // A cloth flag hanging from a pole at its left edge. It waves in the wind:
+  // the material's vertex shader moves each vertex by its distance from the pole.
+  flag(w, h, color, x, y, z) {
+    return this.add(box(w, h, 0.02), color, x, y, z, 0, px => (px + w / 2) / w);
   }
   build() {
     let n = 0;
     for (const [g] of this.parts) n += g.attributes.position.count;
-    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3), wav = new Float32Array(n);
     let o = 0;
-    for (const [g, c] of this.parts) {
+    for (const [g, c, w] of this.parts) {
       const p = g.attributes.position.array, q = g.attributes.normal.array;
       pos.set(p, o * 3); nor.set(q, o * 3);
       for (let i = 0; i < g.attributes.position.count; i++) { col[(o + i) * 3] = c.r; col[(o + i) * 3 + 1] = c.g; col[(o + i) * 3 + 2] = c.b; }
+      if (w) wav.set(w, o);
       o += g.attributes.position.count;
       g.dispose();
     }
@@ -77,6 +141,7 @@ class Model {
     out.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     out.setAttribute("normal", new THREE.BufferAttribute(nor, 3));
     out.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    out.setAttribute("aWave", new THREE.BufferAttribute(wav, 1));
     out.computeBoundingSphere();
     return out;
   }
@@ -156,7 +221,7 @@ function buildingModel(kind, owner) {
   if (kind !== K.Farm) m.add(box(s * 0.94, 0.5, s * 0.94), "#6f6553", 0, -0.2, 0);
   const banner = (x, z, h) => {
     m.add(cyl(0.02, 0.02, h, 5), DARKWOOD, x, h / 2, z);
-    m.add(box(0.3, 0.18, 0.02), team, x + 0.15, h - 0.12, z);
+    m.flag(0.3, 0.18, team, x + 0.15, h - 0.12, z);
   };
   const hall = (w, h, d, wall, roofCol, y0 = 0) => {
     m.add(box(w, h, d), wall, 0, y0 + h / 2, 0);
@@ -176,7 +241,7 @@ function buildingModel(kind, owner) {
       for (let i = -3; i <= 3; i++) { m.add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, 1.35).add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, -1.35); }
       m.add(box(0.4, 0.6, 0.04), DARKWOOD, 0, 0.6, 0.91);
       m.add(cyl(0.025, 0.025, 1.0, 5), DARKWOOD, 0, 2.6, 0);
-      m.add(box(0.5, 0.28, 0.02), team, 0.25, 2.95, 0);
+      m.flag(0.5, 0.28, team, 0.25, 2.95, 0);
       break;
     }
     case K.Barracks:
@@ -204,6 +269,7 @@ function buildingModel(kind, owner) {
       break;
     case K.Settlement:
       hall(1.2, 0.6, 1.0, "#b79d74", "#6d5d48");
+      m.add(box(0.14, 0.42, 0.14), STONE2, 0.3, 0.86, -0.2); // chimney (smoke comes out of it)
       m.add(box(0.3, 0.3, 0.3), "#8a6438", 0.7, 0.15, 0.55).add(box(0.25, 0.25, 0.25), "#946c3e", -0.65, 0.12, 0.6);
       m.add(cyl(0.14, 0.14, 0.3, 8), "#7a5532", 0.7, 0.15, -0.55);
       banner(-0.75, -0.6, 1.1);
@@ -271,7 +337,7 @@ function buildingModel(kind, owner) {
       m.add(box(0.5, 0.6, 1.2), "#b6a888", 0, 0.3, 1.75); // stairway
       m.add(box(0.7, 0.6, 0.7), "#e8c45a", 0, 3.05, 0);
       m.add(cone(0.45, 0.6, 4).rotateY(Math.PI / 4), "#f2d877", 0, 3.65, 0);
-      for (const [x, z] of [[1.6, 1.6], [-1.6, 1.6], [1.6, -1.6], [-1.6, -1.6]]) { m.add(cyl(0.05, 0.05, 1.4, 5), DARKWOOD, x, 0.7, z); m.add(box(0.4, 0.25, 0.02), team, x + 0.2, 1.25, z); }
+      for (const [x, z] of [[1.6, 1.6], [-1.6, 1.6], [1.6, -1.6], [-1.6, -1.6]]) { m.add(cyl(0.05, 0.05, 1.4, 5), DARKWOOD, x, 0.7, z); m.flag(0.4, 0.25, team, x + 0.2, 1.25, z); }
       break;
     }
     case K.Farm:
@@ -304,7 +370,7 @@ function resourceModels() {
 }
 
 // --- Setup -------------------------------------------------------------------
-let entMat, ghostMat, hitMat;
+let entMat, ghostMat, hitMat, treeMat, treeDepthMat;
 const modelCache = new Map();
 function cachedModel(kind, owner) {
   const key = kind * 8 + owner;
@@ -315,17 +381,25 @@ function cachedModel(kind, owner) {
 function initRenderer() {
   const r = new THREE.WebGLRenderer({ canvas: view, antialias: true });
   r.outputColorSpace = THREE.SRGBColorSpace;
+  // Filmic tone mapping rolls bright sunlit faces off gently instead of
+  // clipping them, and deepens the shade, for a richer, less flat picture.
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.25;
   r.shadowMap.enabled = true;
   r.shadowMap.type = THREE.PCFSoftShadowMap;
   R3.renderer = r;
   const scene = new THREE.Scene();
   // Past the sea's edge, the far distance is deep blue rather than black.
   scene.background = new THREE.Color("#12303f");
+  // A light haze in the distance gives the view depth when the camera tilts up.
+  scene.fog = new THREE.Fog("#12303f", 60, 200);
   R3.scene = scene;
   R3.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 400);
 
-  scene.add(new THREE.HemisphereLight("#dfe9f2", "#4a4232", 1.7));
-  const sun = new THREE.DirectionalLight("#fff1d6", 2.4);
+  // A cool sky fill and a warm, fairly low afternoon sun: long shadows and
+  // warm light against cool shade.
+  scene.add(new THREE.HemisphereLight("#cfe1f2", "#54462f", 1.35));
+  const sun = new THREE.DirectionalLight("#ffe4bd", 2.9);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.0004;
@@ -333,9 +407,14 @@ function initRenderer() {
   scene.add(sun); scene.add(sun.target);
   R3.sun = sun;
 
-  entMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }));
+  entMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), flagPatch);
   // Swapped in for a moment when something is hit: a warm glow, not a size change.
-  hitMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true, emissive: "#ff7a4d", emissiveIntensity: 0.55 }));
+  hitMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true, emissive: "#ff7a4d", emissiveIntensity: 0.55 }), flagPatch);
+  // Trees and bushes sway. The shadow pass gets the same sway, or the
+  // shadows would stand still under moving trees.
+  treeMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), treePatch);
+  treeDepthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  treeDepthMat.onBeforeCompile = treePatch;
   ghostMat = new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false });
   R3.raycaster = new THREE.Raycaster();
 
@@ -351,18 +430,21 @@ function initRenderer() {
 
   // Rally flag
   const rm = new Model();
-  rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).add(box(0.32, 0.2, 0.02), PCOL[1], 0.16, 0.78, 0);
+  rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).flag(0.32, 0.2, PCOL[1], 0.16, 0.78, 0);
   R3.rally = new THREE.Mesh(rm.build(), entMat);
   R3.rallyFor = 1;
   R3.rally.visible = false;
   scene.add(R3.rally);
 
   R3.resGeo = resourceModels();
+  buildSmoke();
+  addGraphicsControls();
+  applyGraphics();
 }
 
 function resizeRenderer() {
   if (!R3.renderer) return;
-  R3.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  R3.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, GFX.pixelRatio));
   R3.renderer.setSize(view._w, view._h, false);
   R3.camera.aspect = view._w / Math.max(1, view._h);
   R3.camera.updateProjectionMatrix();
@@ -457,7 +539,7 @@ function buildWorld() {
   // The rally flag wears this player's colour.
   if (R3.rallyFor !== ME) {
     const rm = new Model();
-    rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).add(box(0.32, 0.2, 0.02), PCOL[ME], 0.16, 0.78, 0);
+    rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).flag(0.32, 0.2, PCOL[ME], 0.16, 0.78, 0);
     R3.rally.geometry.dispose();
     R3.rally.geometry = rm.build();
     R3.rallyFor = ME;
@@ -475,8 +557,12 @@ function buildWorld() {
   // Room for every resource on the map. (Sizing this from the resources
   // explored so far was a bug: trees discovered later had no room and vanished.)
   const n = W.res_total() + 16;
-  const mk = (g, cnt) => { const m = new THREE.InstancedMesh(g, entMat, cnt); m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m; };
-  R3.res = { pine: mk(R3.resGeo.pine, n), oak: mk(R3.resGeo.oak, n), bush: mk(R3.resGeo.bush, n), stone: mk(R3.resGeo.stone, n), gold: mk(R3.resGeo.gold, n) };
+  const mk = (g, cnt, sways) => {
+    const m = new THREE.InstancedMesh(g, sways ? treeMat : entMat, cnt);
+    if (sways) m.customDepthMaterial = treeDepthMat;
+    m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m;
+  };
+  R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n), gold: mk(R3.resGeo.gold, n) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -595,13 +681,14 @@ function tuftGeometry() {
 }
 function swayPatch(sh) {
   sh.uniforms.uTime = timeUniform;
-  sh.vertexShader = "uniform float uTime;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+  sh.uniforms.uSway = swayUniform;
+  sh.vertexShader = "uniform float uTime;\nuniform float uSway;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
     #ifdef USE_INSTANCING
       vec2 base = vec2(instanceMatrix[3][0], instanceMatrix[3][2]);
     #else
       vec2 base = vec2(0.0);
     #endif
-    float bend = position.y * position.y * 4.0;
+    float bend = position.y * position.y * 4.0 * uSway;
     transformed.x += sin(uTime * 1.7 + base.x * 0.6 + base.y * 0.3) * 0.05 * bend;
     transformed.z += cos(uTime * 1.3 + base.y * 0.5) * 0.03 * bend;`);
 }
@@ -611,10 +698,11 @@ function buildTufts() {
   for (let ty = 0; ty < MH; ty++) for (let tx = 0; tx < MW; tx++) {
     const t = ter[ty * MW + tx];
     if (t !== 0 && t !== 3) continue;
-    const n = hash2(tx * 3 + 7, ty * 5 + 1);
-    const count = n < 0.35 ? 0 : n < 0.75 ? 1 : 2;
-    for (let k = 0; k < count; k++) spots.push([tx + 0.1 + hash2(tx * 7 + k, ty) * 0.8, ty + 0.1 + hash2(ty * 11 + k, tx * 3) * 0.8, hash2(tx + k * 13, ty * 17)]);
+    // Up to 3 tufts a tile. They're drawn in a shuffled order, so the
+    // graphics setting can draw any share of them and still cover the map evenly.
+    for (let k = 0; k < 3; k++) spots.push([tx + 0.1 + hash2(tx * 7 + k, ty) * 0.8, ty + 0.1 + hash2(ty * 11 + k, tx * 3) * 0.8, hash2(tx + k * 13, ty * 17), hash2(tx * 5 + k * 29, ty * 3 + 11)]);
   }
+  spots.sort((a, b) => a[3] - b[3]);
   R3.tuftSpots = spots;
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
   withFow(mat, swayPatch);
@@ -628,6 +716,7 @@ function buildTufts() {
   const palette = ["#f2efe4", "#f3d55b", "#c58ad8", "#e98a5e"].map(c => new THREE.Color(c));
   fl.forEach((s, i) => R3.flowers.setColorAt(i, palette[Math.floor(s[2] * 33) % 4]));
   placeTufts();
+  applyGrass();
   R3.scene.add(R3.tufts, R3.flowers);
 }
 // (Re)position all tufts: called after the ground under a building is levelled.
@@ -705,7 +794,9 @@ function placeCamera() {
   c.updateMatrixWorld();
   // The sun's shadow camera follows the view so shadows stay sharp.
   const s = R3.sun, ext = cam.dist * 1.1 + 6;
-  s.position.set(cam.x - 14, gy + 26, cam.y + 9);
+  s.position.set(cam.x - 17, gy + 21, cam.y + 11);
+  // Haze starts past what you're looking at, so it only softens the far distance.
+  R3.scene.fog.near = cam.dist * 1.6; R3.scene.fog.far = cam.dist * 5 + 40;
   s.target.position.set(cam.x, gy, cam.y);
   s.target.updateMatrixWorld();
   const sc = s.shadow.camera;
@@ -896,7 +987,8 @@ function render3d(alpha, now, dt) {
   updateRally();
   updateGhost();
   updateMarkers(now);
-  R3.renderer.render(R3.scene, R3.camera);
+  updateSmoke();
+  renderScene();
 }
 
 // Rebuild the resource instances when anything about them changed.
@@ -1011,6 +1103,243 @@ function entScreen(i, atTop) {
   return worldToScreen(o.root.position.x, o.root.position.z, o.root.position.y + (atTop ? top : o.height * 0.5));
 }
 
+// --- Graphics quality ------------------------------------------------------------
+// One setting trades looks for speed. It only changes how things are drawn,
+// never the simulation, so players in one multiplayer game can each pick
+// their own. Saved per browser.
+const GFX_LEVELS = {
+  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, ao: false },
+  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  ao: false },
+  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  ao: false },
+  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  ao: true },
+};
+let gfxName = (() => {
+  try { const v = localStorage.getItem("vibecraftGraphics"); if (GFX_LEVELS[v]) return v; } catch (e) {}
+  // Phones and tablets start a notch lower: small GPUs and very dense screens.
+  return matchMedia("(pointer: coarse)").matches ? "medium" : "high";
+})();
+let GFX = GFX_LEVELS[gfxName];
+
+function setGraphicsQuality(name) {
+  if (!GFX_LEVELS[name]) return;
+  gfxName = name; GFX = GFX_LEVELS[name];
+  try { localStorage.setItem("vibecraftGraphics", name); } catch (e) {}
+  for (const seg of document.querySelectorAll(".gfx-seg")) for (const b of seg.children) b.setAttribute("aria-pressed", b.dataset.q === name);
+  applyGraphics();
+}
+
+function applyGraphics() {
+  const r = R3.renderer; if (!r) return;
+  swayUniform.value = GFX.sway;
+  // Shadows: turning them on or off, or a new map size, means rebuilding the shaders.
+  const sun = R3.sun, on = GFX.shadows > 0;
+  if (r.shadowMap.enabled !== on || (on && sun.shadow.mapSize.x !== GFX.shadows)) {
+    r.shadowMap.enabled = on;
+    sun.castShadow = on;
+    if (on) {
+      if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+      sun.shadow.mapSize.set(GFX.shadows, GFX.shadows);
+      r.shadowMap.type = GFX.shadows >= 2048 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    }
+    for (const m of [entMat, hitMat, treeMat, ghostMat, ...bundleMats]) m.needsUpdate = true;
+    R3.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+  }
+  applyGrass();
+  if (R3.smoke) R3.smoke.visible = GFX.smoke;
+  if (view._w) resizeRenderer();
+}
+
+function applyGrass() {
+  if (R3.tufts) R3.tufts.count = Math.round(R3.tuftSpots.length * GFX.grass);
+  if (R3.flowers) R3.flowers.count = Math.max(0, Math.round(R3.flowerSpots.length * GFX.grass));
+}
+
+// The setting appears on the start screen and in the in-game menu.
+function addGraphicsControls() {
+  const make = () => {
+    const row = document.createElement("div");
+    row.className = "row gfx-row";
+    row.innerHTML = `<span class="note" id="gfxLabel${document.querySelectorAll(".gfx-row").length}">Graphics</span>`;
+    const seg = document.createElement("div");
+    seg.className = "seg gfx-seg";
+    seg.setAttribute("aria-labelledby", row.firstChild.id);
+    for (const [k, v] of Object.entries(GFX_LEVELS)) {
+      const b = document.createElement("button");
+      b.dataset.q = k; b.textContent = v.label;
+      b.title = k === "ultra" ? "Adds soft contact shadows; needs a strong graphics card" : k === "low" ? "No shadows or wind: for slow computers" : "";
+      b.setAttribute("aria-pressed", k === gfxName);
+      b.onclick = () => setGraphicsQuality(k);
+      seg.append(b);
+    }
+    row.append(seg);
+    return row;
+  };
+  const start = document.querySelector("#startScreen .keys");
+  if (start) start.before(make());
+  const menu = document.querySelector("#menuScreen .card");
+  if (menu) menu.append(make());
+}
+
+// --- Chimney smoke ------------------------------------------------------------------
+// Puffs rise from the Smithy and Settlement chimneys, and dark smoke from badly
+// damaged buildings. One point cloud for all of it: each puff knows its
+// emitter and a random phase, and the vertex shader works out where it is
+// in its rise, so the CPU only lists the emitters now and then.
+const SMOKE_MAX = 48, SMOKE_PUFFS = 14;
+function buildSmoke() {
+  const n = SMOKE_MAX * SMOKE_PUFFS;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(n * 3), 3)); // the emitter
+  geo.setAttribute("aKind", new THREE.BufferAttribute(new Float32Array(n), 1));        // 0 off, 1 chimney, 2 fire
+  const seed = new Float32Array(n);
+  for (let i = 0; i < n; i++) seed[i] = (i % SMOKE_PUFFS) / SMOKE_PUFFS + hash2(i, 7) * 0.08;
+  geo.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uTime: timeUniform, uScale: { value: 300 }, uFow: fowUniforms.uFow, uMapSize: fowUniforms.uMapSize, fogColor: { value: new THREE.Color() }, fogNear: { value: 1 }, fogFar: { value: 1 } },
+    transparent: true, depthWrite: false, fog: true,
+    vertexShader: `
+      attribute float aKind; attribute float aSeed;
+      uniform float uTime; uniform float uScale; uniform sampler2D uFow; uniform vec2 uMapSize;
+      varying float vAlpha; varying vec3 vCol; varying float vFogDepth;
+      void main() {
+        float fire = step(1.5, aKind);
+        float life = fract(uTime * (fire > 0.5 ? 0.32 : 0.2) + aSeed);
+        vec3 p = position;
+        p.y += life * (fire > 0.5 ? 2.2 : 1.7);
+        p.xz += vec2(0.82, 0.57) * life * life * 1.1;
+        p.x += sin(aSeed * 40.0 + uTime) * 0.08 * life;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float size = mix(0.16, fire > 0.5 ? 0.9 : 0.7, life);
+        gl_PointSize = aKind < 0.5 ? 0.0 : size * uScale / -mv.z;
+        float seen = texture2D(uFow, position.xz / uMapSize).r;
+        vAlpha = sin(life * 3.14159) * (fire > 0.5 ? 0.5 : 0.3) * step(0.5, seen) * seen;
+        vCol = fire > 0.5 ? mix(vec3(0.95, 0.45, 0.15), vec3(0.16, 0.15, 0.14), smoothstep(0.0, 0.25, life)) : mix(vec3(0.82, 0.8, 0.78), vec3(0.6, 0.6, 0.62), life);
+        vFogDepth = -mv.z;
+      }`,
+    fragmentShader: `
+      uniform vec3 fogColor; uniform float fogNear; uniform float fogFar;
+      varying float vAlpha; varying vec3 vCol; varying float vFogDepth;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float a = vAlpha * smoothstep(0.5, 0.15, length(c));
+        if (a < 0.01) discard;
+        // A little self-shadow: lighter on the side facing the sun.
+        vec3 col = vCol * (0.85 + 0.3 * (0.5 - c.y));
+        col = mix(col, fogColor, smoothstep(fogNear, fogFar, vFogDepth));
+        gl_FragColor = vec4(col, a);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  R3.smoke = new THREE.Points(geo, mat);
+  R3.smoke.frustumCulled = false;
+  R3.smoke.renderOrder = 4;
+  R3.smoke.visible = GFX.smoke;
+  R3.scene.add(R3.smoke);
+}
+// Called every few frames with [x, y, z, kind] for each emitter.
+function setSmokeEmitters(list) {
+  const geo = R3.smoke.geometry, pos = geo.attributes.position.array, kind = geo.attributes.aKind.array;
+  for (let e = 0; e < SMOKE_MAX; e++) {
+    const em = list[e];
+    for (let k = 0; k < SMOKE_PUFFS; k++) {
+      const i = e * SMOKE_PUFFS + k;
+      kind[i] = em ? em[3] : 0;
+      if (em) { pos[i * 3] = em[0]; pos[i * 3 + 1] = em[1]; pos[i * 3 + 2] = em[2]; }
+    }
+  }
+  geo.attributes.position.needsUpdate = true;
+  geo.attributes.aKind.needsUpdate = true;
+}
+// Where smoke comes out, relative to the building's centre.
+function updateSmoke() {
+  const CHIMNEYS = { [K.Smithy]: [0.38, 1.5, -0.22], [K.Settlement]: [0.3, 1.1, -0.2] };
+  if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
+  const list = [];
+  for (const o of R3.objs.values()) {
+    if (o.kind < 10 || o.body.scale.y < 1 || list.length >= SMOKE_MAX) continue;
+    const ch = CHIMNEYS[o.kind], p = o.root.position;
+    if (ch) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
+    if (o.lastHp < 0.5 && o.kind !== K.Farm && list.length < SMOKE_MAX) list.push([p.x - 0.2, p.y + o.height * 0.6, p.z + 0.1, 2]);
+  }
+  setSmokeEmitters(list);
+  R3.smoke.material.uniforms.uScale.value = view._h * R3.renderer.getPixelRatio() * 0.5 * R3.camera.projectionMatrix.elements[5];
+}
+
+// --- Ambient occlusion (Ultra) -------------------------------------------------------
+// The scene is drawn into a texture with its depth, then a full-screen pass
+// darkens creases and contact points: where a building meets the ground,
+// between huddled units, under eaves. It works from depth alone, sampling a
+// small disc around each pixel to see how much nearby geometry rises above
+// it. That pass also applies the tone mapping, which three.js skips when
+// drawing into a texture.
+const Post = { rt: null, scene: null, cam: null, mat: null };
+function buildPost() {
+  Post.rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+  Post.rt.depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
+  Post.mat = new THREE.ShaderMaterial({
+    uniforms: { tColor: { value: null }, tDepth: { value: null }, uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() }, uRadius: { value: 0.55 } },
+    depthTest: false, depthWrite: false,
+    vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D tColor; uniform sampler2D tDepth; uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius;
+      varying vec2 vUv;
+      vec3 viewPos(vec2 uv) {
+        float d = texture2D(tDepth, uv).x;
+        vec4 p = uProjInv * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+        return p.xyz / p.w;
+      }
+      void main() {
+        vec4 col = texture2D(tColor, vUv);
+        float d = texture2D(tDepth, vUv).x;
+        float ao = 1.0;
+        if (d < 1.0) {
+          vec3 P = viewPos(vUv);
+          vec3 N = normalize(cross(dFdx(P), dFdy(P)));
+          float rUv = uRadius * uProj[1][1] / -P.z * 0.5; // the radius on screen, as a fraction of its height
+          float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+          float occ = 0.0;
+          const int N_S = 14;
+          for (int i = 0; i < N_S; i++) {
+            float f = (float(i) + 0.5) / float(N_S);
+            float a = (float(i) * 2.39996 + noise * 6.2832);
+            vec2 off = vec2(cos(a), sin(a)) * f * rUv * vec2(uRes.y / uRes.x, 1.0);
+            vec3 v = viewPos(vUv + off) - P;
+            float vv = dot(v, v);
+            // Nearby geometry above this pixel's surface occludes it; far-away geometry doesn't count.
+            occ += max(0.0, dot(v, N) - 0.015) / (vv + 0.05) * smoothstep(uRadius * uRadius * 4.0, uRadius * uRadius, vv);
+          }
+          ao = clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
+        }
+        gl_FragColor = vec4(col.rgb * ao, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  Post.scene = new THREE.Scene();
+  Post.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat));
+  Post.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+}
+
+function renderScene() {
+  const r = R3.renderer;
+  if (!GFX.ao) { r.render(R3.scene, R3.camera); return; }
+  if (!Post.rt) buildPost();
+  const sz = r.getDrawingBufferSize(_v2);
+  if (Post.rt.width !== sz.x || Post.rt.height !== sz.y) Post.rt.setSize(sz.x, sz.y);
+  r.setRenderTarget(Post.rt);
+  r.render(R3.scene, R3.camera);
+  r.setRenderTarget(null);
+  const u = Post.mat.uniforms;
+  u.tColor.value = Post.rt.texture; u.tDepth.value = Post.rt.depthTexture;
+  u.uProj.value.copy(R3.camera.projectionMatrix); u.uProjInv.value.copy(R3.camera.projectionMatrixInverse);
+  u.uRes.value.set(sz.x, sz.y);
+  r.render(Post.scene, Post.cam);
+}
+const _v2 = new THREE.Vector2();
+
 // --- HUD icons -----------------------------------------------------------------
 // Button icons and portraits are rendered from the same 3D models, with a
 // small second renderer, then copied into ordinary 2D canvases.
@@ -1021,6 +1350,8 @@ function iconRenderer() {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setSize(128, 128, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; // match the main view
+  renderer.toneMappingExposure = 1.25;
   const scene = new THREE.Scene();
   scene.add(new THREE.HemisphereLight("#f1f4f8", "#5a5040", 2.0));
   const d = new THREE.DirectionalLight("#fff3dd", 2.2); d.position.set(-2, 4, 3); scene.add(d);
