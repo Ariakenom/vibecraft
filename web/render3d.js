@@ -1055,9 +1055,9 @@ function buildTufts() {
   const palette = ["#f2efe4", "#f3d55b", "#c58ad8", "#e98a5e"].map(c => new THREE.Color(c));
   fl.forEach((s, i) => R3.flowers.setColorAt(i, palette[Math.floor(s[2] * 33) % 4]));
   // A few pebbles in the grass, with the stone surface.
-  R3.pebbleSpots = spots.filter(s => s[2] > 0.9);
+  R3.pebbleSpots = spots.filter(s => s[2] > 0.95);
   const pg = new THREE.DodecahedronGeometry(0.06, 0).scale(1, 0.55, 0.8).translate(0, 0.015, 0);
-  pg.setAttribute("color", new THREE.Float32BufferAttribute(new Array(pg.attributes.position.count * 3).fill(0.62), 3));
+  pg.setAttribute("color", new THREE.Float32BufferAttribute(new Array(pg.attributes.position.count * 3).fill(0.3), 3));
   R3.pebbles = new THREE.InstancedMesh(pg, stoneMat, Math.max(1, R3.pebbleSpots.length));
   R3.pebbles.receiveShadow = true;
   placeTufts();
