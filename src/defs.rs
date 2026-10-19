@@ -109,8 +109,8 @@ static MASON: Stats = building(600.0, 4.0, [0, 150, 0, 0], 30.0, 2);
 static SMITHY: Stats = building(600.0, 4.0, [0, 100, 100, 0], 35.0, 2);
 static MARKET: Stats = building(700.0, 5.0, [0, 175, 50, 0], 40.0, 3);
 static TEMPLE: Stats = building(900.0, 6.0, [0, 0, 200, 100], 50.0, 2);
-// The Wonder takes 1200 citizen-seconds of work: ten builders need two minutes.
-static WONDER: Stats = building(4000.0, 8.0, [600, 600, 600, 600], 1200.0, 4);
+// The Wonder takes 2400 citizen-seconds of work: ten builders need four minutes.
+static WONDER: Stats = building(4000.0, 8.0, [600, 600, 600, 600], 2400.0, 4);
 
 
 impl Kind {

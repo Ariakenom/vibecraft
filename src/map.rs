@@ -12,6 +12,7 @@ pub const SAND: u8 = 2;
 pub const HILL: u8 = 3;
 
 /// A resource node: one tree, berry bush, or chunk of a mine. Each sits on one tile.
+#[derive(Clone)]
 pub struct Resource {
     pub kind: Res,
     pub tx: i32,
@@ -27,6 +28,7 @@ impl Resource {
     }
 }
 
+#[derive(Clone)]
 pub struct Map {
     pub w: i32,
     pub h: i32,

@@ -99,6 +99,7 @@ impl CmdError {
 
 /// One unit or building. A single struct for both keeps storage simple;
 /// unit-only fields are just unused on buildings and vice versa.
+#[derive(Clone)]
 pub struct Entity {
     pub id: u32,
     pub kind: Kind,
@@ -208,6 +209,7 @@ impl Entity {
     }
 }
 
+#[derive(Clone)]
 pub struct Projectile {
     pub x: f32,
     pub y: f32,
@@ -282,6 +284,11 @@ pub enum Pick {
     Nothing,
 }
 
+// `Clone` on the whole game is what multiplayer's prediction rests on: the
+// live copy you play in can be thrown away and replaced by a copy of the
+// confirmed one. `derive` writes the copying code for every field, as long
+// as every field's type can be cloned too (hence the derives above).
+#[derive(Clone)]
 pub struct Game {
     pub map: Map,
     pub res: Vec<Resource>,
@@ -1181,6 +1188,31 @@ impl Game {
     /// A fingerprint of the whole game state. In multiplayer both computers
     /// compare these now and then: if they ever differ, the games have
     /// drifted apart ("desynced"). FNV-1a hashing: simple and good enough.
+    /// Like `checksum`, but only one player's units and buildings: tells
+    /// whether a correction actually changed anything of theirs.
+    pub fn checksum_owner(&self, owner: u8) -> u32 {
+        let mut h: u32 = 0x811c_9dc5;
+        let mut mix = |v: u32| {
+            for b in v.to_le_bytes() {
+                h ^= b as u32;
+                h = h.wrapping_mul(0x0100_0193);
+            }
+        };
+        for e in self.ents.iter().filter(|e| e.alive && e.owner == owner) {
+            mix(e.id);
+            mix(e.x.to_bits());
+            mix(e.y.to_bits());
+            mix(e.hp.to_bits());
+            mix(e.queue.len() as u32);
+        }
+        if let Some(p) = self.players.get(owner as usize) {
+            for v in p.stock {
+                mix(v.to_bits());
+            }
+        }
+        h
+    }
+
     pub fn checksum(&self) -> u32 {
         let mut h: u32 = 0x811c_9dc5;
         let mut mix = |v: u32| {

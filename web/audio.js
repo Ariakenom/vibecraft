@@ -3,9 +3,14 @@
 // filtered noise shaped by quick volume envelopes. No audio files to load.
 const Sfx = (() => {
   let ac = null, master, sfxBus, uiBus, noiseBuf;
-  let muted = false, voices = 0;
+  let muted = false, volume = 0.8, voices = 0;
   const lastPlayed = {};
-  try { muted = localStorage.getItem("vibecraftMuted") === "1"; } catch (e) {}
+  try {
+    muted = localStorage.getItem("vibecraftMuted") === "1";
+    const v = parseFloat(localStorage.getItem("vibecraftVolume"));
+    if (v >= 0 && v <= 1) volume = v;
+  } catch (e) {}
+  const level = () => muted ? 0 : volume;
 
   function init() {
     if (ac) { if (ac.state === "suspended") ac.resume(); return; }
@@ -14,7 +19,7 @@ const Sfx = (() => {
     ac = new AC();
     const comp = ac.createDynamicsCompressor();
     comp.threshold.value = -18; comp.ratio.value = 4;
-    master = ac.createGain(); master.gain.value = muted ? 0 : 0.8;
+    master = ac.createGain(); master.gain.value = level();
     master.connect(comp); comp.connect(ac.destination);
     sfxBus = ac.createGain(); sfxBus.gain.value = 0.9; sfxBus.connect(master);
     uiBus = ac.createGain(); uiBus.gain.value = 0.55; uiBus.connect(master);
@@ -26,7 +31,12 @@ const Sfx = (() => {
   function setMuted(m) {
     muted = m;
     try { localStorage.setItem("vibecraftMuted", m ? "1" : "0"); } catch (e) {}
-    if (ac) master.gain.setTargetAtTime(m ? 0 : 0.8, ac.currentTime, 0.05);
+    if (ac) master.gain.setTargetAtTime(level(), ac.currentTime, 0.05);
+  }
+  function setVolume(v) {
+    volume = Math.max(0, Math.min(1, v));
+    try { localStorage.setItem("vibecraftVolume", String(volume)); } catch (e) {}
+    if (ac) master.gain.setTargetAtTime(level(), ac.currentTime, 0.05);
   }
 
   // Building blocks -------------------------------------------------------
@@ -149,7 +159,7 @@ const Sfx = (() => {
 
   // How many times each sound has played: handy when debugging in the console.
   const played = {};
-  return { init, setMuted, get muted() { return muted; }, at, ui, played };
+  return { init, setMuted, setVolume, get muted() { return muted; }, get volume() { return volume; }, at, ui, played };
 })();
 
 // How loud a world-position sound is for the current camera (0..1):

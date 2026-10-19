@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>VibeCraft</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -59,6 +60,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .clock { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 44px; text-align: right; }
 .tbtn { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 3px 10px; font-size: 13px; cursor: pointer; min-width: 40px; }
 .tbtn:hover { border-color: var(--bronze); }
+.vol { display: flex; align-items: center; gap: 8px; }
+#volume { width: 90px; accent-color: var(--bronze); cursor: pointer; }
+#volume.off { opacity: .45; }
 .tbtn[aria-pressed="true"] { background: var(--bronze); color: var(--ground); border-color: var(--bronze); }
 
 /* ---- map ---- */
@@ -74,9 +78,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); background: #1b1610e0; border: 1px solid var(--line); padding: 5px 12px; border-radius: 3px; font-size: 13px; color: var(--ink); pointer-events: none; white-space: nowrap; }
 
 /* ---- HUD ---- */
-#hud { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: linear-gradient(var(--panel-hi), var(--panel) 30%); border-top: 2px solid var(--line); box-shadow: 0 -2px 0 #0007; z-index: 3; }
+#hud { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: 160px; gap: 12px; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: linear-gradient(var(--panel-hi), var(--panel) 30%); border-top: 2px solid var(--line); box-shadow: 0 -2px 0 #0007; z-index: 3; }
 #mini { width: 150px; height: 150px; border: 1px solid var(--line); background: #000; display: block; cursor: pointer; touch-action: none; }
-#sel { min-width: 0; display: flex; gap: 14px; align-items: flex-start; border: 1px solid var(--line); background: #1a150f; border-radius: 3px; padding: 10px 12px; overflow: hidden; }
+#sel { min-width: 0; min-height: 0; display: flex; gap: 14px; align-items: flex-start; border: 1px solid var(--line); background: #1a150f; border-radius: 3px; padding: 10px 12px; overflow: hidden auto; }
 #sel .portrait { width: 72px; height: 72px; flex: none; background: #2a2219; border: 1px solid var(--line); border-radius: 3px; }
 #sel .info { min-width: 0; flex: 1; display: grid; gap: 5px; align-content: start; }
 #sel h3 { margin: 0; font-family: var(--display); font-weight: 400; font-size: 18px; letter-spacing: .03em; }
@@ -100,7 +104,8 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .tips b { color: var(--ink); font-weight: 500; }
 .tips h3 { color: var(--ink); }
 
-#cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; }
+/* Always room for three rows of five, whatever is selected, so the bar never changes size. */
+#cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 270px; }
 .cbtn { position: relative; padding: 0; background: linear-gradient(#3a3023, #282017); border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
 .cbtn:hover { border-color: var(--bronze); }
 .cbtn.poor { opacity: .5; }
@@ -165,7 +170,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 @media (max-width: 480px) { #techBody { grid-template-columns: minmax(0, 1fr); } }
 
 @media (max-width: 760px) {
-  #hud { grid-template-columns: auto 1fr; gap: 8px; }
+  #hud { grid-template-columns: auto 1fr; grid-template-rows: 104px 93px; gap: 8px; }
   #mini { width: 104px; height: 104px; }
   #cmd { grid-column: 1 / -1; grid-template-columns: repeat(auto-fill, 44px); grid-auto-rows: 44px; }
   .cbtn canvas { width: 42px; height: 42px; }
@@ -174,24 +179,33 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
   .res { gap: 10px; }
   #hint { white-space: normal; width: 90%; text-align: center; }
 }
-/* multiplayer */
-.mp { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
-.mp .row { gap: 10px; }
-.mp input { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 8px 10px; font: 500 15px var(--body); }
-#joinCode { width: 7ch; text-transform: uppercase; letter-spacing: .15em; font-weight: 700; }
+/* the lobby: seats for you, friends and computer players */
+.lobby { display: grid; gap: 12px; }
+.lobby-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.skill { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.seats { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.seat { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 3px; }
+.seat.closed { opacity: .55; }
+.seat .swatch { width: 14px; height: 14px; border-radius: 2px; flex: none; }
+.seat .who { font-weight: 700; flex: 1; }
+.seat .tag { color: var(--muted); font-size: 13px; }
+.lobby select, .lobby input { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px 8px; font: 500 15px var(--body); }
+.lobby .row { gap: 10px; }
+.invite { display: grid; gap: 6px; }
+.invite label, .lobby label { color: var(--muted); }
+#inviteLink { flex: 1; min-width: 0; }
+#joinLink { flex: 1; min-width: 0; }
 #relayUrl { width: min(260px, 100%); }
-.mp .or { color: var(--muted); }
-.mp .code { font: 400 26px var(--display); letter-spacing: .2em; color: var(--bronze); user-select: all; -webkit-user-select: all; cursor: text; }
-.mp #mpStatus, .mp input { user-select: text; -webkit-user-select: text; }
-.mp code { font-size: 12px; }
-.mp label { color: var(--muted); }
+.lobby input, #mpStatus { user-select: text; -webkit-user-select: text; }
+.lobby code { font-size: 12px; }
 #mpStatus.bad { color: var(--bad); }
+#startBtn:disabled { opacity: .55; cursor: default; filter: none; }
+#mpStatus:empty, #netStatus:empty, #openGames:empty { display: none; }
 .net-status { font-size: 12px; user-select: text; -webkit-user-select: text; }
-.host-panel { display: grid; gap: 8px; }
-.players { margin: 0; padding: 0; list-style: none; display: flex; gap: 6px 16px; flex-wrap: wrap; font-weight: 700; }
-#aiFill { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px 8px; font: inherit; }
-#mpStartBtn { font-size: 16px; padding: 8px 18px; }
-#mpStartBtn:disabled { opacity: .55; cursor: default; filter: none; }
+#netTrace { position: absolute; top: 10px; right: 10px; z-index: 4; display: grid; gap: 8px; max-width: min(560px, calc(100% - 20px)); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 10px 12px; user-select: text; -webkit-user-select: text; }
+#netTrace pre { margin: 0; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; color: var(--ink); }
+#netTrace .row { display: flex; gap: 8px; }
+#netTraceText { width: 100%; height: 80px; font: 11px ui-monospace, Menlo, Consolas, monospace; background: var(--ground); color: var(--ink); border: 1px solid var(--line); }
 #netWait { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); padding: 10px 16px; border-radius: 3px; font-size: 15px; z-index: 3; }
 
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
@@ -204,9 +218,13 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
     <div id="restip" hidden></div>
     <div class="spacer"></div>
     <span class="clock" id="clock">0:00</span>
-    <button class="tbtn" id="soundBtn" title="Sound (M)">Sound on</button>
+    <span class="vol">
+      <button class="tbtn" id="soundBtn" title="Sound on or off (M)">Sound on</button>
+      <input type="range" id="volume" min="0" max="100" step="1" aria-label="Volume" title="Volume">
+    </span>
     <button class="tbtn" id="pauseBtn" aria-pressed="false" title="Pause (P)">Pause</button>
     <button class="tbtn" id="speedBtn" title="Game speed">1×</button>
+    <button class="tbtn" id="netBtn" title="Network details (F8)" hidden>Net</button>
     <button class="tbtn" id="menuBtn" title="Menu">Menu</button>
   </header>
   <main id="stage">
@@ -215,6 +233,14 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
     <div id="toasts" aria-live="polite"></div>
     <div id="hint" hidden></div>
     <div id="netWait" hidden></div>
+    <section id="netTrace" hidden aria-label="Network details">
+      <pre id="netTraceBody"></pre>
+      <div class="row">
+        <button class="tbtn" id="netTraceCopy">Copy trace</button>
+        <button class="tbtn" id="netTraceClose">Close</button>
+      </div>
+      <textarea id="netTraceText" hidden readonly spellcheck="false"></textarea>
+    </section>
   </main>
   <footer id="hud">
     <canvas id="mini" width="150" height="150" aria-label="Minimap"></canvas>
@@ -225,24 +251,40 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
   <div class="overlay" id="startScreen">
     <div class="card">
       <h1>VibeCraft<small>Grow a town, raise an army, and outlast your rivals, or out-build them with a Wonder.</small></h1>
-      <div class="row" style="gap:18px">
-        <div style="display:grid;gap:8px">
-          <h2>Computer players</h2>
-          <div class="seg" id="diff">
-            <button data-d="0" aria-pressed="false">Easy</button>
-            <button data-d="1" aria-pressed="true">Normal</button>
-            <button data-d="2" aria-pressed="false">Hard</button>
+      <section class="lobby" aria-labelledby="seatsTitle">
+        <div class="lobby-head">
+          <h2 id="seatsTitle">Players</h2>
+          <div class="skill"><span id="diffLabel">Computer skill</span>
+            <div class="seg" id="diff" aria-labelledby="diffLabel">
+              <button data-d="0" aria-pressed="false">Easy</button>
+              <button data-d="1" aria-pressed="true">Normal</button>
+              <button data-d="2" aria-pressed="false">Hard</button>
+            </div>
           </div>
         </div>
-        <div style="display:grid;gap:8px">
-          <h2>Opponents</h2>
-          <div class="seg" id="opp">
-            <button data-n="1" aria-pressed="true">1</button>
-            <button data-n="2" aria-pressed="false">2</button>
-            <button data-n="3" aria-pressed="false">3</button>
-          </div>
+        <ol class="seats" id="seats"></ol>
+        <div class="invite" id="inviteRow" hidden>
+          <label for="inviteLink">Invite friends with this link. They take a free seat when they open it.</label>
+          <div class="row"><input id="inviteLink" readonly spellcheck="false"><button class="ghost" id="copyLink">Copy link</button></div>
         </div>
-      </div>
+        <div class="row" id="openGames"></div>
+        <div class="row" id="joinRow" hidden>
+          <label for="joinLink">Got an invite?</label>
+          <input id="joinLink" placeholder="Paste the link" autocomplete="off" spellcheck="false">
+          <button class="ghost" id="joinBtn">Join</button>
+        </div>
+        <div class="row" id="relayRow" hidden>
+          <label for="relayUrl">Relay server</label>
+          <input id="relayUrl" value="ws://localhost:8787" spellcheck="false">
+          <span class="note">To play with friends from your own copy, run <code>node server.js</code> (see README).</span>
+        </div>
+        <p class="note" id="mpStatus" aria-live="polite"></p>
+        <p class="note net-status" id="netStatus"></p>
+        <div class="row">
+          <button class="go" id="startBtn">Begin</button>
+          <button class="ghost" id="leaveLobbyBtn" hidden>Play my own game instead</button>
+        </div>
+      </section>
       <dl class="keys">
         <div><dt>Left-click / drag</dt><dd>Select, box-select</dd></div>
         <div><dt>Right-click</dt><dd>Move, attack, gather, build</dd></div>
@@ -256,35 +298,6 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
         <div><dt><kbd class="k">M</kbd></dt><dd>Sound on or off</dd></div>
       </dl>
       <p class="note">Spears beat horsemen, horsemen beat archers, archers beat spears. Your Capitol and towers shoot back. Every unit eats food each minute: run out and your people starve. Grow from village to empire by building (<kbd class="k">K</kbd> shows the tech tree), and win by conquest or by finishing a Wonder.</p>
-      <button class="go" id="startBtn">Begin</button>
-      <section class="mp" aria-labelledby="mpTitle">
-        <h2 id="mpTitle">Play with a friend</h2>
-        <div class="row">
-          <button class="ghost" id="hostBtn">Host a game</button>
-          <strong class="code" id="hostCode" hidden></strong>
-          <button class="ghost" id="copyCode" hidden>Copy code</button>
-          <span class="or">or join</span>
-          <input id="joinCode" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Game code">
-          <button class="ghost" id="joinBtn">Join</button>
-        </div>
-        <div class="host-panel" id="hostPanel" hidden>
-          <ul class="players" id="lobbyPlayers"></ul>
-          <p class="note" id="roomCount"></p>
-          <div class="row">
-            <label for="aiFill">Add computer players</label>
-            <select id="aiFill"><option value="0">None</option><option value="1">1</option><option value="2">2</option></select>
-            <button class="go" id="mpStartBtn" disabled>Waiting for friends to join…</button>
-          </div>
-        </div>
-        <div class="row" id="openGames"></div>
-        <div class="row" id="relayRow" hidden>
-          <label for="relayUrl">Relay server</label>
-          <input id="relayUrl" value="ws://localhost:8787" spellcheck="false">
-          <span class="note">This copy isn't running on claude.ai, so games go through <code>node server.js</code> (see README).</span>
-        </div>
-        <p class="note" id="mpStatus" aria-live="polite"></p>
-        <p class="note net-status" id="netStatus"></p>
-      </section>
     </div>
   </div>
 

@@ -22,6 +22,8 @@ const ENT_STRIDE: usize = 18;
 
 struct World {
     game: Game,
+    /// Multiplayer only: the confirmed copy of the game (see `mp_save`).
+    other: Option<Game>,
     ents: Vec<f32>,
     res: Vec<f32>,
     proj: Vec<f32>,
@@ -53,7 +55,7 @@ fn game<R: Default>(f: impl FnOnce(&mut Game) -> R) -> R {
 /// Start a new game for `players` (2 to 4). Player 1 is this computer;
 /// the others are computer players until `setup_multiplayer` says otherwise.
 pub extern "C" fn init(seed: u32, difficulty: u32, players: u32) {
-    let world = World { game: Game::new(seed, difficulty, players.clamp(2, 4) as u8), ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512] };
+    let world = World { game: Game::new(seed, difficulty, players.clamp(2, 4) as u8), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512] };
     WORLD.with(|w| *w.borrow_mut() = Some(world));
 }
 
@@ -401,6 +403,56 @@ pub extern "C" fn defeated(p: u32) -> u32 {
 pub extern "C" fn local_player() -> u32 {
     game(|g| g.local as u32)
 }
+// ---- Multiplayer: two copies of the game ----
+// The LIVE copy is the one you play in and see: your commands go into it at
+// once. The CONFIRMED copy only moves forward with commands the host has put
+// in their final order. When the confirmed order turns out different from
+// what the live copy assumed (a friend's command came in), the live copy is
+// replaced by the confirmed one and the last few ticks are run again.
+// Every other export works on whichever copy is in `game`, so to step the
+// confirmed copy, JS swaps it in, steps it, and swaps it back.
+
+/// Make the confirmed copy: a copy of the game as it is now.
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_save() {
+    with(|w| w.other = Some(w.game.clone()))
+}
+
+/// Swap the live and confirmed copies.
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_swap() {
+    with(|w| {
+        if let Some(o) = w.other.as_mut() {
+            std::mem::swap(&mut w.game, o);
+        }
+    })
+}
+
+/// Throw away the live copy: make it a copy of the confirmed one.
+/// `clone_from` reuses the live copy's memory instead of allocating anew.
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_restore() {
+    // Two fields of the same struct can be borrowed separately, one
+    // mutably and one not: Rust tracks borrows per field.
+    with(|w| {
+        if let Some(o) = &w.other {
+            w.game.clone_from(o);
+        }
+    })
+}
+
+/// Back to one copy (multiplayer is over).
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_end() {
+    with(|w| w.other = None)
+}
+
+/// Fingerprint of one player's things only.
+#[unsafe(no_mangle)]
+pub extern "C" fn checksum_owner(owner: u32) -> u32 {
+    game(|g| g.checksum_owner(owner as u8))
+}
+
 /// Fingerprint of the game state, to detect multiplayer desyncs.
 #[unsafe(no_mangle)]
 pub extern "C" fn checksum() -> u32 {

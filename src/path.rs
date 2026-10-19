@@ -73,6 +73,18 @@ pub struct Pathfinder {
 
 const DIRS: [(i32, i32); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
 
+// Copying a game (for multiplayer's two copies) doesn't need to copy these
+// scratch buffers: no search result depends on what an earlier search left in
+// them. So a "copy" gets fresh buffers, and copying over an existing game
+// keeps that game's own buffers. Writing `Clone` by hand instead of
+// `#[derive(Clone)]` is how you say "copying this type means something special".
+impl Clone for Pathfinder {
+    fn clone(&self) -> Self {
+        Pathfinder::new(self.g.len())
+    }
+    fn clone_from(&mut self, _source: &Self) {}
+}
+
 impl Pathfinder {
     pub fn new(n: usize) -> Self {
         Pathfinder { g: vec![0.0; n], parent: vec![0; n], seen: vec![0; n], closed: vec![0; n], generation: 0, heap: BinaryHeap::new() }

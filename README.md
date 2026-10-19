@@ -26,7 +26,7 @@ cdn.jsdelivr.net, so the page needs an internet connection.
 | web/main.js     | Game loop, camera, input, HUD, minimap                           |
 | web/render3d.js | three.js scene: terrain, water, grass, models, fog of war, picking, icons |
 | web/audio.js    | Synthesized sound effects (Web Audio)                            |
-| web/net.js      | Multiplayer: lockstep, plus transports (claude.ai room / relay)  |
+| web/net.js      | Multiplayer: server, client (prediction), transports, trace      |
 | server.js       | A tiny WebSocket relay for multiplayer from your own copy        |
 
 The sim runs at a fixed 20 ticks/second (`Game::tick`). Each frame JS calls
@@ -54,33 +54,70 @@ citizen, Ctrl+1–9 groups, P pause, M sound.
 
 ## Multiplayer
 
-Up to four players, any mix of people and computer players. Lockstep:
-every computer runs the same deterministic simulation and only commands
-travel (`Command` in `src/game.rs`, `issue()` in `web/main.js`). The host
-sequences them: guests send commands to the host, the host bundles each
-turn's commands from everyone into a numbered frame and broadcasts it, and
-everyone runs the frames in order (`HostSeq` / `ClientSeq` in `web/net.js`).
-A checksum of the game state is compared every second to catch desyncs. If
-a guest leaves, the host puts "the computer takes over" into the next frame.
-No pausing or speed changes. In multiplayer the game steps on a Web Worker
-clock rather than on animation frames, so a slow graphics card or a
-background tab doesn't hold everyone else up.
+Up to four players, any mix of people and computer players. Every
+computer runs the same deterministic simulation and only commands travel
+(`Command` in `src/game.rs`, `issue()` in `web/main.js`).
 
-- On the published claude.ai page: "Host a game" gives a 4-letter code;
-  friends open the same page and join, then the host picks how many computer
-  players to add and starts. Friends must be signed in and invited to the
-  artifact (any access level, Viewer is enough: everything travels as
-  room *presence*, which anyone in the room may set). The line under "Play
-  with a friend" shows what claude.ai's room reports, for troubleshooting.
-  Browser privacy features (Firefox tracking protection, ad blockers) can
-  block it.
+Everyone follows one clock (20 ticks a second, kept by the host). A command
+is stamped with the tick it was given on and applied at once by the player
+who gave it, so your own units react instantly. Each computer keeps two
+copies of the game (`mp_save` / `mp_swap` / `mp_restore` in `src/lib.rs`):
+the **live** copy you play in, at "now", and the **confirmed** copy, a short
+window behind, which only moves forward with commands in their final order.
+
+- The **server** (`Server` in `web/net.js`, inside the host's tab) collects
+  everyone's commands. When the confirmed time reaches a tick, it bundles
+  the commands stamped for it and sends the bundle to every client. The
+  window is sized from the measured ping so commands arrive in time; a late
+  one goes into the next open tick.
+- Every player, the host too, runs a **client** (`Client`). It steps its
+  confirmed copy with each bundle and compares it with what the live copy
+  did. Usually they match and nothing happens. When a friend's command was
+  in the bundle, the live copy is replaced by the confirmed one and the
+  ticks since are run again with your own unconfirmed commands (about a
+  millisecond). Friends' actions show up one network trip late.
+
+Checksums of the confirmed copy are compared every second; drift ends the
+game for everyone. If a guest leaves, the host puts "the computer takes over"
+into a bundle. No pausing or speed changes. The game steps on animation
+frames and, in a background tab, on a Web Worker clock.
+
+Press F8 (or Net) during a game for the network details: ping, window, how
+often predictions were right (whole game, and your own things), corrections
+and why, whether a correction ever changed your own things or your
+selection, how late friends' commands show up, late commands, drift, stalls
+and message rates. "Copy trace" copies a second-by-second recording as JSON.
+
+The start screen is a lobby with four seats. Opening the page makes you the
+host of your own lobby; the other seats each hold a computer player or are
+left open. Friends join with an invite link (the page address plus `#CODE`)
+and take an open seat, or a computer's if none is open. The host can give a
+friend's seat back to the computer or remove them. Begin with no friends
+seated is a single-player game. Each lobby is a room named after its code,
+and the game runs in that same room; the host's presence there carries the
+seat list (`openOwnLobby`, `joinLobby`, `beginGame` in `web/main.js`).
+
+- On the published claude.ai page: links can't reach the page inside
+  claude.ai, so everyone's lobby is listed instead ("Join game XXXXXX"), and
+  invite links can be pasted. Friends must be signed in and invited to the
+  artifact (Viewer is enough: everything travels as room *presence*, which
+  anyone in the room may set). The small line under the lobby shows what
+  claude.ai's room reports, for troubleshooting. Browser privacy features
+  (Firefox tracking protection, ad blockers) can block it.
 - From your own copy (`dist/vibecraft.html`): run `node server.js` (no
-  dependencies), then everyone uses the relay address shown under "Play with
-  a friend", e.g. `ws://192.168.1.20:8787` for friends on your network. You
-  can test alone with several browser windows.
+  dependencies) and enter its address under "Relay server", e.g.
+  `ws://192.168.1.20:8787` for friends on your network. Friends with their
+  own copy paste your invite link. You can test alone with several windows.
 - From a web server: serve the page and proxy `./relay` next to it to
   `server.js`; the page then fills in that relay address by itself
-  (`wss://<host>/<path>/relay`), so friends just open the URL.
+  (`wss://<host>/<path>/relay`), so invite links just work.
+
+The relay only accepts pages from its own site (`ALLOWED_ORIGINS`, default
+`https://ginnu.freemyip.com`), local copies and home-network addresses,
+limits connections (`MAX_CONNECTIONS`, `MAX_PER_IP`), message size (16 KB),
+stored state (8 KB per connection) and message rate (60 a second, closing
+connections that keep flooding), shrugs off malformed messages, and pings
+every 30 s to drop connections that have gone quiet.
 
 ## Deployment
 
@@ -103,7 +140,9 @@ To update:
 
     ./build.sh && scp dist/vibecraft.html ginnu:/var/www/vibecraft/index.html
     # if server.js changed:
-    scp server.js ginnu:/opt/vibecraft/ && ssh ginnu systemctl restart vibecraft-relay
+    scp server.js ginnu:/opt/vibecraft/ && ssh -t ginnu sudo systemctl restart vibecraft-relay
+    # if deploy/nginx-vibecraft.conf changed:
+    scp deploy/nginx-vibecraft.conf ginnu:/tmp/ && ssh -t ginnu 'sudo mv /tmp/nginx-vibecraft.conf /etc/nginx/snippets/vibecraft.conf && sudo nginx -t && sudo systemctl reload nginx'
 
 ## Players and maps
 

@@ -116,7 +116,7 @@ const stage = $("stage");
 
 let MW = 80, MH = 80;
 let terrainCanvas, terrainSmall, fogCanvas, fogCtx, fogImg;
-let difficulty = 1, seed = 1, opponents = 1;
+let difficulty = 1, seed = 1;
 // The camera looks at map point (x, y) from `dist` away, tilted down by `pitch`,
 // turned by `yaw` (middle-drag rotates).
 let cam = { x: 40, y: 40, dist: 24, pitch: 0.95, yaw: 0 };
@@ -598,9 +598,9 @@ function explain(code) {
 
 // ===========================================================================
 // Commands. Everything the player tells the game goes through `issue`, as a
-// small plain object: {c: code, ids: [...], x, y, a}. In single player it
-// runs at once. In multiplayer it's handed to the lockstep, which runs it on
-// both computers a few turns from now. (Codes: see `command` in lib.rs.)
+// small plain object: {c: code, ids: [...], x, y, a}. It runs at once. In
+// multiplayer it's also handed to the client (net.js), which sends it to the
+// host, stamped with this tick. (Codes: see `command` in lib.rs.)
 // On the wire, and everywhere after `issue`, a command is a flat array of
 // numbers: [code, arg, x, y, ...ids]. Compact (it has to fit, with others,
 // into 4 KiB messages) and shallow. x and y are rounded to 1/100 of a tile
@@ -608,20 +608,32 @@ function explain(code) {
 function issue(cmd) {
   const r2 = v => Math.round((v || 0) * 100) / 100;
   const arr = [cmd.c, cmd.a || 0, r2(cmd.x), r2(cmd.y), ...(cmd.ids || []).slice(0, 60)];
-  if (mp) { mp.queue(arr); return 0; }
-  return applyCmd(ME, arr);
+  const code = applyCmd(ME, arr);
+  if (mp) mp.queue(arr);
+  return code;
 }
+// Run one command on whichever copy of the game is current. No sounds, no
+// messages: multiplayer also uses this to replay commands.
 function applyCmd(owner, arr) {
   const [c, a, x, y] = arr, ids = arr.slice(4);
   if (c === 7 && owner !== 0) return 0; // only the host's system messages may do that
-  if (c === 7) toast(`${PNAME[a] || "A player"} left. The computer takes over their people.`);
   const p = W.scratch_ptr() >>> 2, buf = new Uint32Array(mem.buffer);
   ids.forEach((id, n) => { buf[p + n] = id; });
-  const code = W.command(owner, c, ids.length, x, y, a);
-  // In multiplayer we only learn now (a moment later) whether it worked.
-  if (code && mp && owner === ME) { toast(explain(code), "bad"); Sfx.ui("error"); }
-  return code;
+  return W.command(owner, c, ids.length, x, y, a);
 }
+// How the multiplayer client (net.js) reaches the game.
+const mpHooks = {
+  apply: applyCmd,
+  // Carry the selection over a correction: same ids, and say whether any of
+  // them now means something else.
+  keep() { readWorld(); return selection().map(i => [E(i, F.id), E(i, F.kind)]); },
+  restore(kept) {
+    setSelection(kept.map(k => k[0]));
+    const now = new Map(selection().map(i => [E(i, F.id), E(i, F.kind)]));
+    return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
+  },
+  system(cmd) { if (cmd[0] === 7) toast(`${PNAME[cmd[1]] || "A player"} left. The computer takes over their people.`); },
+};
 // Commands arriving from the network are someone else's input: check the shape.
 function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
@@ -846,6 +858,7 @@ mini.addEventListener("pointerup", () => { miniDrag = false; });
 const SCROLL_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 window.addEventListener("keydown", e => {
   if (!running) return;
+  if (e.key === "F8") { e.preventDefault(); toggleTrace(); return; }
   if (SCROLL_KEYS.has(e.code)) { keys.add(e.code); e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
@@ -965,10 +978,11 @@ let stalledSince = 0;
 
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
+  if (mp && Trace.cur && last) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
   last = now;
   if (running) {
     scrollCamera(dt);
-    if (mp) { if (!workerClock) stepMultiplayer(dt, now); /* else the worker clock steps it */ }
+    if (mp) pumpMultiplayer(performance.now(), false);
     else if (!paused) {
       acc += dt * 1000 * speed;
       let steps = 0;
@@ -978,7 +992,10 @@ function loop(now) {
     }
     readWorld();
     if (frame % 3 === 0) updateFog();
-    render3d(paused && !mp ? 1 : Math.min(1, acc / SIM_MS), now, dt);
+    // How far between the last tick and the next one we are. In multiplayer,
+    // count the time since the clock last moved, so motion stays smooth.
+    const along = mp ? mp.alpha() * SIM_MS : acc;
+    render3d(paused && !mp ? 1 : Math.min(1, along / SIM_MS), now, dt);
     drawOverlay();
     updateHoverCursor(now);
     if (frame % 4 === 0) drawMinimap();
@@ -995,58 +1012,97 @@ function loop(now) {
 }
 let titleSpin = false;
 
-// In multiplayer the game is stepped on its own clock, not on animation
-// frames: a slow graphics card, or a tab in the background (where browsers
-// all but stop animation frames), would otherwise slow down everyone. A tiny
-// Web Worker keeps time (workers aren't throttled the way pages are), and
-// animation frames only draw.
-let bgLast = 0, workerClock = false;
+// In multiplayer the game is stepped by whichever comes first: an animation
+// frame (smooth, up to 60 times a second, but browsers pause them in a
+// background tab), or a tiny Web Worker that ticks every 50 ms (workers keep
+// running in the background, so one player's hidden tab doesn't stall
+// everyone). Both call pumpMultiplayer, which measures time from the same
+// clock, so calling it twice just means a smaller step.
+let workerClock = false, lastPump = 0;
 try {
   const src = "setInterval(() => postMessage(0), 50);";
   const worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
   workerClock = true;
-  worker.onmessage = () => {
-    const now = performance.now();
-    const dt = Math.min(0.25, (now - (bgLast || now)) / 1000);
-    bgLast = now;
-    if (!running || !mp) return;
-    for (const look of roomLookers) look();
-    stepMultiplayer(dt, now);
-    if (W.state() !== 0) endGame();
-  };
+  worker.onmessage = () => { if (running && mp) pumpMultiplayer(performance.now(), true); };
 } catch { /* no workers here: background tabs will just be slow */ }
 
-// Multiplayer stepping: run ticks only as far as everyone's commands allow.
-function stepMultiplayer(dt, now) {
-  acc += dt * 1000;
-  let steps = 0, stalled = false;
-  while (acc >= SIM_MS && steps < 8) {
-    if (simTick % NET.TURN_TICKS === 0) {
-      const T = simTick / NET.TURN_TICKS;
-      if (!mp.canRun(T)) { stalled = true; acc = Math.min(acc, SIM_MS); break; }
-      mp.seal(T);
-      mp.runTurn(T, (owner, c) => { const cmd = cleanCmd(c); if (cmd) applyCmd(owner, cmd); });
-    }
-    W.tick(); simTick++; acc -= SIM_MS; steps++;
-    if (simTick % NET.TURN_TICKS === 0) mp.afterTurn(simTick / NET.TURN_TICKS - 1, W.checksum());
-  }
-  if (steps === 8) acc = 0;
+function pumpMultiplayer(now, fromWorker) {
+  if (fromWorker && Trace.cur && lastPump) Trace.cur.maxClockGap = Math.max(Trace.cur.maxClockGap, Math.round(now - lastPump));
+  lastPump = now;
+  for (const look of roomLookers) look();
+  stepMultiplayer(now);
+  // The game is over only once the confirmed copy says so.
+  if (mp && W.state() !== 0 && mp.finalState !== 0) endGame();
+}
+
+// Multiplayer stepping: the client does the work (net.js).
+function stepMultiplayer(now) {
+  const { steps, stalled } = mp.pump();
+  if (!mp) return; // the game ended in there (drift found)
+  simTick = mp.live;
   if (steps) handleEvents();
+  if (Trace.cur) Trace.cur.ticks += steps;
   if (stalled) {
-    mp.keepAlive();
-    if (!stalledSince) stalledSince = now;
-  } else stalledSince = 0;
+    if (!stalledSince) { stalledSince = now; Trace.event("stall", { live: mp.live, final: mp.final }); }
+  } else if (stalledSince) {
+    const ms = Math.round(now - stalledSince);
+    if (Trace.cur) Trace.cur.stallMs += ms;
+    Trace.event("resume", { ms });
+    stalledSince = 0;
+  }
+  if (Trace.roll(now, mp.snapshot())) renderTrace();
+  if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
   h.hidden = !(stalledSince && now - stalledSince > 700);
   if (!h.hidden) h.textContent = ME === 1 ? "Waiting for the other players…" : "Waiting for the host…";
-  if (mp instanceof ClientSeq && now - mp.lastHeard > 15000) endMultiplayer("Lost contact with the host.");
-  if (mp instanceof HostSeq) for (const s of mp.silent(20000)) dropPlayer(s);
+  if (!mp.server && now - mp.lastHeard > 15000) endMultiplayer("Lost contact with the host.");
+  if (mp && mp.server) for (const s of mp.server.silent(20000)) dropPlayer(s);
 }
 
-// Start a game. Single player: `players` is you plus the computer opponents.
+// ---- the trace panel (F8) ----
+function renderTrace() {
+  const box = $("netTrace");
+  if (box.hidden || !mp) return;
+  const s = Trace.samples[Trace.samples.length - 1];
+  if (!s) { $("netTraceBody").textContent = "Measuring…"; return; }
+  const ms = n => n == null ? "?" : `${n} ms`;
+  const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : "–";
+  const st = s.stats, tick = NET.TICK_MS;
+  const lines = [];
+  lines.push(`You: ${s.role} (${PNAME[ME]}) · ${Trace.info.transport} · window ${s.window} ticks (${s.window * tick} ms)`);
+  if (s.server) {
+    for (const [slot, g] of Object.entries(s.server.guests)) lines.push(`${PNAME[slot]}: ${g.active ? "" : "(left) "}ping ${ms(g.rtt)} ±${g.dev ?? "?"} · late commands ${g.late} · heard ${ms(g.heardAgo)} ago`);
+  } else {
+    lines.push(`Ping to host: ${ms(s.rtt)} ±${s.dev} · clock off by ${ms(s.clockErr)} · heard ${ms(s.heardAgo)} ago`);
+  }
+  lines.push(`Live runs ${s.ahead} ticks ahead of confirmed · my unconfirmed commands ${s.pending}`);
+  lines.push(`Predictions right: whole game ${pct(st.matched, st.compared)}, my own things ${pct(st.mineMatched, st.compared)} (of ${st.compared} ticks)`);
+  lines.push(`Corrections ${st.corrections} (friend ${st.remote}, mine moved ${st.moved}, system ${st.system}, behind ${st.behind}) · re-ran ${st.resimTicks} ticks`);
+  lines.push(`…that changed my own things ${st.mineChanged} · moved my selection ${st.selChanged}`);
+  lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
+  lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);
+  lines.push(`Messages in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, longest gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`);
+  lines.push(`Longest frame ${ms(s.maxFrameGap)} · longest clock gap ${ms(s.maxClockGap)}`);
+  $("netTraceBody").textContent = lines.join("\n");
+}
+function toggleTrace(show = $("netTrace").hidden) {
+  $("netTrace").hidden = !show || !mp;
+  renderTrace();
+}
+$("netBtn").onclick = () => toggleTrace();
+$("netTraceClose").onclick = () => toggleTrace(false);
+$("netTraceCopy").onclick = () => {
+  const text = Trace.dump(), btn = $("netTraceCopy");
+  const showIt = () => { const t = $("netTraceText"); t.hidden = false; t.value = text; t.focus(); t.select(); btn.textContent = "Press Ctrl+C"; };
+  try { navigator.clipboard.writeText(text).then(() => { btn.textContent = `Copied (${Math.round(text.length / 1024)} KB)`; setTimeout(() => { btn.textContent = "Copy trace"; }, 2000); }, showIt); }
+  catch { showIt(); }
+};
+document.addEventListener("visibilitychange", () => { if (mp) Trace.event(document.hidden ? "tab hidden" : "tab shown", {}); });
+
+// Start a game. Single player: `players` is you plus the computer players.
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
-function newGame(seedArg, local = 0, players = opponents + 1) {
+function newGame(seedArg, local = 0, players = 2) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
   W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
@@ -1119,167 +1175,311 @@ function togglePause() {
   $("pauseBtn").textContent = paused ? "Resume" : "Pause";
 }
 
-// The connection status line: what claude.ai's room says right now. Helps
+
+// The connection status line on claude.ai: what the room says right now. Helps
 // tell "blocked by the browser" from "not invited" from "nobody else here".
 function renderNetStatus() {
   const el = $("netStatus");
   if (!el || $("startScreen").hidden) return;
   const d = Net.diag;
-  if (!d.onClaude) { el.textContent = "Online: through a relay server (this copy isn't on claude.ai)."; return; }
+  if (!d.onClaude) { el.textContent = ""; return; }
   let t = `Online: ${d.room}`;
   if (Net.room) {
     const c = Net.room.connected ? Net.room.connected() : null;
     t += c === true ? ", connected" : c === false ? ", not connected yet" : "";
-    if (lobby && lobby.count) t += ` · ${lobby.count()} other ${lobby.count() === 1 ? "person" : "people"} on this page`;
+    if (pageRoom && pageRoom.count) { const n = pageRoom.count(); t += ` · ${n} other ${n === 1 ? "person" : "people"} on this page`; }
   }
   if (d.errors.length) t += ` · problems: ${d.errors.join("; ")}`;
   el.textContent = t;
 }
 
 // ===========================================================================
-// Multiplayer lobby. The host gets a code, friends join it, the host picks
-// how many computer players to add and starts. Up to 4 players in all.
-let lobby = null, gameNet = null, lastWasMultiplayer = false, startTimer = 0;
-let hosting = null;   // while hosting: { code, seed, guests: Map(token -> first seen) }
-const myToken = Math.random().toString(36).slice(2, 10); // who I am in a game room
+// The lobby. Opening the page makes you the host of your own lobby with four
+// seats: yours, and three that each hold a computer player or are left open.
+// Friends join with an invite link (this page's address plus #CODE) and take
+// an open seat, or a computer's if none is open. Begin with no friends seated
+// is an ordinary single-player game; with friends, it's multiplayer.
+//
+// The lobby lives in a network room named after its code, and the game then
+// runs in that same room. The host's presence there carries the seat list,
+// which is how guests see it.
+//
+// A seat is a string, which is also how it travels: "host", "ai", "open", or
+// "f:<token>" for a friend.
+let seats = ["host", "ai", "open", "open"];
+let room = null;        // the lobby's room (and then the game's)
+let roomCode = null;    // my own lobby's code, kept for the whole visit so my link keeps working
+let guestOf = null;     // as a guest: { code, host (the host's presence, or null), lostAt }
+let pageRoom = null;    // claude.ai only: the page-wide room where lobbies are listed
+let lobbyGen = 0;       // bumped on every lobby switch, so late answers from an old one are ignored
+let netOk = false;      // can this page go online at all?
+let lastPlayers = 2, lastWasMultiplayer = false, startTimer = 0;
+const kicked = new Set();  // friends the host removed: they don't get a seat again
+const played = new Set();  // games already played, so a leftover "start" never restarts one
+const myToken = Math.random().toString(36).slice(2, 10); // who I am in a room
 const mpStatus = (text, bad = false) => { const s = $("mpStatus"); s.textContent = text; s.classList.toggle("bad", bad); };
-const randomCode = () => Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
+const randomCode = () => Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
 const okToken = t => typeof t === "string" && /^[a-z0-9]{4,12}$/.test(t);
+const isFriend = s => typeof s === "string" && s.startsWith("f:");
+// The code at the end of an invite link (or a bare code).
+const codeIn = text => { const m = String(text || "").trim().toUpperCase().match(/(?:^|#)([A-Z0-9]{6})$/); return m ? m[1] : null; };
+const inGame = () => $("startScreen").hidden;
 
-async function connectLobby() {
-  if (lobby) return lobby;
-  const relay = $("relayUrl").value.trim();
-  await Net.init(relay);
-  lobby = await Net.lobby();
-  // Hosts advertise their game in the lobby; show them as one-click joins.
-  lobby.onPeers(peers => {
-    const box = $("openGames");
-    box.replaceChildren();
-    for (const p of peers) {
-      const code = p.presence && p.presence.hosting;
-      if (typeof code !== "string" || !/^[A-Z0-9]{4}$/.test(code) || p.presence.v !== NET.PROTOCOL) continue;
-      const b = document.createElement("button");
-      b.className = "ghost"; b.textContent = `Join game ${code}`;
-      b.onclick = () => joinGame(code);
-      box.append(b);
-    }
-  });
-  return lobby;
+// The player number a seat gets: open seats are skipped.
+function slotOf(i, list) {
+  if (list[i] === "open") return 0;
+  let n = 0;
+  for (let k = 0; k <= i; k++) if (list[k] !== "open") n++;
+  return n;
 }
 
-// The host's view of who has joined, and the Start button.
-function renderHostPanel() {
-  const panel = $("hostPanel");
-  panel.hidden = !hosting;
-  if (!hosting) return;
-  const guests = [...hosting.guests.keys()].slice(0, 3);
-  const ais = Math.min(+$("aiFill").value, 3 - guests.length);
-  const slots = [`<li style="color:${PLIGHT[1]}">Blue: you</li>`];
-  guests.forEach((_, i) => slots.push(`<li style="color:${PLIGHT[i + 2]}">${PNAME[i + 2]}: a friend</li>`));
-  for (let k = 0; k < ais; k++) { const s = guests.length + 2 + k; slots.push(`<li style="color:${PLIGHT[s]}">${PNAME[s]}: computer</li>`); }
-  $("lobbyPlayers").innerHTML = slots.join("");
-  // How many others the room says are here at all: tells "nobody's
-  // connected" apart from "they're here but not joining as players".
-  const inRoom = gameNet && gameNet.count ? gameNet.count() : null;
-  $("roomCount").textContent = inRoom === null ? "" : `${inRoom} other ${inRoom === 1 ? "person" : "people"} in this game's room.`;
-  $("mpStartBtn").disabled = guests.length === 0;
-  $("mpStartBtn").textContent = guests.length ? `Start game (${1 + guests.length + ais} players)` : "Waiting for friends to join…";
+function inviteLink() {
+  if (!room || guestOf || Net.room) return null; // on claude.ai, lobbies are listed instead
+  return location.href.split("#")[0] + "#" + roomCode;
 }
 
-async function hostGame() {
-  try {
-    leaveMultiplayer();
-    await connectLobby();
-    const code = randomCode();
-    gameNet = await Net.game(code);
-    hosting = { code, seed: (Math.random() * 1e9) >>> 0, guests: new Map() };
-    gameNet.presence({ role: "host", v: NET.PROTOCOL, token: myToken });
-    lobby.presence({ hosting: code, v: NET.PROTOCOL });
-    $("hostCode").textContent = code; $("hostCode").hidden = false; $("copyCode").hidden = false;
-    mpStatus(`Hosting game ${code}. Friends open this page and join it.`);
-    gameNet.onPeers(peers => {
-      const here = new Set();
-      for (const p of peers) {
-        const pr = p.presence || {};
-        if (pr.role !== "guest" || pr.v !== NET.PROTOCOL || !okToken(pr.token)) continue;
-        here.add(pr.token);
-        if (hosting && !hosting.guests.has(pr.token) && !mp) hosting.guests.set(pr.token, performance.now());
+function renderLobby() {
+  const guest = !!guestOf;
+  const list = guest ? (guestOf.host ? guestOf.host.seats : []) : seats;
+  const ol = $("seats");
+  ol.replaceChildren();
+  list.forEach((s, i) => {
+    const slot = slotOf(i, list);
+    const li = document.createElement("li");
+    li.className = "seat" + (slot ? "" : " closed");
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = slot ? PCOL[slot] : "transparent";
+    if (!slot) sw.style.border = "1px dashed var(--line)";
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = s === "host" ? (guest ? "Host" : "You")
+      : s === "f:" + myToken ? "You"
+      : isFriend(s) ? "Friend"
+      : s === "ai" ? "Computer"
+      : room ? "Open for a friend" : "Empty";
+    if (slot) who.style.color = PLIGHT[slot];
+    li.append(sw, who);
+    if (!guest && i > 0) {
+      // The host decides who sits where.
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", `Seat ${i + 1}`);
+      const opts = isFriend(s) ? [["friend", "Friend"], ["ai", "Give to computer"], ["open", "Remove"]]
+        : [["ai", "Computer"], ["open", room ? "Open" : "Empty"]];
+      for (const [v, label] of opts) {
+        const o = document.createElement("option");
+        o.value = v; o.textContent = label;
+        o.selected = v === s || (v === "friend" && isFriend(s));
+        sel.append(o);
       }
-      if (hosting && !mp) for (const t of hosting.guests.keys()) if (!here.has(t)) hosting.guests.delete(t);
-      // During the game: anyone who has left is handed to the computer.
-      if (mp instanceof HostSeq) for (const [slot, t] of mp.tokens) if (!here.has(t)) dropPlayer(slot);
-      renderHostPanel();
-    });
-    renderHostPanel();
-  } catch (e) { mpStatus(String(e.message || e), true); }
+      sel.onchange = () => setSeat(i, sel.value);
+      li.append(sel);
+    } else if (slot) {
+      const tag = document.createElement("span");
+      tag.className = "tag"; tag.textContent = PNAME[slot];
+      li.append(tag);
+    }
+    ol.append(li);
+  });
+  const active = list.filter(s => s !== "open").length;
+  const friends = list.filter(isFriend).length;
+  const btn = $("startBtn");
+  btn.hidden = guest;
+  $("leaveLobbyBtn").hidden = !guest;
+  btn.disabled = active < 2;
+  btn.textContent = active < 2 ? "Add an opponent to begin" : friends ? `Start game (${active} players)` : "Begin";
+  const link = inviteLink();
+  $("inviteRow").hidden = !link;
+  if (link && $("inviteLink").value !== link) $("inviteLink").value = link;
+  const diff = guest && guestOf.host ? guestOf.host.diff : difficulty;
+  for (const b of $("diff").children) { b.disabled = guest; b.setAttribute("aria-pressed", String(+b.dataset.d === diff)); }
 }
 
-function hostStart() {
-  if (!hosting || mp) return;
-  const tokens = [...hosting.guests.keys()].slice(0, 3);
-  if (!tokens.length) return;
-  const ais = Math.min(+$("aiFill").value, 3 - tokens.length);
-  const n = 1 + tokens.length + ais;
-  const slots = Object.fromEntries(tokens.map((t, i) => [t, i + 2]));
-  const aiSlots = [...Array(ais)].map((_, k) => tokens.length + 2 + k);
-  const settings = { v: NET.PROTOCOL, seed: hosting.seed, n, slots, ai: aiSlots, diff: difficulty, host: myToken };
+function setSeat(i, v) {
+  const s = seats[i];
+  if (isFriend(s)) { if (v === "friend") return; kicked.add(s.slice(2)); }
+  seats[i] = v;
+  lobbyChanged();
+}
+function lobbyChanged() { publishLobby(); renderLobby(); }
+function publishLobby() {
+  if (!room || guestOf) return;
+  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, seats, diff: difficulty, playing: inGame(), kicked: [...kicked].slice(-20) });
+}
+
+// The host's view of the room: seat whoever has arrived, free the seats of
+// whoever has gone. During a game, anyone gone is handed to the computer.
+function onHostPeers(peers) {
+  const here = new Set();
+  for (const p of peers) {
+    const pr = p.presence || {};
+    if (pr.role !== "guest" || pr.v !== NET.PROTOCOL || !okToken(pr.token)) continue;
+    here.add(pr.token);
+    if (mp && mp.server) {
+      if (pr.playing === mp.server.gameId) mp.server.seenPlaying.add(pr.token);
+      else if (mp.server.seenPlaying.has(pr.token)) here.delete(pr.token); // was in the game, now back in the lobby
+    }
+  }
+  if (mp && mp.server) { for (const [slot, t] of mp.server.tokens) if (!here.has(t)) dropPlayer(slot); return; }
+  if (mp) return;
+  let changed = false;
+  seats.forEach((s, i) => { if (isFriend(s) && !here.has(s.slice(2))) { seats[i] = "open"; changed = true; } });
+  for (const t of here) {
+    if (kicked.has(t) || seats.includes("f:" + t)) continue;
+    let i = seats.indexOf("open");
+    if (i < 0) i = seats.lastIndexOf("ai");
+    if (i < 0) break; // full
+    seats[i] = "f:" + t;
+    changed = true;
+    if (!inGame()) Sfx.ui("trained");
+  }
+  if (changed) lobbyChanged();
+}
+
+// Leave whatever room we're in.
+function closeRoom() {
+  clearInterval(startTimer);
+  if (room) room.leave();
+  room = null; mp = null;
+  if (pageRoom) pageRoom.presence({ hosting: null });
+}
+
+// Be the host of my own lobby (what the page does when it opens).
+async function openOwnLobby(note = "", bad = false) {
+  const gen = ++lobbyGen;
+  closeRoom();
+  guestOf = null;
+  if (codeIn(location.hash)) try { history.replaceState(null, "", location.href.split("#")[0]); } catch { /* not allowed here */ }
+  seats = seats.map(s => isFriend(s) ? "open" : s);
+  renderLobby();
+  mpStatus(note, bad);
+  if (!netOk) return;
+  roomCode = roomCode || randomCode();
+  try {
+    const r = await Net.game(roomCode);
+    if (gen !== lobbyGen) { r.leave(); return; }
+    room = r;
+    room.onPeers(onHostPeers);
+    publishLobby();
+    if (pageRoom) pageRoom.presence({ hosting: roomCode, v: NET.PROTOCOL });
+    renderLobby();
+  } catch (e) {
+    if (gen !== lobbyGen) return;
+    mpStatus(Net.room ? String(e.message || e) : "Playing with friends needs the relay server, which isn't reachable. You can still play against the computer.", !!Net.room);
+  }
+}
+
+// Sit in someone else's lobby.
+async function joinLobby(code) {
+  if (!code || code === roomCode && !guestOf) return;
+  const gen = ++lobbyGen;
+  closeRoom();
+  guestOf = { code, host: null, lostAt: performance.now() };
+  renderLobby();
+  if (!netOk) { openOwnLobby("This page can't go online, so it can't join that game.", true); return; }
+  mpStatus("Looking for the game…");
+  try {
+    const r = await Net.game(code);
+    if (gen !== lobbyGen) { r.leave(); return; }
+    room = r;
+    room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: null });
+    room.on("start", onStart);
+    room.onPeers(onGuestPeers);
+  } catch (e) {
+    if (gen === lobbyGen) openOwnLobby(`Couldn't join that game: ${e.message || e}`, true);
+  }
+}
+
+function onGuestPeers(peers) {
+  if (!guestOf) return;
+  const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && Array.isArray(pr.seats));
+  if (mp) { if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game."); return; }
+  if (!host) { if (guestOf.host) { guestOf.host = null; guestOf.lostAt = performance.now(); } renderLobby(); return; }
+  guestOf.host = host;
+  if (Array.isArray(host.kicked) && host.kicked.includes(myToken)) { openOwnLobby("The host gave your seat away. Here's your own game.", true); return; }
+  const seated = host.seats.includes("f:" + myToken);
+  mpStatus(!seated ? "No free seat right now. You'll get one if the host opens a seat."
+    : host.playing ? "The host is in a game. You'll play together when they're back."
+    : "You're in. Waiting for the host to start…");
+  renderLobby();
+}
+
+// Once a second: a guest whose host is gone for good goes back to their own lobby.
+function lobbyTick() {
+  if (guestOf && !mp && !guestOf.host && performance.now() - guestOf.lostAt > 8000)
+    openOwnLobby("That game isn't open any more. Here's your own.", true);
+}
+
+// A guest: the host started the game.
+function onStart(d) {
+  if (mp || !guestOf || !d || d.v !== NET.PROTOCOL || typeof d.seed !== "number" || !d.slots || typeof d.id !== "string" || played.has(d.id)) return;
+  const slot = d.slots[myToken];
+  if (typeof slot !== "number") return;
+  played.add(d.id);
+  const client = new Client(slot, room, myToken, mpHooks, endMultiplayer);
+  client.hostToken = d.host;
+  room.presence({ playing: d.id }); // tells the host I'm in this game
+  startMultiplayer(slot, d, client);
+}
+
+// The host pressed Begin.
+function beginGame() {
+  if (guestOf || mp) return;
+  const active = seats.filter(s => s !== "open");
+  if (active.length < 2) return;
+  if (!room || !active.some(isFriend)) {
+    lastWasMultiplayer = false; lastPlayers = active.length;
+    $("startScreen").hidden = true;
+    newGame(undefined, 0, active.length);
+    running = true;
+    publishLobby(); // friends who arrive now wait for the next game
+    return;
+  }
+  const slots = {}, ai = [];
+  active.forEach((s, k) => { if (isFriend(s)) slots[s.slice(2)] = k + 1; else if (s === "ai") ai.push(k + 1); });
+  const settings = { v: NET.PROTOCOL, id: randomCode() + Date.now(), seed: (Math.random() * 1e9) >>> 0, n: active.length, slots, ai, diff: difficulty, host: myToken };
   // Keep telling the guests until all of them have answered.
-  const send = () => gameNet && gameNet.emit("start", settings);
+  const send = () => room && room.emit("start", settings);
   send();
   startTimer = setInterval(() => {
-    if (!(mp instanceof HostSeq)) return clearInterval(startTimer);
-    const waiting = [...mp.active].some(s => mp.ack.get(s) < NET.DELAY);
-    if (waiting) send(); else clearInterval(startTimer);
+    if (!(mp && mp.server)) return clearInterval(startTimer);
+    if (mp.server.waitingForStart()) send(); else clearInterval(startTimer);
   }, 400);
-  lobby && lobby.presence({ hosting: null });
-  startMultiplayer(1, settings, new HostSeq(gameNet, Object.entries(slots).map(([t, s]) => [s, t]), endMultiplayer));
-}
-
-async function joinGame(code) {
-  code = String(code || "").trim().toUpperCase();
-  if (!/^[A-Z0-9]{4}$/.test(code)) { mpStatus("A game code is 4 letters or digits.", true); return; }
-  try {
-    leaveMultiplayer();
-    await connectLobby();
-    gameNet = await Net.game(code);
-    gameNet.presence({ role: "guest", v: NET.PROTOCOL, token: myToken });
-    mpStatus(`Joined game ${code}. Waiting for the host to start…`);
-    let hostToken = null;
-    gameNet.on("start", d => {
-      if (mp || !d || d.v !== NET.PROTOCOL || typeof d.seed !== "number" || !d.slots) return;
-      const slot = d.slots[myToken];
-      if (typeof slot !== "number") { mpStatus("That game started without you.", true); return; }
-      hostToken = d.host;
-      startMultiplayer(slot, d, new ClientSeq(gameNet, slot, myToken, endMultiplayer));
-    });
-    gameNet.onPeers(peers => {
-      const hostHere = peers.some(p => p.presence && p.presence.role === "host" && (!hostToken || p.presence.token === hostToken));
-      if (mp && !hostHere) endMultiplayer("The host left the game.");
-    });
-  } catch (e) { mpStatus(String(e.message || e), true); }
+  if (pageRoom) pageRoom.presence({ hosting: null });
+  // The host runs the server and, like everyone, a client.
+  const client = new Client(1, null, myToken, mpHooks, endMultiplayer);
+  client.server = new Server(room, Object.entries(slots).map(([t, s]) => [s, t]), client, endMultiplayer);
+  client.server.gameId = settings.id; client.server.seenPlaying = new Set();
+  startMultiplayer(1, settings, client);
 }
 
 function startMultiplayer(me, d, seq) {
   const n = Math.max(2, Math.min(4, d.n | 0));
   difficulty = [0, 1, 2].includes(d.diff) ? d.diff : 1;
+  $("startScreen").hidden = true;
   newGame(d.seed >>> 0, me, n);
   for (const s of Array.isArray(d.ai) ? d.ai : []) W.set_ai(s, 1);
+  W.mp_save(); // the confirmed copy starts out identical
   mp = seq;
+  lastPump = 0;
+  // Building the map can take a few seconds: the host's clock starts now.
+  if (mp.server) mp.server.t0 = performance.now();
+  Trace.start({ role: me === 1 ? "host" : "guest", me, players: n, transport: room && room.kind === "socket" ? "relay" : "claude.ai room", relay: room && room.kind === "socket" ? Net.relayUrl : undefined });
+  $("netBtn").hidden = false;
   // Building the map can take a few seconds on a slow computer: only start
   // the "haven't heard from you" clocks once we're ready to play.
   mp.lastHeard = performance.now();
-  if (mp.heard) for (const s of mp.heard.keys()) mp.heard.set(s, performance.now());
+  if (mp.server) for (const s of mp.server.heard.keys()) mp.server.heard.set(s, performance.now());
   lastWasMultiplayer = true;
-  hosting = null; renderHostPanel();
-  $("startScreen").hidden = true;
   running = true;
+  publishLobby();
   toast(`You are ${PNAME[me]}. ${n} players.`, "good");
 }
 
 // A guest left: the computer takes over their people (in the next frame).
 function dropPlayer(slot) {
-  if (!(mp instanceof HostSeq) || !mp.active.has(slot)) return;
-  mp.drop(slot);
+  if (!(mp && mp.server) || !mp.server.active.has(slot)) return;
+  mp.server.drop(slot);
 }
 
 function endMultiplayer(reason) {
@@ -1288,60 +1488,76 @@ function endMultiplayer(reason) {
   $("endTitle").textContent = "Game over";
   $("endWhy").textContent = reason;
   showEndStats();
-  leaveMultiplayer();
+  finishMultiplayer();
 }
 
-function leaveMultiplayer() {
+// The game is over (or we left it). We stay in the room: back in the lobby,
+// everyone can go again together.
+function finishMultiplayer() {
   clearInterval(startTimer);
-  if (gameNet) gameNet.leave();
-  gameNet = null; mp = null; hosting = null;
-  renderHostPanel();
+  if (mp) { Trace.event("end", {}); W.mp_end(); }
+  mp = null;
+  $("netBtn").hidden = true; $("netTrace").hidden = true;
   $("netWait").hidden = true;
-  $("hostCode").hidden = true; $("copyCode").hidden = true;
-  if (lobby) lobby.presence({ hosting: null });
 }
 
 // ---- buttons ----
 // Browsers only allow audio after the player interacts with the page.
 window.addEventListener("pointerdown", () => Sfx.init(), { capture: true });
 window.addEventListener("keydown", () => Sfx.init(), { capture: true });
-function syncSoundBtn() { const b = $("soundBtn"); b.textContent = Sfx.muted ? "Sound off" : "Sound on"; }
+function syncSoundBtn() {
+  $("soundBtn").textContent = Sfx.muted ? "Sound off" : "Sound on";
+  $("volume").value = String(Math.round(Sfx.volume * 100));
+  $("volume").classList.toggle("off", Sfx.muted);
+}
 $("soundBtn").onclick = () => { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); };
+$("volume").addEventListener("input", e => {
+  Sfx.setVolume(e.target.value / 100);
+  if (Sfx.muted && Sfx.volume > 0) Sfx.setMuted(false); // dragging the slider means you want sound
+  syncSoundBtn();
+});
+// Let go of the slider and a short sound plays at the new level.
+$("volume").addEventListener("change", e => { Sfx.init(); Sfx.ui("queued"); e.target.blur(); });
 syncSoundBtn();
 $("diff").addEventListener("click", e => {
-  const b = e.target.closest("button"); if (!b) return;
+  const b = e.target.closest("button"); if (!b || guestOf) return;
   difficulty = +b.dataset.d;
-  for (const x of $("diff").children) x.setAttribute("aria-pressed", String(x === b));
+  lobbyChanged();
 });
-const toMenu = () => { leaveMultiplayer(); lastWasMultiplayer = false; running = false; titleSpin = true; $("endScreen").hidden = true; $("menuScreen").hidden = true; $("startScreen").hidden = false; mpStatus(""); };
-$("startBtn").onclick = () => { leaveMultiplayer(); lastWasMultiplayer = false; $("startScreen").hidden = true; newGame(); running = true; };
-$("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endScreen").hidden = true; newGame(); running = true; };
+// Back to the lobby: a host reopens theirs (which also clears what the last
+// game left in the room); a guest goes back to their host's.
+const toMenu = () => {
+  const wasGuestOf = guestOf && guestOf.code;
+  finishMultiplayer(); lastWasMultiplayer = false; running = false; titleSpin = true;
+  $("endScreen").hidden = true; $("menuScreen").hidden = true; $("startScreen").hidden = false;
+  if (wasGuestOf) joinLobby(wasGuestOf); else openOwnLobby();
+};
+$("startBtn").onclick = beginGame;
+$("leaveLobbyBtn").onclick = () => openOwnLobby();
+$("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endScreen").hidden = true; newGame(undefined, 0, lastPlayers); running = true; };
 $("toMenuBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
 $("speedBtn").onclick = () => { speed = speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1; $("speedBtn").textContent = `${speed}×`; };
 $("menuBtn").onclick = () => { if (!running) return; if (!paused && !mp) togglePause(); $("menuScreen").hidden = false; };
 $("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused) togglePause(); };
-$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(); };
+$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers); };
 $("quitBtn").onclick = toMenu;
-$("hostBtn").onclick = hostGame;
-$("mpStartBtn").onclick = hostStart;
-// Copy the game code. Some app views refuse the clipboard: then select the
-// code so it can be copied by hand.
-$("copyCode").onclick = () => {
-  const code = $("hostCode").textContent, btn = $("copyCode");
-  const selectIt = () => { const r = document.createRange(); r.selectNodeContents($("hostCode")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = "Press Ctrl+C"; };
+// Copy the invite link. Some app views refuse the clipboard: then select it
+// so it can be copied by hand.
+$("copyLink").onclick = () => {
+  const input = $("inviteLink"), btn = $("copyLink");
+  const selectIt = () => { input.focus(); input.select(); btn.textContent = "Press Ctrl+C"; };
   try {
-    navigator.clipboard.writeText(code).then(() => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy code"; }, 1500); }, selectIt);
+    navigator.clipboard.writeText(input.value).then(() => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy link"; }, 1500); }, selectIt);
   } catch { selectIt(); }
 };
-$("aiFill").onchange = renderHostPanel;
-$("opp").addEventListener("click", e => {
-  const b = e.target.closest("button"); if (!b) return;
-  opponents = +b.dataset.n;
-  for (const x of $("opp").children) x.setAttribute("aria-pressed", String(x === b));
-});
-$("joinBtn").onclick = () => joinGame($("joinCode").value);
-$("joinCode").addEventListener("keydown", e => { if (e.key === "Enter") joinGame($("joinCode").value); });
+$("inviteLink").onfocus = e => e.target.select();
+const joinTyped = () => { const c = codeIn($("joinLink").value); if (c) joinLobby(c); else mpStatus("That doesn't look like an invite link.", true); };
+$("joinBtn").onclick = joinTyped;
+$("joinLink").addEventListener("keydown", e => { if (e.key === "Enter") joinTyped(); });
+$("relayUrl").addEventListener("change", () => { Net.relayUrl = $("relayUrl").value.trim(); openOwnLobby(); });
+// Opening an invite link in a tab that already has the game open.
+window.addEventListener("hashchange", () => { const c = codeIn(location.hash); if (c && !inGame()) joinLobby(c); });
 $("techClose").onclick = () => { $("techScreen").hidden = true; };
 
 // ---- start ----
@@ -1356,23 +1572,41 @@ $("techClose").onclick = () => { $("techScreen").hidden = true; };
   // A live map behind the title screen.
   newGame();
   running = false; titleSpin = true;
+  renderLobby();
   requestAnimationFrame(loop);
-  // On claude.ai the page can talk to other viewers directly. Elsewhere (your
-  // own copy) multiplayer goes through a relay server you run: show its address.
+  setInterval(() => { renderNetStatus(); lobbyTick(); }, 1000);
+  // On claude.ai the page talks to other viewers through claude.ai. Elsewhere
+  // it goes through a relay server: served from a web server, assume the relay
+  // sits next to the page at ./relay; a copy opened as a file has to be told.
   const onClaude = !!(window.claude && window.claude.use);
-  setInterval(renderNetStatus, 1000);
-  // Served from a web server, assume the relay sits next to the page at ./relay.
-  if (!onClaude && /^https?:$/.test(location.protocol))
-    $("relayUrl").value = new URL("relay", location.href).href.replace(/^http/, "ws");
+  const onSite = /^https?:$/.test(location.protocol) && !onClaude;
+  if (onSite) $("relayUrl").value = new URL("relay", location.href.split("#")[0]).href.replace(/^http/, "ws");
   const hasRoom = await Net.init($("relayUrl").value.trim());
-  // The relay is only for copies you run yourself. On claude.ai the page
-  // can't open other connections anyway, so don't offer it there.
-  $("relayRow").hidden = hasRoom || onClaude;
-  if (hasRoom) connectLobby().catch(() => {});
-  else if (onClaude) {
-    $("hostBtn").disabled = $("joinBtn").disabled = true;
+  netOk = hasRoom || !onClaude;
+  $("relayRow").hidden = onClaude || onSite;
+  // Where opening a link doesn't work (claude.ai, a file), paste it instead.
+  $("joinRow").hidden = !netOk || onSite;
+  if (hasRoom) {
+    // On claude.ai everyone here was invited by the page's owner: list their lobbies.
+    pageRoom = await Net.lobby();
+    pageRoom.onPeers(peers => {
+      const box = $("openGames");
+      box.replaceChildren();
+      for (const p of peers) {
+        const code = p.presence && p.presence.hosting;
+        if (typeof code !== "string" || !/^[A-Z0-9]{6}$/.test(code) || code === roomCode || p.presence.v !== NET.PROTOCOL) continue;
+        const b = document.createElement("button");
+        b.className = "ghost"; b.textContent = `Join game ${code}`;
+        b.onclick = () => joinLobby(code);
+        box.append(b);
+      }
+    });
+  } else if (onClaude) {
     mpStatus(Net.diag.room === "no answer from claude.ai"
-      ? "Online play can't reach claude.ai from this page. Your browser may be blocking it: in Firefox, turn off Enhanced Tracking Protection for this site (the shield in the address bar), or pause your ad blocker here, then reload."
-      : "Online play isn't available in this view. You need to be signed in to claude.ai and invited to this game (the owner adds you with Share).", true);
+      ? "Playing with friends can't reach claude.ai from this page. Your browser may be blocking it: in Firefox, turn off Enhanced Tracking Protection for this site (the shield in the address bar), or pause your ad blocker here, then reload."
+      : "Playing with friends isn't available in this view. You need to be signed in to claude.ai and invited to this game (the owner adds you with Share).", true);
   }
+  const invited = codeIn(location.hash);
+  if (invited && netOk) joinLobby(invited);
+  else if (netOk) openOwnLobby($("mpStatus").textContent, $("mpStatus").classList.contains("bad"));
 })();

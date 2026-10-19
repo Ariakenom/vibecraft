@@ -5,6 +5,7 @@
 use crate::defs::*;
 use crate::game::*;
 
+#[derive(Clone)]
 pub struct Ai {
     /// Is the computer playing this slot?
     pub on: bool,
