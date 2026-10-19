@@ -199,7 +199,7 @@ function groundPatch(sh) {
       sandAmt *= smoothstep(${(WATER_Y - 0.3).toFixed(3)}, ${(WATER_Y - 0.08).toFixed(3)}, vGW.y);
       // A slightly darker rim of grass along the beach makes the edge read.
       float rim = smoothstep(line + 0.008, line + 0.02, vGW.y) * (1.0 - smoothstep(line + 0.03, line + 0.07, vGW.y));
-      vec3 grass = diffuseColor.rgb * (0.9 + 0.2 * vnoise2(g * 11.0) - 0.16 * rim);
+      vec3 grass = diffuseColor.rgb * (1.0 - 0.14 * rim);   // flat: the 3D clumps carry the detail
       diffuseColor.rgb = mix(grass, sand, sandAmt);
     }`);
 }
@@ -804,7 +804,7 @@ function buildWorld() {
   R3.objs.clear();
   for (const d of R3.dying) scene.remove(d.root);
   R3.dying = [];
-  for (const k of ["terrain", "shore", "water", "tufts", "flowers"]) if (R3[k]) { scene.remove(R3[k]); R3[k].geometry.dispose(); R3[k] = null; }
+  for (const k of ["terrain", "shore", "water", "tufts", "flowers", "pebbles"]) if (R3[k]) { scene.remove(R3[k]); R3[k].geometry.dispose(); R3[k] = null; }
   if (R3.res) for (const m of Object.values(R3.res)) scene.remove(m);
   R3.resKey = "";
   R3.flattened = new Set();
@@ -1002,16 +1002,19 @@ function buildWater() {
 // --- Grass tufts and flowers ----------------------------------------------------
 // A few thousand little clumps of blades, one instanced mesh. The vertex
 // shader bends each blade by its height so the meadow sways in the wind.
+// A clump of grass: a fan of broad, pointed blades in two greens, a shade
+// apart from the ground so the clumps read against the flat field.
 function tuftGeometry() {
   const m = new Model();
-  for (let k = 0; k < 4; k++) {
+  for (let k = 0; k < 6; k++) {
     const g = new THREE.BufferGeometry();
-    const w = 0.035, hgt = 0.2 + (k % 2) * 0.07;
-    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-w, 0, 0, w, 0, 0, 0.02, hgt, 0]), 3));
+    const w = 0.05 - (k % 3) * 0.008, hgt = 0.17 + (k % 3) * 0.06;
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-w, 0, 0, w, 0, 0, 0.015, hgt, 0]), 3));
     g.computeVertexNormals();
-    g.rotateZ((k - 1.5) * 0.25);
-    g.rotateY(k * 1.3);
-    m.add(g, k % 2 ? "#79a64c" : "#5f8f3c", (k % 2) * 0.04 - 0.02, 0, (k > 1 ? 0.04 : -0.03));
+    g.rotateZ((k - 2.5) * 0.18);
+    g.rotateY(k * 1.05);
+    const a = k * 1.05;
+    m.add(g, ["#6aa83c", "#4d8a2e", "#86bf4c"][k % 3], Math.cos(a) * 0.03, 0, Math.sin(a) * 0.03);
   }
   return m.build();
 }
@@ -1048,12 +1051,18 @@ function buildTufts() {
   R3.flowerSpots = fl;
   const fmat = new THREE.MeshLambertMaterial({ color: "#ffffff" });
   withFow(fmat, swayPatch);
-  R3.flowers = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.035, 0).translate(0.02, 0.24, 0), fmat, Math.max(1, fl.length));
+  R3.flowers = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.05, 0).scale(1, 0.6, 1).translate(0.02, 0.26, 0), fmat, Math.max(1, fl.length));
   const palette = ["#f2efe4", "#f3d55b", "#c58ad8", "#e98a5e"].map(c => new THREE.Color(c));
   fl.forEach((s, i) => R3.flowers.setColorAt(i, palette[Math.floor(s[2] * 33) % 4]));
+  // A few pebbles in the grass, with the stone surface.
+  R3.pebbleSpots = spots.filter(s => s[2] > 0.95);
+  const pg = new THREE.DodecahedronGeometry(0.06, 0).scale(1, 0.55, 0.8).translate(0, 0.015, 0);
+  pg.setAttribute("color", new THREE.Float32BufferAttribute(new Array(pg.attributes.position.count * 3).fill(0.3), 3));
+  R3.pebbles = new THREE.InstancedMesh(pg, stoneMat, Math.max(1, R3.pebbleSpots.length));
+  R3.pebbles.receiveShadow = true;
   placeTufts();
   applyGrass();
-  R3.scene.add(R3.tufts, R3.flowers);
+  R3.scene.add(R3.tufts, R3.flowers, R3.pebbles);
 }
 // (Re)position all tufts: called after the ground under a building is levelled.
 function placeTufts() {
@@ -1064,7 +1073,7 @@ function placeTufts() {
       const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0]))) || hAt(s[0], s[1]) < 0.24;
       _p.set(s[0], hAt(s[0], s[1]) - 0.01, s[1]);
       _q.setFromAxisAngle(_up, s[2] * 40);
-      _s.setScalar(hidden ? 0 : 0.6 + s[2] * 0.5);
+      _s.setScalar(hidden ? 0 : (mesh === R3.pebbles ? 0.7 : 1.0) + s[2] * 0.6);
       _m4.compose(_p, _q, _s);
       mesh.setMatrixAt(i, _m4);
     });
@@ -1073,6 +1082,7 @@ function placeTufts() {
   };
   put(R3.tufts, R3.tuftSpots);
   put(R3.flowers, R3.flowerSpots);
+  if (R3.pebbles) put(R3.pebbles, R3.pebbleSpots);
 }
 
 // Level the ground under a building so it sits flat instead of hovering on a
@@ -1682,6 +1692,7 @@ function applyGraphics() {
 function applyGrass() {
   if (R3.tufts) R3.tufts.count = Math.round(R3.tuftSpots.length * GFX.grass);
   if (R3.flowers) R3.flowers.count = Math.max(0, Math.round(R3.flowerSpots.length * GFX.grass));
+  if (R3.pebbles) R3.pebbles.count = Math.round(R3.pebbleSpots.length * Math.min(1, GFX.grass * 2.5));
 }
 
 // The setting appears on the start screen and in the in-game menu.

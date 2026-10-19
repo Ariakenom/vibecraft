@@ -766,13 +766,22 @@ def dome(m, r, col, y, x=0.0, sy=0.85):
     bmesh.ops.delete(t, geom=[v for v in t.verts if v.co.z < -0.001], context="VERTS")
     m._take(t, col, Matrix.Translation(P(x, y, 0)) @ scale3(1, sy, 1), 0)
 
+def straw_hat(m, y=0.6, r=0.2):
+    m.part("head", smooth=False)
+    m.cyl(r, r * 0.95, 0.025, "#d9b85c", 0, y, 0, seg=14, vary=0.04)          # brim
+    m.cyl(0.1, 0.03, 0.12, "#e0c46a", 0, y + 0.07, 0, seg=12, vary=0.04)       # crown
+    m.cyl(0.102, 0.098, 0.03, TEAM, 0, y + 0.025, 0, seg=12, vary=0)           # team band
+
 def citizen():
+    """A farmer: straw hat with a team band, team scarf, sleeves rolled up; a hoe."""
     m = Model("Citizen")
-    tabs_person(m, "#c4a676", belt=TEAM)
-    m.part("head"); dome(m, 0.11, TEAM, 0.585); m.cyl(0.115, 0.115, 0.025, TEAM_DARK, 0, 0.585, 0, seg=12, vary=0)
-    t = Model("Citizen.tool")  # a hammer, held in the right hand
-    t.cyl(0.014, 0.014, 0.34, WOOD, 0, 0.1, 0, seg=6, vary=0)
-    t.box(0.06, 0.06, 0.13, IRON, 0, 0.26, 0.03, bevel=0.008, vary=0)
+    tabs_person(m, "#c9ad78", belt="#7a5532", sleeves=SKIN)
+    m.part("body"); m.cyl(0.11, 0.125, 0.04, TEAM, 0, 0.45, 0, seg=12, vary=0)  # scarf
+    m.box(0.03, 0.12, 0.06, TEAM, 0.06, 0.41, 0.06, rz=0.2, vary=0)            # its loose end
+    straw_hat(m)
+    t = Model("Citizen.tool")
+    t.cyl(0.014, 0.014, 0.5, WOOD, 0, 0.12, 0, seg=6, vary=0)
+    t.box(0.12, 0.025, 0.05, IRON, 0.05, 0.36, 0, vary=0)
     return dict(body=m, tool=t, tool_at=(0.0, 0.29, 0.13), tool_bone="armR", pivots=HUMAN_PIVOTS)
 
 def spearman():
