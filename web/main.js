@@ -205,14 +205,17 @@ function bakeTerrain() {
   const ter = u8(W.terrain_ptr(), MW * MH).slice();
   // Colour at any map position. Grass blends lush, dark and sun-dried greens
   // in big soft patches; slopes turn to earth and rock; shores to sand.
-  const LUSH = [86, 140, 58], DARK = [58, 104, 44], DRY = [146, 152, 76], EARTH = [122, 104, 72], ROCK = [132, 126, 112], SAND = [204, 186, 132], SEABED = [120, 132, 96];
+  // A clean, almost flat green, like Totally Accurate Battle Simulator's fields:
+  // only broad, gentle patches. Small 3D pieces (grass clumps, flowers,
+  // pebbles; render3d.js) give the detail instead of painted strokes.
+  const LUSH = [90, 156, 62], DARK = [76, 138, 54], DRY = [118, 156, 66], EARTH = [130, 112, 78], ROCK = [138, 132, 118], SAND = [204, 186, 132], SEABED = [120, 132, 96];
   // `beach`: paint the sand in. The 3D view draws its own crisp beaches in
   // the ground shader (render3d.js), so only the minimap wants it.
   const colourAt = (x, y, beach = true) => {
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
     const n1 = vnoise(x / 9, y / 9, 3), n2 = vnoise(x / 3.5, y / 3.5, 11), n3 = vnoise(x * 1.3, y * 1.3, 29);
-    let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.5)));
-    c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.62) * 3)));
+    let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
+    c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
     const sl = slopeAt(x, y), ht = hAt(x, y);
     c = mixc(c, EARTH, Math.max(0, Math.min(1, (sl - 0.18) * 4)));
     c = mixc(c, ROCK, Math.max(0, Math.min(1, (sl - 0.38) * 4)));
@@ -220,7 +223,7 @@ function bakeTerrain() {
     // Beaches follow the (smooth) height near the water, not the square tiles.
     if (beach) c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
     if (t === 1) c = mixc(SAND, SEABED, Math.min(1, -ht));
-    const k = 0.92 + n3 * 0.16;
+    const k = 0.98 + n3 * 0.04;
     return [c[0] * k, c[1] * k, c[2] * k];
   };
   terrainSmall = document.createElement("canvas");
@@ -248,33 +251,17 @@ function bakeTerrain() {
   tc.imageSmoothingEnabled = true; tc.imageSmoothingQuality = "high";
   tc.drawImage(mid, 0, 0, MW * TILE, MH * TILE);
 
-  // Detail on top: blades of grass in a few greens, pebbles, sand ripples.
-  const blades = ["rgba(36,64,26,.38)", "rgba(150,190,96,.28)", "rgba(70,110,44,.35)", "rgba(190,190,110,.22)"];
+  // Detail on top: only pebbles on rocky slopes. Grass gets its detail from
+  // 3D clumps instead (render3d.js), and sand from the ground shader.
   for (let ty = 0; ty < MH; ty++) for (let tx = 0; tx < MW; tx++) {
-    const t = ter[ty * MW + tx];
-    const rocky = slopeAt(tx + 0.5, ty + 0.5) > 0.35;
-    for (let k = 0; k < 9; k++) {
+    if (slopeAt(tx + 0.5, ty + 0.5) <= 0.35) continue;
+    for (let k = 0; k < 4; k++) {
       const hx = hash2(tx * 7 + k, ty * 13 - k), hy = hash2(ty * 11 + k, tx * 5 + k);
       const x = (tx + hx) * TILE, y = (ty + hy) * TILE;
-      if ((t === 0 || t === 3) && !rocky) {
-        tc.strokeStyle = blades[k % 4]; tc.lineWidth = 1.1;
-        const lean = (hx - 0.5) * 3;
-        tc.beginPath(); tc.moveTo(x, y); tc.lineTo(x + lean, y - 4 - hy * 3); tc.moveTo(x + 2, y); tc.lineTo(x + 2 + lean, y - 3); tc.stroke();
-      } else if (rocky && k < 4) {
-        tc.fillStyle = k % 2 ? "rgba(70,62,50,.35)" : "rgba(200,192,176,.3)";
-        tc.beginPath(); tc.ellipse(x, y, 1.5 + hx * 2.5, 1 + hy * 1.5, hx * 3, 0, 7); tc.fill();
-      } else if (t === 2 && k < 3) {
-        tc.strokeStyle = "rgba(150,124,80,.25)"; tc.lineWidth = 1;
-        tc.beginPath(); tc.moveTo(x - 4, y); tc.quadraticCurveTo(x, y - 1.5, x + 4, y); tc.stroke();
-      }
+      tc.fillStyle = k % 2 ? "rgba(70,62,50,.35)" : "rgba(200,192,176,.3)";
+      tc.beginPath(); tc.ellipse(x, y, 1.5 + hx * 2.5, 1 + hy * 1.5, hx * 3, 0, 7); tc.fill();
     }
   }
-  // Fine grain over everything.
-  const grain = document.createElement("canvas"); grain.width = 128; grain.height = 128;
-  const gc = grain.getContext("2d"), gi = gc.createImageData(128, 128);
-  for (let i = 0; i < 128 * 128; i++) { const v = Math.random() * 255; gi.data.set([v, v, v, 12], i * 4); }
-  gc.putImageData(gi, 0, 0);
-  tc.fillStyle = tc.createPattern(grain, "repeat"); tc.fillRect(0, 0, MW * TILE, MH * TILE);
 
   fogCanvas = document.createElement("canvas"); fogCanvas.width = MW; fogCanvas.height = MH;
   fogCtx = fogCanvas.getContext("2d"); fogImg = fogCtx.createImageData(MW, MH);
