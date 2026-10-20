@@ -38,9 +38,11 @@ impl Ai {
 struct Census {
     /// The player this AI plays for.
     me: u8,
-    citizens: Vec<u32>,
+    builders: Vec<u32>,
     idle: Vec<u32>,
     army: Vec<u32>,
+    /// Residents at home with no job: who can crew a new producer.
+    spare: u32,
     /// How many of each kind, buildings under construction included.
     /// Indexed by `Kind as usize`.
     have: Vec<u32>,
@@ -72,40 +74,53 @@ impl Game {
         let diff = self.ais[me as usize].difficulty;
         let mut c = self.census(me);
 
-        // 1. Keep a few citizens to build with. Each one holds a grain slot;
-        //    if grain is short, the plan below builds a farm.
-        let want_cit = [4usize, 6, 8][diff.min(2) as usize];
+        let p = self.players[me as usize];
+        // Residents at home who aren't working: the people free to become
+        // builders, soldiers or the crew of a new producer.
+        let spare_people = p.residents.saturating_sub(p.working);
+        c.spare = spare_people;
+
+        // 1. Keep a few builders. Each is a person, used up at a foundation.
+        let want_builders = [2usize, 3, 3][diff.min(2) as usize];
         let q = self.ents[cap].queue.len();
-        let grain_short = self.short_of(me, Kind::Citizen).is_some();
-        if c.citizens.len() + q < want_cit && q < 1 && !grain_short {
-            let _ = self.queue_unit(cap as u32, Kind::Citizen);
+        // Two residents always stay free, so there's someone to crew the
+        // next food producer when the houses are full.
+        if c.builders.len() + q < want_builders && q < 1 && spare_people >= 2 {
+            let _ = self.queue_unit(cap as u32, Kind::Builder);
         }
 
         // 2. The build plan: (building, how many we want), in order. The
         //    order follows the tech tree, so each step is unlocked in time.
         let plan: [(Kind, u32); 19] = [
+            (Kind::LumberCamp, 1),
             (Kind::Farm, 1),
-            (Kind::LumberCamp, 2),
             (Kind::Barracks, 1),
             (Kind::Quarry, 1),
-            (Kind::LumberCamp, 3),
+            (Kind::LumberCamp, 2),
             (Kind::Range, 1),
             (Kind::Farm, 2),
             (Kind::Pasture, 1),
             (Kind::Stable, 1),
-            (Kind::LumberCamp, 4),
+            (Kind::LumberCamp, 3),
             (Kind::Tower, 1),
             (Kind::Quarry, 2),
             (Kind::Barracks, 2),
-            (Kind::LumberCamp, 6),
+            (Kind::LumberCamp, 4),
             (Kind::Pasture, 2),
             (Kind::FishingHut, 1),
             (Kind::HuntingLodge, 1),
             (Kind::Orchard, 1),
             (Kind::Wonder, if diff >= 1 { 1 } else { 0 }),
         ];
-        // One project at a time: wait while a foundation has no builder.
-        let busy = c.unfinished.iter().any(|&b| !self.has_builder(b)) || c.unfinished.len() >= 2;
+        // One project at a time: wait while a foundation still needs builders.
+        let busy = c.unfinished.iter().any(|&b| self.builders_missing(b) > 0) || c.unfinished.len() >= 2;
+        // When the houses are full, or nobody is free to work, grow first:
+        // a hut if there's food to put in it, otherwise more food.
+        let full = p.residents + p.units + p.arriving + 1 >= p.beds;
+        let mut grew = false;
+        if !busy && (full || spare_people == 0) {
+            grew = self.ai_grow(bx, by, &mut c) != Step::Blocked;
+        }
         // The first project that isn't impossible. Its cost is kept free
         // from soldiers (below), so it gets built eventually.
         let mut next = None;
@@ -113,28 +128,17 @@ impl Game {
             if c.have[kind as usize] >= n || !self.unlocked(me, kind) {
                 continue;
             }
-            let step = if busy { Step::Waiting } else { self.ai_project(kind, bx, by, &mut c) };
+            let step = if busy || grew { Step::Waiting } else { self.ai_project(kind, bx, by, &mut c) };
             if step != Step::Blocked {
                 next = Some(kind);
                 break;
             }
         }
 
-        // 3. A Wonder is a big job: keep several citizens on it.
-        if let Some(w) = c.unfinished.iter().copied().find(|&b| self.ents[b as usize].kind == Kind::Wonder) {
-            let builders = self.ents.iter().filter(|e| e.alive && e.order == Order::Build(w)).count();
-            let want = [0, 4, 6][diff.min(2) as usize];
-            for _ in builders..want {
-                let Some(id) = c.idle.pop() else { break };
-                self.order_build(id, w);
-            }
-        }
-
-        // 4. Idle citizens finish buildings: ones nobody works on first.
+        // 3. Idle builders go to foundations that still need them.
         let idle = std::mem::take(&mut c.idle);
         for id in idle {
-            let lonely = c.unfinished.iter().copied().find(|&b| !self.has_builder(b)).or_else(|| c.unfinished.first().copied());
-            if let Some(b) = lonely {
+            if let Some(b) = c.unfinished.iter().copied().find(|&b| self.builders_missing(b) > 0) {
                 self.order_build(id, b);
             }
         }
@@ -149,12 +153,22 @@ impl Game {
             .filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind != Kind::Capitol && !e.kind.trains().is_empty() && e.queue.len() < qmax)
             .map(|e| e.id)
             .collect();
+        // Every soldier is a resident who won't work. Aim for a share of all
+        // our people under arms; past that, only train from idle residents.
+        let share = [0.2f32, 0.3, 0.35][diff.min(2) as usize];
+        let queued: usize = producers.iter().map(|&b| self.ents[b as usize].queue.len()).sum();
+        let mut army = c.army.len() + queued;
         for b in producers {
+            let pl = &self.players[me as usize];
+            let people = (pl.residents + pl.units) as f32;
+            let idle = pl.residents.saturating_sub(pl.working);
+            if idle <= 2 || ((army as f32) >= people * share && idle <= 4) {
+                break;
+            }
             let unit = self.ents[b as usize].kind.trains()[0];
-            let p = &self.players[me as usize];
-            let spare = |r: Res| p.free(r) - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32);
-            if unit.stats().cost.iter().all(|&(r, k)| spare(r) >= k as i32) {
-                let _ = self.queue_unit(b, unit);
+            let spare = |r: Res| pl.free(r) - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32);
+            if unit.stats().cost.iter().all(|&(r, k)| spare(r) >= k as i32) && self.queue_unit(b, unit).is_ok() {
+                army += 1;
             }
         }
 
@@ -189,20 +203,49 @@ impl Game {
                 if e.built < 1.0 {
                     c.unfinished.push(e.id);
                 }
-            } else if e.kind == Kind::Citizen {
-                c.citizens.push(e.id);
+            } else if e.kind == Kind::Builder {
+                c.builders.push(e.id);
                 if e.order == Order::Idle {
                     c.idle.push(e.id);
                 }
-            } else {
+            } else if e.kind != Kind::Arrival {
                 c.army.push(e.id);
             }
         }
         c
     }
 
-    fn has_builder(&self, b: u32) -> bool {
-        self.ents.iter().any(|e| e.alive && e.order == Order::Build(b))
+    /// Builders a foundation still needs, counting the ones on their way.
+    fn builders_missing(&self, b: u32) -> u32 {
+        let f = &self.ents[b as usize];
+        let coming = self.ents.iter().filter(|e| e.alive && e.order == Order::Build(b)).count() as u32;
+        (f.kind.stats().builders as u32).saturating_sub(f.builders_in as u32 + coming)
+    }
+
+    /// More beds: a hut if some food is left over for it, otherwise a
+    /// producer of whichever food is scarcest (that has a spot).
+    fn ai_grow(&mut self, bx: f32, by: f32, c: &mut Census) -> Step {
+        let p = self.players[c.me as usize];
+        let foods = [Res::Grain, Res::Fruit, Res::Meat, Res::Fish];
+        if foods.iter().any(|&r| p.spare(r) > 0) {
+            return self.ai_project(Kind::Hut, bx, by, c);
+        }
+        if c.spare == 0 {
+            return Step::Waiting; // nobody to work a new producer yet
+        }
+        let mut by_supply: Vec<Res> = foods.to_vec();
+        by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
+        for r in by_supply {
+            let Some(k) = producer_of(r) else { continue };
+            // More beds matter most: this may use the last free resident.
+            c.spare += 1;
+            let step = self.ai_project(k, bx, by, c);
+            c.spare -= 1;
+            if step != Step::Blocked {
+                return step;
+            }
+        }
+        Step::Blocked
     }
 
     /// Build `kind`, or, if it's short of some resource, the producer of
@@ -221,6 +264,13 @@ impl Game {
         if self.short_of(me, what).is_some() {
             // Short of something nobody makes yet: this can't happen.
             return Step::Blocked;
+        }
+        // A producer needs its crew, and two residents stay free (one for
+        // the next food producer when the houses fill up). `ai_grow` lends
+        // one extra for food.
+        let crew = what.stats().workers as u32;
+        if crew > 0 && c.spare < crew + 2 {
+            return Step::Waiting;
         }
         if !self.ai_place(what, bx, by, c) {
             return Step::Blocked;
@@ -255,9 +305,11 @@ impl Game {
             }
         };
         let Some((tx, ty)) = spot else { return false };
-        let builders: Vec<u32> = c.idle.pop().into_iter().collect();
+        let n = kind.stats().builders as usize;
+        let builders: Vec<u32> = (0..n).filter_map(|_| c.idle.pop()).collect();
         match self.place(me, kind, tx, ty, &builders) {
             Ok(id) => {
+                c.spare = c.spare.saturating_sub(kind.stats().workers as u32);
                 c.unfinished.push(id);
                 c.have[kind as usize] += 1;
                 true

@@ -263,9 +263,10 @@ number of slots, and its fate is decided later.
 
 ## Start of a game (first guess)
 
-Capitol (makes 4 wood, 2 stone, 2 grain by itself, no workers), 2 huts,
-6 residents, 2 Builders. Enough to place a lumber camp, a farm and a third
-hut straight away.
+Capitol (makes 4 wood, 2 stone, 2 grain and 2 fruit by itself, no
+workers), 2 huts, 6 residents, 2 Builders. The two foods give each hut 4
+beds: 8 for 6 residents and 2 builders. Enough to place a lumber camp, a
+farm and a third hut straight away.
 
 ## What it should feel like
 

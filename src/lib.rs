@@ -104,7 +104,12 @@ pub extern "C" fn render() -> u32 {
                 Order::AttackMove { .. } => 2,
                 Order::Attack { .. } => 3,
                 Order::Build(_) => 6,
+                Order::Arrive(_) => 7,
             };
+            // A producer short of workers makes nothing: the page shows it idle.
+            if e.built >= 1.0 && !e.crewed && e.owner == g.local {
+                flags |= 32;
+            }
             let (rx, ry) = e.rally.unwrap_or((f32::NAN, f32::NAN));
             w.ents.extend_from_slice(&[
                 e.id as f32,
@@ -119,8 +124,8 @@ pub extern "C" fn render() -> u32 {
                 flags as f32,
                 progress,
                 e.anim as u32 as f32,
-                0.0, // free (was what a citizen carried)
-                0.0,
+                e.residents as f32, // houses: who lives there...
+                e.beds() as f32,    // ...and how many beds it has
                 e.facing,
                 order as f32,
                 rx,
@@ -273,7 +278,7 @@ pub extern "C" fn select_ids(n: u32) {
         w.game.clear_selection();
         for &id in w.scratch.iter().take(n as usize) {
             if let Some(e) = w.game.ents.get_mut(id as usize) {
-                if e.alive && e.owner == w.game.local {
+                if e.alive && e.owner == w.game.local && e.kind != Kind::Arrival {
                     e.selected = true;
                 }
             }
@@ -281,8 +286,8 @@ pub extern "C" fn select_ids(n: u32) {
     })
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn idle_citizen() -> i32 {
-    game(|g| g.select_idle_citizen())
+pub extern "C" fn idle_builder() -> i32 {
+    game(|g| g.select_idle_builder())
 }
 
 /// Read `n` entity ids that JavaScript wrote into the scratch buffer.
@@ -294,7 +299,8 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 /// scratch buffer first. `code`: 1 right-click, 2 attack-move, 3 stop,
 /// 4 train (`arg` = unit kind), 5 cancel training, 6 place a building
 /// (`arg` = kind, x/y = tile), 7 the computer takes over player `arg`
-/// (sent with owner 0 by the multiplayer host when someone leaves).
+/// (sent with owner 0 by the multiplayer host when someone leaves), 8
+/// surrender, 9 demolish the buildings in the scratch buffer.
 /// Returns 0 or a `CmdError` code.
 ///
 /// In single player the page calls this at once. In multiplayer it calls
@@ -327,6 +333,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
                 None => return 12,
             },
             8 => Command::Surrender,
+            9 => Command::Demolish { ids },
             _ => return 0,
         };
         match w.game.apply(owner as u8, cmd) {
@@ -488,7 +495,8 @@ pub extern "C" fn kind_slots_amt(kind: u32, which: u32, n: u32) -> u32 {
 pub extern "C" fn kind_deposit(kind: u32) -> i32 {
     Kind::from_u32(kind).and_then(|k| k.stats().needs_deposit).map_or(-1, |d| d as i32)
 }
-/// which: 0 hp, 1 attack, 2 range, 3 speed, 4 sight, 5 time, 6 size, 7 workers, 8 cooldown
+/// which: 0 hp, 1 attack, 2 range, 3 speed, 4 sight, 5 time, 6 size, 7 workers, 8 cooldown,
+/// 9 builders needed, 10 house tier (-1 if not a house)
 #[unsafe(no_mangle)]
 pub extern "C" fn kind_stat(kind: u32, which: u32) -> f32 {
     let Some(k) = Kind::from_u32(kind) else { return 0.0 };
@@ -502,6 +510,8 @@ pub extern "C" fn kind_stat(kind: u32, which: u32) -> f32 {
         5 => s.time,
         6 => s.size as f32,
         7 => s.workers as f32,
+        9 => s.builders as f32,
+        10 => k.house_tier().map_or(-1.0, |t| t as f32),
         _ => s.cooldown,
     }
 }
@@ -548,6 +558,51 @@ pub extern "C" fn short_of(kind: u32) -> i32 {
     let Some(k) = Kind::from_u32(kind) else { return -1 };
     game(|g| g.short_of(g.local, k).map_or(-1, |r| r as i32))
 }
+/// The local player's people: `which` 0 residents at home, 1 beds, 2 units
+/// (each holds a bed; queued ones too), 3 residents at work, 4 newcomers on
+/// their way.
+#[unsafe(no_mangle)]
+pub extern "C" fn people(which: u32) -> u32 {
+    player_people(game(|g| g.local as u32), which)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn player_people(p: u32, which: u32) -> u32 {
+    game(|g| {
+        g.players.get(p as usize).map_or(0, |pl| match which {
+            0 => pl.residents,
+            1 => pl.beds,
+            2 => pl.units,
+            3 => pl.working,
+            _ => pl.arriving,
+        })
+    })
+}
+/// Slots of resource `r` the local player's houses hold.
+#[unsafe(no_mangle)]
+pub extern "C" fn housed(r: u32) -> u32 {
+    game(|g| Res::from_idx(r as usize).map_or(0, |r| g.players[g.local as usize].housed[r.idx()] as u32))
+}
+/// The goods a house gets, one bit per resource.
+#[unsafe(no_mangle)]
+pub extern "C" fn house_goods(id: u32) -> u32 {
+    game(|g| g.ents.get(id as usize).map_or(0, |e| e.goods))
+}
+/// Builders who have reached a foundation so far.
+#[unsafe(no_mangle)]
+pub extern "C" fn builders_in(id: u32) -> u32 {
+    game(|g| g.ents.get(id as usize).map_or(0, |e| e.builders_in as u32))
+}
+/// 1 if resource `r` is something houses want.
+#[unsafe(no_mangle)]
+pub extern "C" fn is_house_good(r: u32) -> u32 {
+    Res::from_idx(r as usize).is_some_and(|r| r.is_house_good()) as u32
+}
+/// The most goods a house of `tier` can use.
+#[unsafe(no_mangle)]
+pub extern "C" fn house_max_goods(tier: u32) -> u32 {
+    defs::house_max_goods(tier.min(5) as u8) as u32
+}
+
 /// How many of the local player's units are unsupplied right now.
 #[unsafe(no_mangle)]
 pub extern "C" fn unsupplied() -> u32 {

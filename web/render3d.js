@@ -348,7 +348,17 @@ function unitModel(kind, owner) {
     return { body: m.build(), tool: t.build(), pivot: [0, 0.7, 0.11], height: 0.95 };
   }
   legs(0.11, DARKWOOD);
-  const bodyCol = kind === K.Archer ? "#5d6a3a" : kind === K.Citizen ? "#b89a6c" : team;
+  if (kind === K.Arrival) {
+    // A newcomer: travelling clothes, a bundle on the back, a walking stick.
+    legs(0.11, DARKWOOD);
+    m.add(box(0.14, 0.24, 0.2), "#8f7b5c", 0, 0.34, 0);
+    m.add(box(0.15, 0.05, 0.21), "#5e4c34", 0, 0.27, 0);
+    m.add(ball(0.072, 1), SKIN, 0, 0.53, 0);
+    m.add(box(0.1, 0.16, 0.16), "#c8b48c", -0.12, 0.4, 0); // the bundle
+    t.add(cyl(0.012, 0.012, 0.6, 5), WOOD, 0, 0.0, 0);
+    return { body: m.build(), tool: t.build(), pivot: [0.05, 0.3, 0.11], height: 0.66 };
+  }
+  const bodyCol = kind === K.Archer ? "#5d6a3a" : kind === K.Builder ? "#b89a6c" : team;
   m.add(box(0.14, 0.24, 0.2), bodyCol, 0, 0.34, 0);
   m.add(box(0.15, 0.05, 0.21), kind === K.Spearman ? dark : team, 0, 0.27, 0); // belt
   m.add(ball(0.072, 1), SKIN, 0, 0.53, 0);
@@ -368,7 +378,7 @@ function unitModel(kind, owner) {
     t.add(bow, "#6b4a2a", 0.06, 0, 0);
     return { body: m.build(), tool: t.build(), pivot: [0.04, 0.38, 0.1], height: 0.66 };
   }
-  // citizen
+  // builder
   m.add(cap, team, 0, 0.545, 0);
   t.add(cyl(0.013, 0.013, 0.36, 5), WOOD, 0, 0.0, 0);
   t.add(box(0.05, 0.05, 0.11), IRON, 0, 0.17, 0.03);
@@ -463,6 +473,16 @@ function buildingModel(kind, owner) {
       m.add(box(0.7, 0.6, 0.7), "#e8c45a", 0, 3.05, 0);
       m.add(cone(0.45, 0.6, 4).rotateY(Math.PI / 4), "#f2d877", 0, 3.65, 0);
       for (const [x, z] of [[1.6, 1.6], [-1.6, 1.6], [1.6, -1.6], [-1.6, -1.6]]) { m.add(cyl(0.05, 0.05, 1.4, 5), DARKWOOD, x, 0.7, z); m.flag(0.4, 0.25, team, x + 0.2, 1.25, z); }
+      break;
+    }
+    case K.Hut: {
+      // A round hut: daub walls, a thatched cone with a smoke hole, a door.
+      m.add(cyl(0.62, 0.66, 0.55, 12), "#b8a07a", 0, 0.28, 0);
+      m.add(cone(0.86, 0.75, 12), "#b8913f", 0, 0.92, 0);
+      m.add(cone(0.12, 0.12, 8), "#7a5f2a", 0, 1.32, 0);
+      m.add(box(0.22, 0.36, 0.04), DARKWOOD, 0, 0.18, 0.65);
+      m.add(box(0.26, 0.18, 0.22), "#8a6438", 0.62, 0.09, 0.45); // a woodpile
+      m.add(cyl(0.02, 0.02, 0.8, 5), DARKWOOD, -0.72, 0.4, 0.55); m.flag(0.24, 0.15, team, -0.6, 0.72, 0.55);
       break;
     }
     case K.FishingHut: {
@@ -562,7 +582,7 @@ const MODELS_B64 = "/*MODELS_BASE64*/";
 // in main.js, which loads after this file.
 let GLB_NAMES = null;
 function glbName(kind) {
-  GLB_NAMES ??= { [K.Citizen]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
+  GLB_NAMES ??= { [K.Builder]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
     [K.Range]: "Range", [K.Stable]: "Stable", [K.Tower]: "Tower", [K.Farm]: "Farm", [K.Wonder]: "Wonder",
     [K.LumberCamp]: "Sawmill", [K.Quarry]: "Mason", [K.HuntingLodge]: "Settlement" };
   return GLB_NAMES[kind];
@@ -1240,6 +1260,32 @@ function viewQuad() {
 }
 
 // --- Per-frame update --------------------------------------------------------
+// The Capitol's gathering spot, where newcomers arrive: a campfire in front
+// of its door (+z), with a flame that flickers (`updateCampfires`).
+const CAMPFIRE = [0, 0.25, 2.25];
+let campfireGeo = null, flameMat = null;
+function campfire() {
+  if (!campfireGeo) {
+    const m = new Model();
+    for (let k = 0; k < 4; k++) { const lg = cyl(0.04, 0.04, 0.42, 6); lg.rotateZ(Math.PI / 2); lg.rotateY(k * Math.PI / 4); m.add(lg, "#5a3d22", 0, 0.05, 0); }
+    for (let k = 0; k < 7; k++) { const a = k / 7 * Math.PI * 2; m.add(new THREE.DodecahedronGeometry(0.07, 0), "#8b857a", Math.cos(a) * 0.28, 0.03, Math.sin(a) * 0.28); }
+    campfireGeo = m.build();
+    flameMat = new THREE.MeshBasicMaterial({ color: "#ffb347", transparent: true, opacity: 0.9 });
+  }
+  const g = new THREE.Group();
+  g.position.set(CAMPFIRE[0], 0, CAMPFIRE[2]);
+  const ring = new THREE.Mesh(campfireGeo, entMat); ring.receiveShadow = true; g.add(ring);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 7), flameMat);
+  flame.position.y = 0.2; flame.userData.flame = true; g.add(flame);
+  (R3.flames ??= []).push(flame);
+  return g;
+}
+function updateCampfires(now) {
+  if (!R3.flames) return;
+  R3.flames = R3.flames.filter(f => f.parent && f.parent.parent && f.parent.parent.parent);
+  for (const f of R3.flames) { const s = 0.85 + 0.2 * Math.sin(now * 0.017 + f.id) + 0.1 * Math.sin(now * 0.041); f.scale.set(1, s, 1); f.rotation.y = now * 0.002; }
+}
+
 function makeObj(i) {
   const kind = E(i, F.kind), owner = E(i, F.owner), id = E(i, F.id);
   const mdl = cachedModel(kind, owner);
@@ -1255,6 +1301,7 @@ function makeObj(i) {
     o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.FishingHut]: 1.0, [K.Tower]: 3, [K.Wonder]: 4 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
+    if (kind === K.Capitol) root.add(campfire());
   } else if (mdl.rig) {
     root.remove(body);
     makeRigged(o, mdl);
@@ -1379,7 +1426,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
     B.head.rotation.z = -o.lean * 0.4;
     const tb = B[o.toolBone];
     let toolWorld = null; // the tool's angle in the unit's frame, or null to follow the arm
-    if (anim === 2 || (anim === 3 && kind === K.Citizen)) {
+    if (anim === 2 || (anim === 3 && kind === K.Builder)) {
       // A big overhead chop: wind up, strike, recover.
       const c = (T * 1.5) % 1;
       const a = c < 0.55 ? 0.3 + (c / 0.55) * 2.4 : c < 0.68 ? 2.7 - ((c - 0.55) / 0.13) * 2.6 : 0.1 + ((c - 0.68) / 0.32) * 0.2;
@@ -1404,7 +1451,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       toolWorld = 0;
     } else {
       toolWorld = kind === K.Spearman ? -0.25 : kind === K.Archer ? 0 : null;
-      if (kind === K.Citizen) o.toolMesh.rotation.z = -0.4;
+      if (kind === K.Builder) o.toolMesh.rotation.z = -0.4;
     }
     if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
   }
@@ -1458,6 +1505,7 @@ function render3d(alpha, now, dt) {
     o.mark = mark;
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
+    o.residents = E(i, F.residents);
     if (isBld(kind)) {
       const building = flags & 2;
       o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
@@ -1527,6 +1575,7 @@ function render3d(alpha, now, dt) {
   updateGhost();
   updateMarkers(now);
   updateSmoke();
+  updateCampfires(performance.now());
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
   const g = performance.now();
@@ -1803,13 +1852,14 @@ function setSmokeEmitters(list) {
 }
 // Where smoke comes out, relative to the building's centre.
 function updateSmoke() {
-  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2] };
+  // Chimneys, the smoke hole of a hut someone lives in, the Capitol's campfire.
+  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: CAMPFIRE };
   if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
   const list = [];
   for (const o of R3.objs.values()) {
     if (!isBld(o.kind) || o.body.scale.y < 1 || list.length >= SMOKE_MAX) continue;
     const ch = CHIMNEYS[o.kind], p = o.root.position;
-    if (ch) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
+    if (ch && (o.kind !== K.Hut || o.residents > 0)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
     if (o.lastHp < 0.5 && o.kind !== K.Farm && list.length < SMOKE_MAX) list.push([p.x - 0.2, p.y + o.height * 0.6, p.z + 0.1, 2]);
   }
   setSmokeEmitters(list);
@@ -2007,7 +2057,7 @@ function icon(k, owner, px) {
   if (mdl.tool) {
     const t = new THREE.Mesh(mdl.tool, mat);
     t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
-    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Citizen ? -0.4 : 0) : -(mdl.toolTilt || 0);
+    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Builder ? -0.4 : 0) : -(mdl.toolTilt || 0);
     g.add(t);
   }
   g.rotation.y = isBld(k) ? -0.6 : -0.9;

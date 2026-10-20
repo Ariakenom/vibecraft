@@ -23,7 +23,8 @@ use crate::path::Goal;
 const MAGIC: &[u8; 4] = b"VCSV";
 /// Bump when the layout changes. Old saves are then refused, not misread.
 /// 2: slots replace stockpiles (economy Phase 1).
-const VERSION: u32 = 2;
+/// 3: people, houses, builders (economy Phase 2).
+const VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -81,6 +82,10 @@ impl W {
             }
             Order::Build(id) => {
                 self.u8(6);
+                self.u32(id);
+            }
+            Order::Arrive(id) => {
+                self.u8(7);
                 self.u32(id);
             }
         }
@@ -156,6 +161,7 @@ impl R<'_> {
             }
             3 => Order::Attack { target: self.u32()?, auto: self.bool()? },
             6 => Order::Build(self.u32()?),
+            7 => Order::Arrive(self.u32()?),
             _ => return None,
         })
     }
@@ -240,12 +246,16 @@ impl Game {
             }
             w.f32(e.progress);
             w.opt_pt(e.rally);
+            w.u8(e.builders_in);
+            w.u8(e.residents);
+            w.u32(e.goods);
         }
 
         w.len(self.players.len());
         for p in &self.players {
             w.u32(p.supply_pct as u32);
             w.u32(p.pop);
+            w.f32(p.arrive_timer);
             w.bool(p.defeated);
             w.bool(p.short);
             w.u32(p.trained);
@@ -363,6 +373,9 @@ impl Game {
             e.queue = (0..nq).map(|_| r.kind()).collect::<Option<Vec<_>>>()?;
             e.progress = r.f32()?;
             e.rally = r.opt_pt()?;
+            e.builders_in = r.u8()?;
+            e.residents = r.u8()?;
+            e.goods = r.u32()?;
             ents.push(e);
         }
 
@@ -378,6 +391,7 @@ impl Game {
             }
             let mut p = Player::new(pct as u16);
             p.pop = r.u32()?;
+            p.arrive_timer = r.f32()?;
             p.defeated = r.bool()?;
             p.short = r.bool()?;
             p.trained = r.u32()?;
@@ -423,7 +437,7 @@ impl Game {
         let ok_ent = |id: u32| (id as usize) < ents.len();
         let refs_ok = ents.iter().all(|e| match e.order {
             Order::Attack { target, .. } => ok_ent(target),
-            Order::Build(id) => ok_ent(id),
+            Order::Build(id) | Order::Arrive(id) => ok_ent(id),
             _ => true,
         }) && proj.iter().all(|p| ok_ent(p.target) && ok_ent(p.attacker))
             && map.dep_at.iter().all(|&v| v < deps.len() as i32)

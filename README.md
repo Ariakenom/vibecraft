@@ -429,19 +429,24 @@ versions don't play together.
   everything you have holds some while it exists, giving them back when
   it's gone. Lose a producer and you hold more than you make: your newest
   units that need it lose health until it fits again.
+- **People live in huts.** A hut gets 2 beds for each different food it
+  receives (up to 3 kinds). While there's a free bed, a newcomer arrives
+  at the Capitol every 10 seconds. People at home work the producers; every
+  builder and soldier is someone who left home, and holds a bed while
+  alive. Builders are used up at their foundation.
 - **Maps:** two players get an 80×80 map with 180° symmetry; three or four
   get 96×96 with four-way symmetry, so every start is the same, just turned.
 
 **Controls.**
 - **Camera:** WASD, arrows or screen edges move it; the wheel zooms;
   middle-drag rotates and tilts.
-- **Build:** Q farm, E lumber camp, R quarry, T fishing hut, Y hunting
-  lodge, U orchard, I pasture, O barracks, F range, G stable, C tower,
-  B wonder.
+- **Build:** Q hut, E farm, R lumber camp, T quarry, Y fishing hut,
+  U hunting lodge, I orchard, O pasture, F barracks, G range, C stable,
+  V tower, B wonder. Del (twice) demolishes the selected buildings.
 - **Train:** Q.
 - **Other keys:**
   - Z attack-move, X stop
-  - H home, `.` idle citizen
+  - H home, `.` idle builder
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, copy a watch link for spectators

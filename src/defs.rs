@@ -72,6 +72,13 @@ impl Res {
 
     /// The era a resource first matters in: 0 Ancient, 1 Medieval, 2
     /// Gunpowder, 3 Industrial, 4 Modern, 5 Atomic.
+    /// Is this something residents want at home (food, clothes, books...)?
+    /// Each house holds one slot of each good it uses; see `house_max_goods`.
+    pub fn is_house_good(self) -> bool {
+        use Res::*;
+        matches!(self, Grain | Fish | Meat | Fruit | Bread | Clothes | Beer | Furniture | Books | Circus | CannedFood | Heating | Newspapers | Electricity | Radios | Cars | Tvs)
+    }
+
     pub fn era(self) -> u8 {
         use Res::*;
         match self {
@@ -117,10 +124,13 @@ impl Dep {
 /// too, so renumbering means bumping the save `VERSION`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
-    Citizen = 0,
+    Builder = 0,
     Spearman = 1,
     Archer = 2,
     Horseman = 3,
+    /// A newcomer walking from the Capitol to a house with a free bed. Not
+    /// a unit you command: on arrival they become a resident and vanish.
+    Arrival = 4,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -134,6 +144,7 @@ pub enum Kind {
     Orchard = 74,
     Pasture = 75,
     Wonder = 76,
+    Hut = 77,
 }
 
 /// Kinds numbered from here on are buildings.
@@ -159,9 +170,11 @@ pub struct Stats {
     /// Slots it borrows to make its output (converters, from the Medieval era).
     #[allow(dead_code)]
     pub consumes: Slots,
-    /// Residents it needs at work to produce (from Phase 2 on).
-    #[allow(dead_code)]
+    /// Residents it needs at work to produce. Without its full crew it makes nothing.
     pub workers: u8,
+    /// Builders who must arrive at the foundation before it starts to rise.
+    /// They're used up: each one was a person.
+    pub builders: u8,
     /// The deposit it has to be built next to, if any.
     pub needs_deposit: Option<Dep>,
     /// Seconds to train, or seconds of work to construct.
@@ -173,10 +186,10 @@ pub struct Stats {
 // `const fn` can run at compile time, so these tables cost nothing at runtime.
 #[allow(clippy::too_many_arguments)]
 const fn unit(hp: f32, attack: f32, range: f32, cooldown: f32, speed: f32, sight: f32, cost: Slots, time: f32) -> Stats {
-    Stats { hp, attack, range, cooldown, speed, sight, cost, produces: &[], consumes: &[], workers: 0, needs_deposit: None, time, size: 0 }
+    Stats { hp, attack, range, cooldown, speed, sight, cost, produces: &[], consumes: &[], workers: 0, builders: 0, needs_deposit: None, time, size: 0 }
 }
 const fn building(hp: f32, sight: f32, cost: Slots, time: f32, size: i32) -> Stats {
-    Stats { hp, attack: 0.0, range: 0.0, cooldown: 0.0, speed: 0.0, sight, cost, produces: &[], consumes: &[], workers: 0, needs_deposit: None, time, size }
+    Stats { hp, attack: 0.0, range: 0.0, cooldown: 0.0, speed: 0.0, sight, cost, produces: &[], consumes: &[], workers: 0, builders: 1, needs_deposit: None, time, size }
 }
 /// A building that makes slots from a deposit next to it (or from nothing, for farms).
 const fn extractor(hp: f32, cost: Slots, makes: Slots, workers: u8, dep: Option<Dep>, time: f32, size: i32) -> Stats {
@@ -185,15 +198,20 @@ const fn extractor(hp: f32, cost: Slots, makes: Slots, workers: u8, dep: Option<
 
 use Res::*;
 
-// Units. Every number here is a first guess, to be tuned in play.
+// Units. Every number here is a first guess, to be tuned in play. Every
+// unit also takes one resident from a house (see `Game::queue_unit`).
 //                                    hp   atk  range  cd   speed sight cost          time
-static CITIZEN: Stats = unit(45.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[(Grain, 1)], 12.0);
+static BUILDER: Stats = unit(45.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
+static ARRIVAL: Stats = unit(30.0, 0.0, 0.0, 1.0, 2.0, 3.0, &[], 0.0);
 static SPEARMAN: Stats = unit(95.0, 8.0, 0.4, 1.5, 2.1, 6.0, &[(Wood, 1)], 15.0);
 static ARCHER: Stats = unit(55.0, 6.0, 5.5, 1.8, 2.1, 8.0, &[(Wood, 1)], 16.0);
 static HORSEMAN: Stats = unit(120.0, 9.0, 0.4, 1.6, 3.6, 7.0, &[(Horses, 1)], 20.0);
 
-// The Capitol makes a little of the basics by itself, so a game can start.
-static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 4)], ..building(1600.0, 9.0, &[], 60.0, 3) };
+// The Capitol makes a little of the basics by itself, with no workers, so a
+// game can start: two kinds of food fill the two starting huts.
+static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], ..building(1600.0, 9.0, &[], 60.0, 3) };
+// A house: its beds depend on how many different goods it gets.
+static HUT: Stats = building(300.0, 4.0, &[(Wood, 1)], 12.0, 2);
 static BARRACKS: Stats = building(800.0, 6.0, &[(Wood, 3)], 30.0, 3);
 static RANGE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 1)], 30.0, 3);
 static STABLE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 2)], 35.0, 3);
@@ -210,19 +228,29 @@ static HUNTING_LODGE: Stats = extractor(300.0, &[(Wood, 1)], &[(Meat, 2)], 1, So
 static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(Dep::Fertile), 12.0, 2);
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
 
-// The Wonder holds a great many slots while it stands. It takes 2400
-// citizen-seconds of work: ten builders need four minutes.
-static WONDER: Stats = building(4000.0, 8.0, &[(Wood, 12), (Stone, 12), (Grain, 2), (Fish, 2), (Meat, 2), (Fruit, 2), (Horses, 2)], 2400.0, 4);
+// The Wonder holds a great many slots while it stands, needs three builders
+// and takes four minutes to rise.
+static WONDER: Stats = Stats { builders: 3, ..building(4000.0, 8.0, &[(Wood, 12), (Stone, 12), (Grain, 2), (Fish, 2), (Meat, 2), (Fruit, 2), (Horses, 2)], 240.0, 4) };
 
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
 pub const UNSUPPLIED_DAMAGE: f32 = 0.01;
 
+/// Seconds between newcomers arriving at a player's Capitol, while there's a
+/// free bed somewhere.
+pub const ARRIVAL_INTERVAL: f32 = 10.0;
+/// Beds a house gives for each different good it gets.
+pub const BEDS_PER_GOOD: u8 = 2;
+/// How many different goods a house of this tier can use (3 for a hut).
+pub fn house_max_goods(tier: u8) -> u8 {
+    3 + 2 * tier
+}
+
 impl Kind {
     /// Every kind, for loops over all of them.
-    pub const ALL: [Kind; 17] = {
+    pub const ALL: [Kind; 19] = {
         use Kind::*;
-        [Citizen, Spearman, Archer, Horseman, Capitol, Barracks, Range, Stable, Tower, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Wonder]
+        [Builder, Spearman, Archer, Horseman, Arrival, Capitol, Barracks, Range, Stable, Tower, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Wonder, Hut]
     };
 
     /// Convert a number from JavaScript into a `Kind`. Returns `None` for junk,
@@ -234,7 +262,8 @@ impl Kind {
     pub fn stats(self) -> &'static Stats {
         use Kind::*;
         match self {
-            Citizen => &CITIZEN,
+            Builder => &BUILDER,
+            Arrival => &ARRIVAL,
             Spearman => &SPEARMAN,
             Archer => &ARCHER,
             Horseman => &HORSEMAN,
@@ -251,6 +280,7 @@ impl Kind {
             Orchard => &ORCHARD,
             Pasture => &PASTURE,
             Wonder => &WONDER,
+            Hut => &HUT,
         }
     }
 
@@ -270,9 +300,9 @@ impl Kind {
 
     /// Every buildable building, in tech-tree order (used by the UI and AI).
     #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 12] = {
+    pub const BUILDABLE: [Kind; 13] = {
         use Kind::*;
-        [Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
+        [Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
     };
 
     pub fn is_building(self) -> bool {
@@ -283,10 +313,23 @@ impl Kind {
         matches!(self, Kind::Spearman | Kind::Archer | Kind::Horseman)
     }
 
+    /// The tier of a house, or `None` for anything that isn't one.
+    pub fn house_tier(self) -> Option<u8> {
+        match self {
+            Kind::Hut => Some(0),
+            _ => None,
+        }
+    }
+
+    /// A unit that holds a bed: everything that walks except arrivals.
+    pub fn holds_bed(self) -> bool {
+        !self.is_building() && self != Kind::Arrival
+    }
+
     /// Which units this building can train. A slice of a static array.
     pub fn trains(self) -> &'static [Kind] {
         match self {
-            Kind::Capitol => &[Kind::Citizen],
+            Kind::Capitol => &[Kind::Builder],
             Kind::Barracks => &[Kind::Spearman],
             Kind::Range => &[Kind::Archer],
             Kind::Stable => &[Kind::Horseman],
@@ -302,7 +345,7 @@ impl Kind {
     pub fn radius(self) -> f32 {
         match self {
             Kind::Horseman => 0.42,
-            Kind::Citizen => 0.28,
+            Kind::Builder | Kind::Arrival => 0.28,
             _ => 0.32,
         }
     }

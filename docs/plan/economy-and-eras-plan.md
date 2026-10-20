@@ -126,6 +126,31 @@ the AI does too.
 
 **Goal:** the population system. Citizens go away.
 
+**Status: done** (October 2026, branch `economy`). Where it differs from
+the steps below:
+- The whole resolution order runs **every tick**, like Phase 1's slots.
+  Saved: house residents and goods, `builders_in`, each player's arrival
+  timer; everything else is recounted.
+- House goods come **last**: building and training check `supply − used`
+  only, and houses share what's left (`Player::spare`). A new building that
+  needs grain takes it from the furthest house.
+- Start: the Capitol makes 2 grain **and 2 fruit**, so both starting huts
+  get 2 goods (8 beds) for the 6 residents and 2 builders.
+- Builders needed: 1 for everything except the Wonder (3). The Wonder now
+  rises in 240 s once its builders are in. A hut costs 1 wood.
+- Cancelling training puts the person in the nearest house with a free
+  bed (not necessarily the one they came from).
+- **Demolish** (command 9, Del pressed twice, not the Capitol): added
+  because a player could get stuck with every bed full, everyone working
+  and no free resident to crew the food producer that would add beds.
+- The arrival timer ticks every 10 s whether or not a bed is free.
+- The AI keeps two residents free (builders and soldiers come from beyond
+  them) and only builds a producer it can crew; otherwise it stalled.
+- Hotkeys: Q hut, E farm, R lumber camp, T quarry, Y fishing hut, U
+  hunting lodge, I orchard, O pasture, F barracks, G range, C stable, V
+  tower, B wonder; `.` idle builder.
+- Save `VERSION` 3, `NET.PROTOCOL` 9.
+
 `src/defs.rs`
 - Kinds: `Hut` (house, tier 0), `Builder` (unit, trained at the Capitol).
   Each building gets `builders_needed: u8` and `workers: u8`.

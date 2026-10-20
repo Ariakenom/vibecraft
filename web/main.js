@@ -7,14 +7,16 @@ const ENT_STRIDE = 18;
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
-const K = { Citizen: 0, Spearman: 1, Archer: 2, Horseman: 3, Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
-  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76 };
+const K = { Builder: 0, Spearman: 1, Archer: 2, Horseman: 3, Arrival: 4, Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
+  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76, Hut: 77 };
 const isBld = k => k >= 64;
-const NAMES = { [K.Citizen]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
+const NAMES = { [K.Builder]: "Builder", [K.Arrival]: "Newcomer", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
   [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture", [K.Wonder]: "Wonder" };
 const DESC = {
-  [K.Citizen]: "Constructs buildings.",
+  [K.Builder]: "Walks to a foundation and is used up there: once enough builders have arrived, the building rises by itself.",
+  [K.Arrival]: "On their way to a house with a free bed.",
+  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people).",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
@@ -35,7 +37,7 @@ const DESC = {
 // The tech tree, grouped into eras. Your era is the latest one you've built
 // something from. (Requirements themselves live in Rust: Kind::requires.)
 const ERAS = [
-  { name: "Village", kinds: [K.Farm, K.LumberCamp, K.Quarry, K.Barracks] },
+  { name: "Village", kinds: [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.Barracks] },
   { name: "Town", kinds: [K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Range] },
   { name: "City", kinds: [K.Stable, K.Tower] },
   { name: "Empire", kinds: [K.Wonder] },
@@ -47,17 +49,17 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
 const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water"];
-const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "Building"];
+const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Moving in"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
 const PLIGHT = ["#bbb", "#8cb9f0", "#ec8a77", "#86d69a", "#f2d27f"];
 const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
 // Hotkeys avoid W, A, S and D, which move the camera.
-const BUILD_MENU = [[K.Farm, "Q"], [K.LumberCamp, "E"], [K.Quarry, "R"], [K.FishingHut, "T"], [K.HuntingLodge, "Y"], [K.Orchard, "U"],
-  [K.Pasture, "I"], [K.Barracks, "O"], [K.Range, "F"], [K.Stable, "G"], [K.Tower, "C"], [K.Wonder, "B"]];
+const BUILD_MENU = [[K.Hut, "Q"], [K.Farm, "E"], [K.LumberCamp, "R"], [K.Quarry, "T"], [K.FishingHut, "Y"], [K.HuntingLodge, "U"], [K.Orchard, "I"],
+  [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"], [K.Wonder, "B"]];
 const TRAIN_KEYS = "QERT";
-const TRAINS = { [K.Capitol]: [K.Citizen], [K.Barracks]: [K.Spearman], [K.Range]: [K.Archer], [K.Stable]: [K.Horseman] };
+const TRAINS = { [K.Capitol]: [K.Builder], [K.Barracks]: [K.Spearman], [K.Range]: [K.Archer], [K.Stable]: [K.Horseman] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -320,9 +322,10 @@ function readWorld() {
 }
 const E = (i, f) => ents[i * ENT_STRIDE + f];
 // field offsets
-// flags: 1 selected, 2 under construction, 4 visible, 8 just hit, 16 unsupplied (yours only).
-// Fields 12 and 13 are free (they were what a citizen carried).
-const F = { id: 0, kind: 1, owner: 2, x: 3, y: 4, px: 5, py: 6, hp: 7, maxhp: 8, flags: 9, prog: 10, anim: 11, face: 14, order: 15, rx: 16, ry: 17 };
+// flags: 1 selected, 2 under construction, 4 visible, 8 just hit, 16 unsupplied,
+// 32 a producer without its crew (the last two for your own things only).
+// residents and beds are a house's.
+const F = { id: 0, kind: 1, owner: 2, x: 3, y: 4, px: 5, py: 6, hp: 7, maxhp: 8, flags: 9, prog: 10, anim: 11, residents: 12, beds: 13, face: 14, order: 15, rx: 16, ry: 17 };
 
 function selection() {
   const out = [];
@@ -337,10 +340,18 @@ function drawOverlay() {
   octx.setTransform(dpr, 0, 0, dpr, 0, 0);
   octx.clearRect(0, 0, view._w, view._h);
   for (let i = 0; i < entCount; i++) {
-    const sel = E(i, F.flags) & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(E(i, F.kind)), short = E(i, F.flags) & 16;
-    if (!sel && !short && (f >= 1 || bld)) continue;
+    const sel = E(i, F.flags) & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(E(i, F.kind)), short = E(i, F.flags) & 16, idleP = E(i, F.flags) & 32;
+    if (!sel && !short && !idleP && (f >= 1 || bld)) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
+    if (idleP) { // a producer with no crew: a person, crossed out
+      const x = p.x, y = p.y - 20;
+      octx.fillStyle = "rgba(20,16,10,.8)"; octx.beginPath(); octx.arc(x, y, 13, 0, 7); octx.fill();
+      octx.fillStyle = "#d9c9a8"; octx.beginPath(); octx.arc(x, y - 4, 3.6, 0, 7); octx.fill();
+      octx.beginPath(); octx.moveTo(x - 7, y + 8); octx.quadraticCurveTo(x, y - 4, x + 7, y + 8); octx.fill();
+      octx.strokeStyle = "#e2593f"; octx.lineWidth = 2.5; octx.beginPath(); octx.moveTo(x - 8, y - 8); octx.lineTo(x + 8, y + 8); octx.stroke();
+      if (!sel && f >= 1) continue;
+    }
     if (short) { // unsupplied: a small amber warning sign above the bar
       octx.fillStyle = "#e3b23c"; octx.strokeStyle = "rgba(0,0,0,.7)"; octx.lineWidth = 1.5;
       octx.beginPath(); octx.moveTo(p.x, p.y - 22); octx.lineTo(p.x + 6, p.y - 12); octx.lineTo(p.x - 6, p.y - 12); octx.closePath(); octx.stroke(); octx.fill();
@@ -405,7 +416,10 @@ function setupTopBar(shown = []) {
     c.onclick = () => { resTipFor = resTipFor === r ? -1 : r; renderResTip(); }; // tap on phones
     bar.append(c); chips.push(c);
   }
-  const pop = document.createElement("span"); pop.className = "chip pop";
+  const pop = document.createElement("span"); pop.className = "chip pop"; pop.tabIndex = 0;
+  pop.onmouseenter = pop.onfocus = () => { resTipFor = PEOPLE_TIP; renderResTip(); };
+  pop.onmouseleave = pop.onblur = () => { resTipFor = -1; $("restip").hidden = true; };
+  pop.onclick = () => { resTipFor = resTipFor === PEOPLE_TIP ? -1 : PEOPLE_TIP; renderResTip(); };
   const era = document.createElement("button"); era.className = "era"; era.title = "Tech tree (K)";
   era.onclick = toggleTech;
   const wonder = document.createElement("span"); wonder.className = "chip foe-wonder"; wonder.hidden = true;
@@ -413,6 +427,7 @@ function setupTopBar(shown = []) {
   topBar = { chips, pop, era, wonder, key: shown.join(",") };
 }
 let topBar = null, resTipFor = -1;
+const PEOPLE_TIP = -2; // resTipFor value: the people chip's tooltip
 // Buildings the player has already been told they can build.
 let knownUnlocked = new Set();
 
@@ -435,9 +450,11 @@ function renderTopBar() {
     sm.textContent = `/ ${W.supply(r)}`;
     c.classList.toggle("over", f < 0);
   }
-  const hungry = W.unsupplied();
+  // People: everyone (at home and units) out of the beds there are, and
+  // how many at home have no job.
+  const hungry = W.unsupplied(), home = W.people(0), beds = W.people(1), units = W.people(2), idle = home - W.people(3);
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
-  topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${W.pop()}${hungry ? ` · ${hungry} unsupplied` : ""}`;
+  topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${home + units}<small>/ ${beds}</small><small>· ${idle} free</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
   topBar.era.textContent = `${ERAS[eraIndex()].name} era`;
   const ew = W.enemy_wonder();
   topBar.wonder.hidden = ew < 0;
@@ -449,6 +466,7 @@ function renderTopBar() {
 // Where a resource's slots come from and what holds them.
 function renderResTip() {
   const tip = $("restip"), r = resTipFor;
+  if (r === PEOPLE_TIP && topBar) return renderPeopleTip(tip);
   const chipEl = topBar && topBar.chips.find(c => +c.dataset.r === r);
   if (r < 0 || !chipEl) { tip.hidden = true; return; }
   const line = (label, v, cls = "") => `<div class="row ${cls}"><span>${label}</span><b>${v}</b></div>`;
@@ -465,13 +483,33 @@ function renderResTip() {
     if (n && c) { html += line(`${plural(k, n)} × ${c[1]}`, `−${n * c[1]}`, "neg"); held += n * c[1]; }
   }
   if (W.used(r) > held) html += line("In training", `−${W.used(r) - held}`, "neg");
+  if (W.housed(r)) html += line("In houses", `−${W.housed(r)}`, "neg");
   if (W.supply(r) !== made) html += line("Handicap", `${W.supply(r) - made >= 0 ? "+" : "−"}${Math.abs(W.supply(r) - made)}`);
-  html += `<div class="row total"><span>Free</span><b>${free(r)}</b></div>`;
+  html += `<div class="row total"><span>Free</span><b>${free(r) - W.housed(r)}</b></div>`;
+  if (W.is_house_good(r)) html += `<p class="note">Houses want it: each house takes one, nearest the Capitol first, and gets 2 beds for it. Buildings and units come first: when it runs short, the furthest houses lose it.</p>`;
   if (free(r) < 0) html += `<p class="bad">You hold more ${RES_NAMES[r]} than you make: your newest units that need it are losing health.</p>`;
   const p = producerOf(r);
   html += `<p class="note">Slots are borrowed, not spent: whatever holds them gives them back when it's gone.${p != null ? ` A ${NAMES[p]} makes more.` : ""}</p>`;
   tip.innerHTML = html;
   const chip = chipEl.getBoundingClientRect(), app = $("app").getBoundingClientRect();
+  tip.style.left = `${Math.max(8, Math.min(app.width - 270, chip.left - app.left))}px`;
+  tip.hidden = false;
+}
+
+// Where everyone is: at home, at work, in arms, on the way.
+function renderPeopleTip(tip) {
+  const home = W.people(0), beds = W.people(1), units = W.people(2), work = W.people(3), coming = W.people(4);
+  const line = (label, v, cls = "") => `<div class="row ${cls}"><span>${label}</span><b>${v}</b></div>`;
+  let html = `<h4>People</h4>`;
+  html += line("At home, working", work) + line("At home, free", home - work, home - work ? "pos" : "") + line("Builders and soldiers", units);
+  html += `<div class="row total"><span>Beds</span><b>${home + units} / ${beds}</b></div>`;
+  if (coming) html += line("On their way", coming, "pos");
+  html += home + units + coming < beds
+    ? `<p>There are free beds: someone new arrives at the Capitol every 10 seconds.</p>`
+    : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of food: each kind is 2 more beds in every house that gets it.</p>`;
+  html += `<p class="note">Every builder and soldier is someone who left home. Producers need people at home to work them.</p>`;
+  tip.innerHTML = html;
+  const chip = topBar.pop.getBoundingClientRect(), app = $("app").getBoundingClientRect();
   tip.style.left = `${Math.max(8, Math.min(app.width - 270, chip.left - app.left))}px`;
   tip.hidden = false;
 }
@@ -510,7 +548,7 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 7; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 18}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${ERAS.flatMap(e => e.kinds).map(k => W.has_built(k)).join("")}|${freeSig}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 50}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${ERAS.flatMap(e => e.kinds).map(k => W.has_built(k)).join("")}|${freeSig}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");
@@ -525,7 +563,7 @@ function renderSelection(force) {
   } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
-    d.innerHTML = `<h3>Outlast your rivals</h3>Nothing is gathered or spent here: buildings <b>make</b> resources, and everything you have <b>holds</b> some while it exists. Select a citizen and build a <b>Lumber Camp</b> by a forest, a <b>Quarry</b> by rock, <b>Farms</b> for grain. Then a <b>Barracks</b>, <b>Archery Range</b> or <b>Stable</b> for an army. Lose a producer and your newest units that need it start losing health. Press <kbd class="k">.</kbd> to find idle citizens.`;
+    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. People live in <b>Huts</b>: each kind of food a hut gets is 2 more beds, and newcomers fill free beds. People at home work your producers; every builder and soldier is someone who left home. Select a builder and put up a <b>Lumber Camp</b> by a forest or a <b>Farm</b>, then more huts and food. Press <kbd class="k">.</kbd> to find idle builders.`;
     panel.append(d);
   } else if (sel.length === 1) {
     singleInfo(panel, sel[0]);
@@ -561,9 +599,22 @@ function singleInfo(panel, i) {
     if (owner === ME || observe) html += `<div class="statline">${ORDER_TEXT[E(i, F.order)]}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
   } else if (E(i, F.flags) & 2) {
-    html += `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
+    const need = stat(k, 9), got = W.builders_in(id);
+    html += got < need
+      ? `<div class="statline">Waiting for builders · ${got} of ${need} here. Send idle builders with a right-click.</div>`
+      : `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
+  } else if (stat(k, 10) >= 0) {
+    // A house: who lives here, and which goods give its beds.
+    const goods = W.house_goods(id), max = W.house_max_goods(stat(k, 10)), n = popcount(goods);
+    const have = []; for (let r = 0; r < W.n_res(); r++) if (goods >> r & 1) have.push(r);
+    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken</div>`;
+    if (owner === ME || observe) {
+      html += `<div class="statline">Gets ${have.length ? `<span class="cost inline">${have.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span>` : "nothing yet"}</div>`;
+      if (n < max) html += `<div class="statline">Room for ${max - n} more kind${max - n === 1 ? "" : "s"} of food: each adds 2 beds.</div>`;
+    }
   } else if (slotsOf(k, 1).length) {
-    html += `<div class="statline">Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span></div>`;
+    html += `<div class="statline">Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span>${stat(k, 7) ? ` · ${stat(k, 7)} worker${stat(k, 7) === 1 ? "" : "s"}` : ""}</div>`;
+    if (E(i, F.flags) & 32) html += `<div class="statline bad">Idle: nobody at home is free to work it. Build huts and give them food.</div>`;
   }
   info.innerHTML = html;
   if (isBld(k) && (owner === ME || observe) && W.queue_len(id) > 0) {
@@ -618,7 +669,7 @@ function renderCommands(sel) {
     return h;
   };
 
-  if (kinds.has(K.Citizen)) {
+  if (kinds.has(K.Builder)) {
     for (const [k, key] of BUILD_MENU) {
       const fn = () => startPlacing(k);
       const locked = isBld(k) && !W.unlocked(k);
@@ -633,6 +684,16 @@ function renderCommands(sel) {
     add(cmdButton(`Train ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), tip: unitTip(k) + `<p>Right-click the map to set a rally point.</p>` }), key, fn);
   }
   const hasUnits = mine.some(i => !isBld(E(i, F.kind)));
+  const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
+  if (doomed.length && !hasUnits) {
+    const armed = demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000;
+    const fn = () => {
+      if (demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
+      else { demolishArm = { key: doomed.join(","), t: performance.now() }; toast("Press Demolish again to tear it down"); }
+      selKey = "";
+    };
+    add(cmdButton(armed ? "Really demolish?" : "Demolish", "Del", fn, { glyph: armed ? "!" : "⌧", tip: "<h4>Demolish</h4><p>Tear it down. Its slots and workers come free; anyone in a house or a training queue is lost. Press twice.</p>" }), "Delete", fn);
+  }
   if (mine.some(i => E(i, F.kind) >= 1 && E(i, F.kind) <= 3)) {
     const fn = () => setAmode(true);
     add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
@@ -650,6 +711,8 @@ function toast(msg, cls = "") {
   while ($("toasts").children.length > 4) $("toasts").firstChild.remove();
 }
 // Error codes from Rust (`CmdError::code` in game.rs).
+let demolishArm = null;
+const popcount = v => { let n = 0; for (; v; v >>>= 1) n += v & 1; return n; };
 function explain(code) {
   if (code >= 2000) return `Build a ${NAMES[code - 2000]} first`;
   if (code >= 1000) {
@@ -657,7 +720,8 @@ function explain(code) {
     return `Not enough ${RES_NAMES[r]}` + (p != null ? `: build another ${NAMES[p]}` : "");
   }
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
-  return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there" }[code] || "Can't do that";
+  return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
+    13: "Nobody is at home to train: build huts and give them food" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -720,7 +784,7 @@ function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
   if (!arr.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = arr[0] | 0;
-  if (c < 1 || c > 8) return null;
+  if (c < 1 || c > 9) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
 const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || isBld(E(i, F.kind)) === buildings)).map(i => E(i, F.id));
@@ -777,7 +841,7 @@ function boxSelect(x0, y0, x1, y1, add, kindFilter = -1) {
   for (let i = 0; i < entCount; i++) {
     if (E(i, F.owner) !== ME) continue;
     const k = E(i, F.kind);
-    if (kindFilter >= 0 && k !== kindFilter) continue;
+    if (k === K.Arrival || (kindFilter >= 0 && k !== kindFilter)) continue;
     const p = entScreen(i, false);
     if (!p || p.behind || p.x < lx || p.x > hx || p.y < ly || p.y > hy) continue;
     (isBld(k) ? buildings : units).push(E(i, F.id));
@@ -970,7 +1034,7 @@ window.addEventListener("keydown", e => {
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
-  if (k === "." || k === ",") { const id = W.idle_citizen(); if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; } else toast("No idle citizens"); return; }
+  if (k === "." || k === ",") { const id = W.idle_builder(); if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; } else toast("No idle builders"); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
   if (cmdKeys[k]) { cmdKeys[k](); e.preventDefault(); }
 });
