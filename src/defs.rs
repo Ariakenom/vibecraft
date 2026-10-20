@@ -102,6 +102,10 @@ pub enum Dep {
     Game = 4,
     /// Not a deposit on the map: open water next to the building.
     Water = 5,
+    /// Medieval: iron ore, clay pits, and hills for sheep.
+    Iron = 6,
+    Clay = 7,
+    Hills = 8,
 }
 
 impl Dep {
@@ -113,9 +117,26 @@ impl Dep {
             3 => Dep::Horses,
             4 => Dep::Game,
             5 => Dep::Water,
+            6 => Dep::Iron,
+            7 => Dep::Clay,
+            8 => Dep::Hills,
             _ => return None,
         })
     }
+}
+
+/// What a unit or building is in a fight. Counters work by class, so they
+/// carry across eras: anti-mounted line infantry beats mounted, ranged
+/// beats line, mounted beats ranged, siege beats buildings.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    /// Builders and newcomers.
+    Civilian,
+    Line,
+    Ranged,
+    Mounted,
+    Siege,
+    Building,
 }
 
 /// Every kind of entity. Units are numbered from 0, buildings from 64
@@ -131,6 +152,10 @@ pub enum Kind {
     /// A newcomer walking from the Capitol to a house with a free bed. Not
     /// a unit you command: on arrival they become a resident and vanish.
     Arrival = 4,
+    Swordsman = 5,
+    Crossbowman = 6,
+    Knight = 7,
+    Trebuchet = 8,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -145,6 +170,14 @@ pub enum Kind {
     Pasture = 75,
     Wonder = 76,
     Hut = 77,
+    Cottage = 78,
+    SheepFarm = 79,
+    IronMine = 80,
+    Brickworks = 81,
+    Bakery = 82,
+    Weaver = 83,
+    Brewery = 84,
+    SiegeWorkshop = 85,
 }
 
 /// Kinds numbered from here on are buildings.
@@ -167,8 +200,8 @@ pub struct Stats {
     pub cost: Slots,
     /// Slots it makes once built (extractors, and the Capitol).
     pub produces: Slots,
-    /// Slots it borrows to make its output (converters, from the Medieval era).
-    #[allow(dead_code)]
+    /// Slots it borrows to make its output: a converter (a bakery borrows
+    /// grain to make bread). Without its inputs free, it makes nothing.
     pub consumes: Slots,
     /// Residents it needs at work to produce. Without its full crew it makes nothing.
     pub workers: u8,
@@ -195,6 +228,10 @@ const fn building(hp: f32, sight: f32, cost: Slots, time: f32, size: i32) -> Sta
 const fn extractor(hp: f32, cost: Slots, makes: Slots, workers: u8, dep: Option<Dep>, time: f32, size: i32) -> Stats {
     Stats { produces: makes, workers, needs_deposit: dep, ..building(hp, 3.0, cost, time, size) }
 }
+/// A building that borrows slots of one resource to make another.
+const fn converter(hp: f32, cost: Slots, takes: Slots, makes: Slots, workers: u8, time: f32) -> Stats {
+    Stats { produces: makes, consumes: takes, workers, ..building(hp, 3.0, cost, time, 2) }
+}
 
 use Res::*;
 
@@ -206,12 +243,21 @@ static ARRIVAL: Stats = unit(30.0, 0.0, 0.0, 1.0, 2.0, 3.0, &[], 0.0);
 static SPEARMAN: Stats = unit(95.0, 8.0, 0.4, 1.5, 2.1, 6.0, &[(Wood, 1)], 15.0);
 static ARCHER: Stats = unit(55.0, 6.0, 5.5, 1.8, 2.1, 8.0, &[(Wood, 1)], 16.0);
 static HORSEMAN: Stats = unit(120.0, 9.0, 0.4, 1.6, 3.6, 7.0, &[(Horses, 1)], 20.0);
+// Medieval: better numbers in the same classes, costing iron.
+static SWORDSMAN: Stats = unit(140.0, 11.0, 0.4, 1.4, 2.0, 6.0, &[(Iron, 1)], 18.0);
+static CROSSBOWMAN: Stats = unit(70.0, 9.0, 6.0, 2.2, 2.0, 8.0, &[(Wood, 1), (Iron, 1)], 18.0);
+static KNIGHT: Stats = unit(190.0, 14.0, 0.4, 1.6, 3.3, 7.0, &[(Horses, 1), (Iron, 1)], 24.0);
+// Slow, long reach, terrible against people, crushing against walls.
+static TREBUCHET: Stats = unit(150.0, 40.0, 9.0, 5.0, 1.0, 9.0, &[(Wood, 3)], 30.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, so a
 // game can start: two kinds of food fill the two starting huts.
 static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], ..building(1600.0, 9.0, &[], 60.0, 3) };
-// A house: its beds depend on how many different goods it gets.
+// Houses: beds depend on how many different goods they get. A hut that's
+// full and has all the goods it can use becomes a cottage by itself, if its
+// extra wood and stone are free (`Game::upgrade_houses`).
 static HUT: Stats = building(300.0, 4.0, &[(Wood, 1)], 12.0, 2);
+static COTTAGE: Stats = building(450.0, 4.0, &[(Wood, 2), (Stone, 1)], 12.0, 2);
 static BARRACKS: Stats = building(800.0, 6.0, &[(Wood, 3)], 30.0, 3);
 static RANGE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 1)], 30.0, 3);
 static STABLE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 2)], 35.0, 3);
@@ -227,6 +273,17 @@ static FISHING_HUT: Stats = extractor(300.0, &[(Wood, 1)], &[(Fish, 2)], 1, Some
 static HUNTING_LODGE: Stats = extractor(300.0, &[(Wood, 1)], &[(Meat, 2)], 1, Some(Dep::Game), 12.0, 2);
 static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(Dep::Fertile), 12.0, 2);
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
+// Medieval extractors.
+static SHEEP_FARM: Stats = extractor(350.0, &[(Wood, 1)], &[(Wool, 2)], 1, Some(Dep::Hills), 14.0, 3);
+static IRON_MINE: Stats = extractor(500.0, &[(Wood, 2)], &[(Iron, 3)], 2, Some(Dep::Iron), 20.0, 2);
+static BRICKWORKS: Stats = extractor(450.0, &[(Wood, 1), (Stone, 1)], &[(Brick, 3)], 2, Some(Dep::Clay), 18.0, 2);
+
+// Converters: they borrow their inputs, as long as they're free.
+//                                  hp     cost                          takes          makes          workers time
+static BAKERY: Stats = converter(400.0, &[(Wood, 1), (Stone, 1)], &[(Grain, 2)], &[(Bread, 2)], 1, 16.0);
+static WEAVER: Stats = converter(350.0, &[(Wood, 2)], &[(Wool, 2)], &[(Clothes, 2)], 1, 16.0);
+static BREWERY: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Grain, 2)], &[(Beer, 2)], 1, 16.0);
+static SIEGE_WORKSHOP: Stats = building(800.0, 6.0, &[(Wood, 3), (Brick, 2)], 35.0, 3);
 
 // The Wonder holds a great many slots while it stands, needs three builders
 // and takes four minutes to rise. No fish: not every map has water nearby.
@@ -245,13 +302,19 @@ pub const BEDS_PER_GOOD: u8 = 2;
 pub fn house_max_goods(tier: u8) -> u8 {
     3 + 2 * tier
 }
+/// A player enters the next era when this many of their houses have
+/// reached its tier (and keeps the era if they later drop back).
+pub const HOUSES_FOR_ERA: u32 = 10;
 
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 19] = {
+    pub const ALL: [Kind; 31] = {
         use Kind::*;
-        [Builder, Spearman, Archer, Horseman, Arrival, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
+        [
+            Builder, Spearman, Archer, Horseman, Arrival, Swordsman, Crossbowman, Knight, Trebuchet, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder, Cottage, SheepFarm,
+            IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop,
+        ]
     };
 
     /// Convert a number from JavaScript into a `Kind`. Returns `None` for junk,
@@ -282,11 +345,24 @@ impl Kind {
             Pasture => &PASTURE,
             Wonder => &WONDER,
             Hut => &HUT,
+            Swordsman => &SWORDSMAN,
+            Crossbowman => &CROSSBOWMAN,
+            Knight => &KNIGHT,
+            Trebuchet => &TREBUCHET,
+            Cottage => &COTTAGE,
+            SheepFarm => &SHEEP_FARM,
+            IronMine => &IRON_MINE,
+            Brickworks => &BRICKWORKS,
+            Bakery => &BAKERY,
+            Weaver => &WEAVER,
+            Brewery => &BREWERY,
+            SiegeWorkshop => &SIEGE_WORKSHOP,
         }
     }
 
-    /// The tech tree. You can only build a building once you own a finished
-    /// example of every building it requires. Lose those, and you lose the
+    /// Real dependencies between buildings. Mostly, what a player can build
+    /// is set by their era (`Kind::era`); these are the few that also need
+    /// another building finished first. Lose those, and you lose the
     /// ability to build it again (but keep what you already have).
     pub fn requires(self) -> &'static [Kind] {
         use Kind::*;
@@ -295,36 +371,71 @@ impl Kind {
             Stable => &[Barracks, Pasture],
             Tower => &[Quarry],
             Wonder => &[Range, Stable, Tower],
+            Weaver => &[SheepFarm],
+            SiegeWorkshop => &[Barracks],
             _ => &[],
         }
     }
 
     /// Every buildable building, in tech-tree order (used by the UI and AI).
-    #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 13] = {
+    /// Cottages aren't built: huts become cottages.
+    pub const BUILDABLE: [Kind; 20] = {
         use Kind::*;
-        [Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
+        [Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop]
     };
+
+    /// What fights it is: see `Class` and `damage_mult`.
+    pub fn class(self) -> Class {
+        use Kind::*;
+        match self {
+            Builder | Arrival => Class::Civilian,
+            Spearman | Swordsman => Class::Line,
+            Archer | Crossbowman => Class::Ranged,
+            Horseman | Knight => Class::Mounted,
+            Trebuchet => Class::Siege,
+            _ => Class::Building,
+        }
+    }
+
+    /// The house this one becomes when it grows a tier, if any.
+    pub fn upgrade(self) -> Option<Kind> {
+        match self {
+            Kind::Hut => Some(Kind::Cottage),
+            _ => None,
+        }
+    }
+
+    /// The house this one falls back to when it can't keep its goods.
+    pub fn downgrade(self) -> Option<Kind> {
+        match self {
+            Kind::Cottage => Some(Kind::Hut),
+            _ => None,
+        }
+    }
 
     pub fn is_building(self) -> bool {
         self as u32 >= BUILDINGS_FROM
     }
 
     pub fn is_military(self) -> bool {
-        matches!(self, Kind::Spearman | Kind::Archer | Kind::Horseman)
+        matches!(self.class(), Class::Line | Class::Ranged | Class::Mounted | Class::Siege)
     }
 
     /// The era a kind belongs to: 0 Ancient … 5 Atomic. Players can build
-    /// and train kinds of their era and earlier (from Phase 4; for now
-    /// everything is Ancient).
+    /// and train kinds of their era and earlier.
     pub fn era(self) -> u8 {
-        0
+        use Kind::*;
+        match self {
+            Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
+            _ => 0,
+        }
     }
 
     /// The tier of a house, or `None` for anything that isn't one.
     pub fn house_tier(self) -> Option<u8> {
         match self {
             Kind::Hut => Some(0),
+            Kind::Cottage => Some(1),
             _ => None,
         }
     }
@@ -338,9 +449,10 @@ impl Kind {
     pub fn trains(self) -> &'static [Kind] {
         match self {
             Kind::Capitol => &[Kind::Builder],
-            Kind::Barracks => &[Kind::Spearman],
-            Kind::Range => &[Kind::Archer],
-            Kind::Stable => &[Kind::Horseman],
+            Kind::Barracks => &[Kind::Spearman, Kind::Swordsman],
+            Kind::Range => &[Kind::Archer, Kind::Crossbowman],
+            Kind::Stable => &[Kind::Horseman, Kind::Knight],
+            Kind::SiegeWorkshop => &[Kind::Trebuchet],
             _ => &[],
         }
     }
@@ -352,24 +464,29 @@ impl Kind {
 
     pub fn radius(self) -> f32 {
         match self {
-            Kind::Horseman => 0.42,
+            Kind::Horseman | Kind::Knight => 0.42,
+            Kind::Trebuchet => 0.45,
             Kind::Builder | Kind::Arrival => 0.28,
             _ => 0.32,
         }
     }
 }
 
-/// Rock-paper-scissors: spears beat horses, horses beat archers, archers beat spears.
-/// Match guards (`if ...`) let one arm cover a whole family of cases.
+/// Rock-paper-scissors by class, so it carries across eras: line infantry
+/// (spears, swords) beats mounted, mounted beats ranged, ranged beats line.
+/// Siege engines are for walls. Match guards would work too, but matching
+/// on the pair of classes says it most plainly.
 pub fn damage_mult(attacker: Kind, target: Kind) -> f32 {
-    use Kind::*;
-    match (attacker, target) {
-        (Spearman, Horseman) => 2.5,
-        (Horseman, Archer) => 2.0,
-        (Archer, Spearman) => 1.5,
-        (Archer, t) if t.is_building() => 0.2,
-        (Horseman, t) if t.is_building() => 0.5,
-        (Capitol | Tower, Horseman) => 1.3,
+    use Class::*;
+    match (attacker.class(), target.class()) {
+        (Line, Mounted) => 2.5,
+        (Mounted, Ranged) => 2.0,
+        (Ranged, Line) => 1.5,
+        (Ranged, Building) => 0.2,
+        (Mounted, Building) => 0.5,
+        (Siege, Building) => 3.0,
+        (Siege, _) => 0.3,
+        (Building, Mounted) => 1.3,
         _ => 1.0,
     }
 }
