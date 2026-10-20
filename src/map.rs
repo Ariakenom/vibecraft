@@ -1,7 +1,7 @@
-//! The tile map: terrain, which tiles are blocked, and where resources sit.
+//! The tile map: terrain, which tiles are blocked, and where deposits sit.
 //! Also the procedural map generator.
 
-use crate::defs::Res;
+use crate::defs::Dep;
 
 pub const MAP_W: i32 = 80;
 pub const MAP_H: i32 = 80;
@@ -11,18 +11,17 @@ pub const WATER: u8 = 1;
 pub const SAND: u8 = 2;
 pub const HILL: u8 = 3;
 
-/// A resource node: one tree, berry bush, or chunk of a mine. Each sits on one tile.
+/// One tile of a deposit: a tree of a forest, a rock of a stone outcrop, a
+/// fruit bush, grazing horses or game. Extractors are built next to them.
+/// Deposits never run out, so they never change during a game.
 #[derive(Clone)]
-pub struct Resource {
-    pub kind: Res,
+pub struct Deposit {
+    pub kind: Dep,
     pub tx: i32,
     pub ty: i32,
-    pub amount: f32,
-    pub max: f32,
-    pub alive: bool,
 }
 
-impl Resource {
+impl Deposit {
     pub fn center(&self) -> (f32, f32) {
         (self.tx as f32 + 0.5, self.ty as f32 + 0.5)
     }
@@ -36,8 +35,8 @@ pub struct Map {
     /// Height 0..255, used only for drawing (hills look darker).
     pub shade: Vec<u8>,
     pub blocked: Vec<bool>,
-    /// Index into the resource list, or -1.
-    pub res_at: Vec<i32>,
+    /// Index into the deposit list, or -1.
+    pub dep_at: Vec<i32>,
     /// Building entity id on this tile, or -1.
     pub bld_at: Vec<i32>,
 }
@@ -121,14 +120,15 @@ fn dist_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     dist(p, (a.0 + abx * t, a.1 + aby * t))
 }
 
-/// Tile features placed during generation, before they become `Resource`s.
+/// Tile features placed during generation, before they become `Deposit`s.
 #[derive(Clone, Copy, PartialEq)]
 enum Feat {
     None,
     Tree,
-    Berry,
+    Fertile,
     Stone,
-    Gold,
+    Horses,
+    Game,
 }
 
 /// A symmetry of the map: a way to turn it that lands it on itself.
@@ -153,9 +153,9 @@ impl Sym {
     }
 }
 
-/// Build a fair map for `players` (2 to 4). Returns the map, its resources,
+/// Build a fair map for `players` (2 to 4). Returns the map, its deposits,
 /// and one base centre tile per player.
-pub fn generate(seed: u32, players: usize) -> (Map, Vec<Resource>, Vec<(i32, i32)>) {
+pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>) {
     let players = players.clamp(2, 4);
     let (w, h) = if players <= 2 { (MAP_W, MAP_H) } else { (96, 96) };
     let n = (w * h) as usize;
@@ -215,20 +215,22 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Resource>, Vec<(i32, i32
         }
     }
 
-    // Hand-placed starting resources near base 1, copied to every base.
+    // Hand-placed starting deposits near base 1, copied to every base.
     // (dx, dy, feature, cluster radius)
-    let clusters: [(i32, i32, Feat, f32); 4] = [
+    let clusters: [(i32, i32, Feat, f32); 5] = [
         (-8, -9, Feat::Tree, 3.4),
-        (6, -6, Feat::Berry, 1.6),
-        (8, 4, Feat::Gold, 1.1),
-        (-6, 6, Feat::Stone, 1.1),
+        (6, -6, Feat::Fertile, 1.6),
+        (9, 4, Feat::Horses, 1.6),
+        (-6, 6, Feat::Stone, 1.5),
+        (2, 9, Feat::Game, 1.6),
     ];
-    // Neutral resources out on the map, in 80×80 coordinates (scaled to fit).
-    let neutral: [(i32, i32, Feat, f32); 4] = [
-        (31, 44, Feat::Gold, 1.1),
-        (44, 66, Feat::Stone, 1.1),
-        (24, 30, Feat::Gold, 1.1),
-        (52, 52, Feat::Berry, 1.6),
+    // Neutral deposits out on the map, in 80×80 coordinates (scaled to fit).
+    let neutral: [(i32, i32, Feat, f32); 5] = [
+        (31, 44, Feat::Horses, 1.6),
+        (44, 66, Feat::Stone, 1.5),
+        (24, 30, Feat::Game, 1.6),
+        (52, 52, Feat::Fertile, 1.6),
+        (36, 36, Feat::Stone, 1.5),
     ];
     let mut place = |cx: i32, cy: i32, f: Feat, r: f32| {
         let ri = r.ceil() as i32 + 1;
@@ -242,9 +244,9 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Resource>, Vec<(i32, i32
                 if d > r {
                     continue;
                 }
-                // Berries are sparse; trees a little ragged; mines are solid.
+                // Bushes and animals are sparse; trees a little ragged; rock is solid.
                 let keep = match f {
-                    Feat::Berry => (dx + dy) % 2 == 0,
+                    Feat::Fertile | Feat::Horses | Feat::Game => (dx + dy) % 2 == 0,
                     Feat::Tree => hash(dx + cx, dy + cy, 3) < 0.88,
                     _ => true,
                 };
@@ -276,10 +278,10 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Resource>, Vec<(i32, i32
         }
     }
 
-    // Turn features into resources and mark blocked tiles.
-    let mut res = Vec::new();
+    // Turn features into deposits and mark blocked tiles.
+    let mut deps = Vec::new();
     let mut blocked = vec![false; n];
-    let mut res_at = vec![-1; n];
+    let mut dep_at = vec![-1; n];
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) as usize;
@@ -287,19 +289,20 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Resource>, Vec<(i32, i32
                 blocked[i] = true;
                 continue;
             }
-            let (kind, amount) = match feat[i] {
+            let kind = match feat[i] {
                 Feat::None => continue,
-                Feat::Tree => (Res::Wood, 110.0),
-                Feat::Berry => (Res::Food, 140.0),
-                Feat::Stone => (Res::Stone, 350.0),
-                Feat::Gold => (Res::Gold, 350.0),
+                Feat::Tree => Dep::Forest,
+                Feat::Fertile => Dep::Fertile,
+                Feat::Stone => Dep::Stone,
+                Feat::Horses => Dep::Horses,
+                Feat::Game => Dep::Game,
             };
-            res_at[i] = res.len() as i32;
+            dep_at[i] = deps.len() as i32;
             blocked[i] = true;
-            res.push(Resource { kind, tx: x, ty: y, amount, max: amount, alive: true });
+            deps.push(Deposit { kind, tx: x, ty: y });
         }
     }
 
-    let map = Map { w, h, terrain, shade, blocked, res_at, bld_at: vec![-1; n] };
-    (map, res, bases)
+    let map = Map { w, h, terrain, shade, blocked, dep_at, bld_at: vec![-1; n] };
+    (map, deps, bases)
 }

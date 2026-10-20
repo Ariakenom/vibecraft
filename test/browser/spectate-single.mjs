@@ -21,7 +21,7 @@ check(true, "...and is watching");
 // Give some orders, then pause the host: the spectator catches up to the same tick and must match.
 await host.evaluate(() => { readWorld(); const ids = []; for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === 0) ids.push(E(i, F.id)); issue({ c: 1, ids, x: 30, y: 30 }); });
 await sleep(3000);
-await host.evaluate(() => { readWorld(); for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === 10) issue({ c: 4, ids: [E(i, F.id)], a: 0 }); });
+await host.evaluate(() => { readWorld(); for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === K.Capitol) issue({ c: 4, ids: [E(i, F.id)], a: 0 }); });
 await sleep(2000);
 await host.evaluate(() => togglePause());
 const [ht, hs] = await host.evaluate(() => [simTick, W.checksum()]);

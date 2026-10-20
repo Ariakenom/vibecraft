@@ -1,4 +1,4 @@
-//! The simulation: entities, orders, movement, economy, combat, fog of war.
+//! The simulation: entities, orders, movement, slots, combat, fog of war.
 //!
 //! The whole game advances in fixed steps of `DT` seconds (`Game::tick`).
 //! Fixed steps keep the simulation deterministic no matter the frame rate;
@@ -6,23 +6,17 @@
 
 use crate::ai::Ai;
 use crate::defs::*;
-use crate::map::{self, Map, Resource};
+use crate::map::{self, Deposit, Map};
 use crate::path::{Goal, Pathfinder};
 
 pub const DT: f32 = 1.0 / 20.0;
-pub const CARRY_MAX: f32 = 10.0;
 pub const GAIA: u8 = 0;
 pub const PLAYER: u8 = 1;
 /// Up to four players. Player 0 is "nature" (gaia).
 pub const MAX_PLAYERS: usize = 4;
+/// Citizens each player starts with (the Capitol feeds this many).
+const START_CITIZENS: usize = 3;
 const CELL: i32 = 4; // spatial-hash cell size in tiles
-
-/// Something a citizen can gather from.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ResNode {
-    Node(usize), // index into `Game::res`
-    Farm(u32),   // entity id of a farm
-}
 
 /// What a unit is currently trying to do. Enums with data are one of Rust's
 /// best features: each variant carries exactly the fields it needs, and
@@ -33,8 +27,6 @@ pub enum Order {
     Move { x: f32, y: f32 },
     AttackMove { x: f32, y: f32 },
     Attack { target: u32, auto: bool },
-    Gather(ResNode),
-    Return(ResNode),
     Build(u32),
 }
 
@@ -65,11 +57,9 @@ pub enum Ev {
     Death = 5,    // anything died (data = owner * 100 + kind)
     Melee = 6,    // a melee blow landed (data = attacker kind)
     Shoot = 7,    // an arrow was loosed (data = shooter kind)
-    Work = 8,     // a gathering stroke (data = resource, +4 on a farm)
     Hammer = 9,   // a construction stroke
-    DropOff = 10, // resources delivered (data = resource)
     ArrowHit = 11, // an arrow struck (data = 1 if it hit a building)
-    Starving = 12, // the player's food ran out
+    Short = 12,   // the player holds more than they make, and units suffer (data = resource)
     WonderBegun = 13, // someone laid a Wonder's foundation (data = owner)
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
 }
@@ -77,10 +67,13 @@ pub enum Ev {
 /// Why a command was refused. `code()` is the number JavaScript receives.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum CmdError {
+    /// Not enough free slots of this resource.
     Short(Res),
     QueueFull,
     NoBuilding,
     BadSpot,
+    /// An extractor has to stand next to its deposit.
+    NoDeposit(Dep),
     /// The tech tree says no: this building is needed first.
     Locked(Kind),
 }
@@ -88,11 +81,12 @@ pub enum CmdError {
 impl CmdError {
     pub fn code(self) -> i32 {
         match self {
-            CmdError::Short(r) => 1 + r.idx() as i32,
+            CmdError::Short(r) => 1000 + r.idx() as i32,
             CmdError::QueueFull => 10,
             CmdError::NoBuilding => 11,
             CmdError::BadSpot => 12,
-            CmdError::Locked(k) => 100 + k as i32,
+            CmdError::NoDeposit(d) => 20 + d as i32,
+            CmdError::Locked(k) => 2000 + k as i32,
         }
     }
 }
@@ -127,10 +121,10 @@ pub struct Entity {
     pub stuck: f32,
     pub cooldown: f32,
     pub scan: f32,
-    pub carry_kind: Res,
-    pub carry: f32,
-    pub last_node: Option<ResNode>,
-    /// Timer for work sounds (chopping, hammering).
+    /// Held more than its owner makes: losing health. Worked out afresh
+    /// every tick (`Game::supply_units`), so it isn't saved.
+    pub unsupplied: bool,
+    /// Timer for work sounds (hammering).
     pub sfx: f32,
     // --- buildings ---
     pub tx: i32,
@@ -171,9 +165,7 @@ impl Entity {
             stuck: 0.0,
             cooldown: 0.0,
             scan: 0.0,
-            carry_kind: Res::Food,
-            carry: 0.0,
-            last_node: None,
+            unsupplied: false,
             sfx: 0.0,
             tx: 0,
             ty: 0,
@@ -228,33 +220,38 @@ pub struct Projectile {
 
 #[derive(Clone, Copy)]
 pub struct Player {
-    pub stock: [f32; 4],
+    /// Slots of each resource this player's producers make.
+    pub supply: [u16; N_RES],
+    /// Slots of each resource held by everything this player has: buildings
+    /// (finished or not), units, units in training queues. `supply` and
+    /// `used` are worked out afresh every tick (`Game::recount_slots`), so
+    /// they aren't saved; `pay` adds to `used` at once so that two commands
+    /// in one tick can't both spend the same free slot.
+    pub used: [u16; N_RES],
+    /// Supply in percent: the difficulty handicap or bonus (the AI's only
+    /// "cheat"). 100 for people.
+    pub supply_pct: u16,
     /// Living units (not buildings).
     pub pop: u32,
-    /// Food per minute all those units eat.
-    pub upkeep: f32,
-    /// True while the granary is empty and upkeep can't be paid.
-    pub starving: bool,
     /// Lost their Capitol: out of the game.
     pub defeated: bool,
-    /// Difficulty handicap/bonus on gathering (the AI's only "cheat").
-    pub gather_mult: f32,
-    /// What this player's finished buildings give them. Refreshed every second.
-    pub bonus: Bonuses,
-    /// Resources brought in during each of the last 60 seconds, per resource.
-    /// A ring buffer: `Game::slot` says which second is "now".
-    pub income: [[f32; 4]; 60],
+    /// Some of this player's units were unsupplied last tick. Only used to
+    /// tell the player once when it starts.
+    pub short: bool,
     pub trained: u32,
     pub lost: u32,
-    pub gathered: f32,
+    /// Buildings finished, for the end-of-game numbers.
+    pub built: u32,
 }
 
 impl Player {
-    /// Average income over the last minute, per resource.
-    pub fn income_per_min(&self, r: usize, elapsed: f32) -> f32 {
-        let sum: f32 = self.income.iter().map(|sec| sec[r]).sum();
-        // Early on we have less than a minute of history: scale it up.
-        sum * 60.0 / elapsed.clamp(10.0, 60.0)
+    pub(crate) fn new(supply_pct: u16) -> Player {
+        Player { supply: [0; N_RES], used: [0; N_RES], supply_pct, pop: 0, defeated: false, short: false, trained: 0, lost: 0, built: 0 }
+    }
+
+    /// Free slots of a resource: supply minus use. Negative when short.
+    pub fn free(&self, r: Res) -> i32 {
+        self.supply[r.idx()] as i32 - self.used[r.idx()] as i32
     }
 }
 
@@ -264,9 +261,7 @@ pub enum Intent {
     Nothing,
     Rally,
     Attack(u32),
-    Gather(ResNode),
     Build(u32),
-    DropOff,
     Move,
 }
 
@@ -287,7 +282,8 @@ pub enum Command {
 
 pub enum Pick {
     Ent(u32),
-    Res(usize),
+    /// A deposit tile: nothing to do there, but it stops a click.
+    Dep,
     Nothing,
 }
 
@@ -300,7 +296,7 @@ pub struct Game {
     /// The map seed. Kept so a saved game can be redrawn the same way.
     pub seed: u32,
     pub map: Map,
-    pub res: Vec<Resource>,
+    pub deps: Vec<Deposit>,
     pub ents: Vec<Entity>,
     /// Index 0 is unused (gaia); players are 1..=n_players.
     pub players: Vec<Player>,
@@ -327,9 +323,6 @@ pub struct Game {
     pub events: Vec<f32>,
     /// One computer brain per player slot; `on` says who it plays for.
     pub ais: Vec<Ai>,
-    /// Index of the current second in each player's `income` ring buffer.
-    pub slot: usize,
-    second_timer: f32,
     pf: Pathfinder,
     grid: Vec<Vec<u32>>,
     alert_cooldown: f32,
@@ -340,30 +333,28 @@ impl Game {
     /// A new game: player 1 is the human, the rest are computer players.
     pub fn new(seed: u32, difficulty: u32, n_players: u8) -> Game {
         let n_players = n_players.clamp(2, MAX_PLAYERS as u8);
-        let (map, res, bases) = map::generate(seed, n_players as usize);
+        let (map, deps, bases) = map::generate(seed, n_players as usize);
         let n = (map.w * map.h) as usize;
-        let start = Player { stock: [250.0, 250.0, 100.0, 100.0], pop: 0, upkeep: 0.0, starving: false, defeated: false, gather_mult: 1.0, bonus: Bonuses::default(), income: [[0.0; 4]; 60], trained: 0, lost: 0, gathered: 0.0 };
-        let players = vec![start; n_players as usize + 1];
+        let handicap = match difficulty {
+            0 => 80,
+            1 => 100,
+            _ => 130,
+        };
+        // Player 1 is the human; the computer players get the handicap.
+        let players = (0..=n_players).map(|p| Player::new(if p > 1 { handicap } else { 100 })).collect();
         // Each AI thinks on a slightly different tick, so they don't all spike at once.
         let ais = (0..=n_players).map(|p| Ai::new(difficulty, p > 1, p as f32 * 0.13)).collect();
-        let mut g = Game::from_parts(seed, map, res, Vec::new(), players, n_players, Vec::new(), vec![0; n], ais, PLAYER);
-        let handicap = match difficulty {
-            0 => 0.8,
-            1 => 1.0,
-            _ => 1.3,
-        };
-        for p in 2..=n_players as usize {
-            g.players[p].gather_mult = handicap;
-        }
+        let mut g = Game::from_parts(seed, map, deps, Vec::new(), players, n_players, Vec::new(), vec![0; n], ais, PLAYER);
         for (i, &(bx, by)) in bases.iter().enumerate() {
             let owner = i as u8 + 1;
             g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
-            for k in 0..5 {
-                let a = k as f32 * 1.2566 + 0.6;
+            for k in 0..START_CITIZENS {
+                let a = k as f32 * 2.0944 + 0.6;
                 g.spawn_unit(Kind::Citizen, owner, bx as f32 + 0.5 + a.cos() * 2.6, by as f32 + 0.5 + a.sin() * 2.6);
             }
         }
         g.recount_pop();
+        g.recount_slots();
         g.update_fog();
         g
     }
@@ -371,13 +362,13 @@ impl Game {
     /// Assemble a game from its stored parts; scratch space (pathfinder
     /// buffers, the spatial grid) is made fresh. Used by `new` and `load`.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_parts(seed: u32, map: Map, res: Vec<Resource>, ents: Vec<Entity>, players: Vec<Player>, n_players: u8, proj: Vec<Projectile>, fog: Vec<u8>, ais: Vec<Ai>, local: u8) -> Game {
+    pub(crate) fn from_parts(seed: u32, map: Map, deps: Vec<Deposit>, ents: Vec<Entity>, players: Vec<Player>, n_players: u8, proj: Vec<Projectile>, fog: Vec<u8>, ais: Vec<Ai>, local: u8) -> Game {
         let n = (map.w * map.h) as usize;
         let cells = ((map.w / CELL + 1) * (map.h / CELL + 1)) as usize;
-        Game {
+        let mut g = Game {
             seed,
             map,
-            res,
+            deps,
             ents,
             players,
             n_players,
@@ -392,22 +383,22 @@ impl Game {
             reveal: false,
             events: Vec::new(),
             ais,
-            slot: 0,
-            second_timer: 1.0,
             pf: Pathfinder::new(n),
             grid: vec![Vec::new(); cells],
             alert_cooldown: 0.0,
             idle_cursor: 0,
-        }
+        };
+        // Slots aren't saved: they follow from what exists.
+        g.recount_slots();
+        g
     }
 
     /// The private timers, for `save`/`load`.
-    pub(crate) fn save_timers(&self) -> (f32, f32, f32, u32) {
-        (self.fog_timer, self.second_timer, self.alert_cooldown, self.idle_cursor)
+    pub(crate) fn save_timers(&self) -> (f32, f32, u32) {
+        (self.fog_timer, self.alert_cooldown, self.idle_cursor)
     }
-    pub(crate) fn load_timers(&mut self, (fog, second, alert, idle): (f32, f32, f32, u32)) {
+    pub(crate) fn load_timers(&mut self, (fog, alert, idle): (f32, f32, u32)) {
         self.fog_timer = fog;
-        self.second_timer = second;
         self.alert_cooldown = alert;
         self.idle_cursor = idle;
     }
@@ -420,7 +411,7 @@ impl Game {
             ai.on = false;
         }
         for p in self.players.iter_mut() {
-            p.gather_mult = 1.0; // no difficulty handicap between people
+            p.supply_pct = 100; // no difficulty handicap between people
         }
         for e in self.ents.iter_mut() {
             e.seen = e.owner == local;
@@ -528,31 +519,13 @@ impl Game {
         kind.requires().iter().all(|&k| self.has_built(owner, k))
     }
 
-    fn add_income(&mut self, owner: u8, r: usize, amount: f32) {
-        let slot = self.slot;
-        let p = &mut self.players[owner as usize];
-        p.income[slot][r] += amount;
-        p.gathered += amount;
-    }
-
-    /// Once a second: start a new income slot, refresh building bonuses.
-    fn every_second(&mut self) {
-        self.slot = (self.slot + 1) % 60;
-        for owner in self.player_ids() {
-            let bonus = Bonuses::from_buildings(|k| self.has_built(owner, k));
-            let p = &mut self.players[owner as usize];
-            p.income[self.slot] = [0.0; 4];
-            p.bonus = bonus;
-        }
-    }
-
     /// Hand a player slot to the computer (or take it back). In multiplayer
     /// this happens when someone leaves: their people carry on without them.
     pub fn set_ai(&mut self, player: u8, on: bool) {
         if let Some(ai) = self.ais.get_mut(player as usize) {
             ai.on = on && player >= 1;
             if on {
-                self.players[player as usize].gather_mult = 1.0;
+                self.players[player as usize].supply_pct = 100;
             }
         }
     }
@@ -564,52 +537,6 @@ impl Game {
 
     pub fn find_first(&self, owner: u8, kind: Kind) -> Option<usize> {
         self.ents.iter().position(|e| e.alive && e.owner == owner && e.kind == kind)
-    }
-
-    pub fn node_kind(&self, n: ResNode) -> Res {
-        match n {
-            ResNode::Node(i) => self.res[i].kind,
-            ResNode::Farm(_) => Res::Food,
-        }
-    }
-
-    fn node_valid(&self, n: ResNode) -> bool {
-        match n {
-            ResNode::Node(i) => self.res[i].alive,
-            ResNode::Farm(id) => self.alive(id) && self.ents[id as usize].built >= 1.0,
-        }
-    }
-
-    pub fn nearest_node(&self, kind: Res, x: f32, y: f32, max_d: f32) -> Option<usize> {
-        let mut best = None;
-        let mut bd = max_d * max_d;
-        for (i, r) in self.res.iter().enumerate() {
-            if !r.alive || r.kind != kind {
-                continue;
-            }
-            let (cx, cy) = r.center();
-            let d = (cx - x).powi(2) + (cy - y).powi(2);
-            if d < bd {
-                bd = d;
-                best = Some(i);
-            }
-        }
-        best
-    }
-
-    fn nearest_drop_site(&self, owner: u8, x: f32, y: f32) -> Option<usize> {
-        let mut best = None;
-        let mut bd = f32::MAX;
-        for (i, e) in self.ents.iter().enumerate() {
-            if e.alive && e.owner == owner && e.kind.is_drop_site() && e.built >= 1.0 {
-                let d = e.edge_dist(x, y);
-                if d < bd {
-                    bd = d;
-                    best = Some(i);
-                }
-            }
-        }
-        best
     }
 
     /// Is an enemy (from `owner`'s point of view) able to be targeted?
@@ -699,7 +626,8 @@ impl Game {
             e.hit_flash = (e.hit_flash - DT).max(0.0);
         }
         self.recount_pop();
-        self.eat();
+        self.recount_slots();
+        self.supply_units();
         self.rebuild_grid();
 
         // Index loop rather than `for e in &mut self.ents`: each update needs
@@ -723,11 +651,6 @@ impl Game {
         if self.fog_timer <= 0.0 {
             self.fog_timer = 0.2;
             self.update_fog();
-        }
-        self.second_timer -= DT;
-        if self.second_timer <= 0.0 {
-            self.second_timer += 1.0;
-            self.every_second();
         }
         for p in self.player_ids() {
             let ai = &mut self.ais[p as usize];
@@ -782,51 +705,90 @@ impl Game {
     fn recount_pop(&mut self) {
         for p in self.players.iter_mut() {
             p.pop = 0;
-            p.upkeep = 0.0;
         }
         for e in self.ents.iter().filter(|e| e.alive && !e.is_building()) {
-            let p = &mut self.players[e.owner as usize];
-            p.pop += 1;
-            p.upkeep += e.kind.stats().upkeep;
+            self.players[e.owner as usize].pop += 1;
         }
     }
 
-    /// Every unit eats a little food every tick. With an empty granary,
-    /// everyone slowly loses health until food comes in again.
-    fn eat(&mut self) {
-        for owner in self.player_ids() {
-            let gold = self.players[owner as usize].bonus.gold_per_min / 60.0 * DT;
-            if gold > 0.0 {
-                self.players[owner as usize].stock[Res::Gold.idx()] += gold;
-                self.add_income(owner, Res::Gold.idx(), gold);
+    /// Work out every player's supply and use from scratch, from what
+    /// exists: supply from finished producers, use from every living
+    /// building (finished or not), unit and queued unit. Cheap enough to do
+    /// every tick, which means slots come free the tick after something dies.
+    pub(crate) fn recount_slots(&mut self) {
+        // Counted in u32, then clamped: no overflow, whatever a save holds.
+        let n = self.players.len();
+        let mut supply = vec![[0u32; N_RES]; n];
+        let mut used = vec![[0u32; N_RES]; n];
+        for e in self.ents.iter().filter(|e| e.alive) {
+            let o = e.owner as usize;
+            let st = e.kind.stats();
+            for &(r, k) in st.cost {
+                used[o][r.idx()] += k as u32;
             }
-        }
-        let regen: Vec<f32> = self.players.iter().map(|p| p.bonus.regen).collect();
-        for e in self.ents.iter_mut().filter(|e| e.alive && !e.is_building()) {
-            let max = e.kind.stats().hp;
-            e.hp = (e.hp + max * regen[e.owner as usize] * DT).min(max);
-        }
-        for owner in self.player_ids() {
-            let p = &mut self.players[owner as usize];
-            let food = &mut p.stock[Res::Food.idx()];
-            *food -= p.upkeep / 60.0 * DT;
-            let was = p.starving;
-            p.starving = *food < 0.0;
-            if p.starving {
-                *food = 0.0;
-            }
-            if p.starving && !was && owner == self.local {
-                self.push_event(Ev::Starving, 0.0, 0.0, 0.0);
-            }
-        }
-        // A separate pass: we can't hold `p` (a borrow of `self.players`)
-        // while also mutating `self.ents`. Copy the flags out first.
-        let starving: Vec<bool> = self.players.iter().map(|p| p.starving).collect();
-        if starving.iter().any(|&s| s) {
-            for e in self.ents.iter_mut().filter(|e| e.alive && !e.is_building()) {
-                if starving[e.owner as usize] {
-                    e.hp -= e.kind.stats().hp * 0.015 * DT;
+            for q in &e.queue {
+                for &(r, k) in q.stats().cost {
+                    used[o][r.idx()] += k as u32;
                 }
+            }
+            if e.built >= 1.0 {
+                for &(r, k) in st.produces {
+                    supply[o][r.idx()] += k as u32;
+                }
+            }
+        }
+        for (o, p) in self.players.iter_mut().enumerate() {
+            for r in 0..N_RES {
+                // Integer percent, rounded down: exact on every computer.
+                p.supply[r] = (supply[o][r] * p.supply_pct as u32 / 100).min(u16::MAX as u32) as u16;
+                p.used[r] = used[o][r].min(u16::MAX as u32) as u16;
+            }
+        }
+    }
+
+    /// When a player holds more of a resource than they make (a producer was
+    /// destroyed), their newest units holding it are unsupplied and slowly
+    /// lose health, until supply is back or enough have died to fit.
+    /// Buildings and queued units still hold their slots but don't suffer.
+    fn supply_units(&mut self) {
+        for e in self.ents.iter_mut() {
+            e.unsupplied = false;
+        }
+        for owner in self.player_ids() {
+            let p = self.players[owner as usize];
+            let mut any = false;
+            let mut first_short = None;
+            for r in Res::ALL {
+                let mut deficit = -p.free(r);
+                if deficit <= 0 {
+                    continue;
+                }
+                first_short.get_or_insert(r);
+                // Newest first: highest id first.
+                for e in self.ents.iter_mut().rev() {
+                    if deficit <= 0 {
+                        break;
+                    }
+                    if !e.alive || e.owner != owner || e.is_building() {
+                        continue;
+                    }
+                    if let Some(&(_, k)) = e.kind.stats().cost.iter().find(|&&(res, _)| res == r) {
+                        e.unsupplied = true;
+                        any = true;
+                        deficit -= k as i32;
+                    }
+                }
+            }
+            let was = self.players[owner as usize].short;
+            self.players[owner as usize].short = any;
+            if any && !was && owner == self.local {
+                let r = first_short.map_or(0, |r| r.idx());
+                self.push_event(Ev::Short, 0.0, 0.0, r as f32);
+            }
+        }
+        if UNSUPPLIED_DAMAGE > 0.0 {
+            for e in self.ents.iter_mut().filter(|e| e.alive && e.unsupplied) {
+                e.hp -= e.kind.stats().hp * UNSUPPLIED_DAMAGE * DT;
             }
         }
     }
@@ -902,24 +864,33 @@ impl Game {
         id
     }
 
-    /// Spend resources, or explain which one is missing.
-    pub fn pay(&mut self, owner: u8, cost: [u32; 4]) -> Result<(), CmdError> {
-        let stock = &mut self.players[owner as usize].stock;
-        for r in 0..4 {
-            if stock[r] < cost[r] as f32 {
-                return Err(CmdError::Short(Res::from_idx(r)));
-            }
+    /// Take slots for something new, or explain which resource is short.
+    /// Nothing is spent: the slots are held as long as the thing exists.
+    /// They're added to `used` at once, so a second command in the same
+    /// tick sees them taken.
+    pub fn pay(&mut self, owner: u8, cost: Slots) -> Result<(), CmdError> {
+        let p = &mut self.players[owner as usize];
+        if let Some(&(r, _)) = cost.iter().find(|&&(r, k)| p.free(r) < k as i32) {
+            return Err(CmdError::Short(r));
         }
-        for r in 0..4 {
-            stock[r] -= cost[r] as f32;
+        for &(r, k) in cost {
+            p.used[r.idx()] = p.used[r.idx()].saturating_add(k);
         }
         Ok(())
     }
 
-    fn refund(&mut self, owner: u8, cost: [u32; 4]) {
-        for r in 0..4 {
-            self.players[owner as usize].stock[r] += cost[r] as f32;
+    /// Give back slots taken this tick (a cancelled unit).
+    fn unpay(&mut self, owner: u8, cost: Slots) {
+        let p = &mut self.players[owner as usize];
+        for &(r, k) in cost {
+            p.used[r.idx()] = p.used[r.idx()].saturating_sub(k);
         }
+    }
+
+    /// The first resource `owner` lacks free slots of for `kind`, if any.
+    pub fn short_of(&self, owner: u8, kind: Kind) -> Option<Res> {
+        let p = &self.players[owner as usize];
+        kind.stats().cost.iter().find(|&&(r, k)| p.free(r) < k as i32).map(|&(r, _)| r)
     }
 
     pub fn queue_unit(&mut self, building: u32, kind: Kind) -> Result<(), CmdError> {
@@ -943,11 +914,42 @@ impl Game {
                 b.progress = 0.0;
             }
             let owner = b.owner;
-            self.refund(owner, k.stats().cost);
+            self.unpay(owner, k.stats().cost);
         }
     }
 
+    /// Could `owner` put a `kind` here? The footprint must be free land, the
+    /// `margin` ring around it free of buildings, and an extractor must
+    /// stand next to its deposit.
     pub fn can_place(&self, kind: Kind, tx: i32, ty: i32, owner: u8, margin: i32) -> bool {
+        self.spot_free(kind, tx, ty, owner, margin) && self.near_deposit(kind, tx, ty)
+    }
+
+    /// Is any tile right around the footprint (corners included) of the
+    /// deposit `kind` needs? True for kinds that need none.
+    pub fn near_deposit(&self, kind: Kind, tx: i32, ty: i32) -> bool {
+        let Some(dep) = kind.stats().needs_deposit else { return true };
+        let s = kind.stats().size;
+        for y in ty - 1..=ty + s {
+            for x in tx - 1..=tx + s {
+                let on_ring = x == tx - 1 || y == ty - 1 || x == tx + s || y == ty + s;
+                if !on_ring || !self.map.inside(x, y) {
+                    continue;
+                }
+                let i = self.map.idx(x, y);
+                let here = match dep {
+                    Dep::Water => self.map.terrain[i] == map::WATER,
+                    _ => self.map.dep_at[i] >= 0 && self.deps[self.map.dep_at[i] as usize].kind == dep,
+                };
+                if here {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn spot_free(&self, kind: Kind, tx: i32, ty: i32, owner: u8, margin: i32) -> bool {
         let s = kind.stats().size;
         for y in ty - margin..ty + s + margin {
             for x in tx - margin..tx + s + margin {
@@ -955,7 +957,8 @@ impl Game {
                     return false;
                 }
                 let i = self.map.idx(x, y);
-                if self.map.terrain[i] == map::WATER || self.map.bld_at[i] >= 0 || self.map.res_at[i] >= 0 {
+                let inner = x >= tx && y >= ty && x < tx + s && y < ty + s;
+                if self.map.bld_at[i] >= 0 || (inner && (self.map.terrain[i] == map::WATER || self.map.dep_at[i] >= 0)) {
                     return false;
                 }
             }
@@ -973,8 +976,11 @@ impl Game {
     }
 
     pub fn place(&mut self, owner: u8, kind: Kind, tx: i32, ty: i32, builders: &[u32]) -> Result<u32, CmdError> {
-        if !kind.is_building() || kind == Kind::Capitol || !self.can_place(kind, tx, ty, owner, 0) {
+        if !kind.is_building() || kind == Kind::Capitol || !self.spot_free(kind, tx, ty, owner, 0) {
             return Err(CmdError::BadSpot);
+        }
+        if !self.near_deposit(kind, tx, ty) {
+            return Err(CmdError::NoDeposit(kind.stats().needs_deposit.unwrap_or(Dep::Forest)));
         }
         if let Some(&missing) = kind.requires().iter().find(|&&k| !self.has_built(owner, k)) {
             return Err(CmdError::Locked(missing));
@@ -1013,16 +1019,6 @@ impl Game {
     pub fn order_attack(&mut self, id: u32, target: u32) {
         let e = &mut self.ents[id as usize];
         e.set_order(Order::Attack { target, auto: false });
-        e.resume = None;
-    }
-
-    pub fn order_gather(&mut self, id: u32, node: ResNode) {
-        if !self.is_citizen(id) {
-            return;
-        }
-        let e = &mut self.ents[id as usize];
-        e.set_order(Order::Gather(node));
-        e.last_node = Some(node);
         e.resume = None;
     }
 
@@ -1084,15 +1080,15 @@ impl Game {
                 return Pick::Ent(b as u32);
             }
         }
-        let r = self.map.res_at[i];
-        if r >= 0 {
-            return Pick::Res(r as usize);
+        let d = self.map.dep_at[i];
+        if d >= 0 {
+            return Pick::Dep;
         }
         Pick::Nothing
     }
 
     /// What a right-click at (x, y) would mean for these units. Used twice:
-    /// by the mouse cursor (to show an axe, a sword...) and by `smart_order`
+    /// by the mouse cursor (to show a sword, a hammer...) and by `smart_order`
     /// to actually do it, so the cursor never lies.
     pub fn intent(&self, ids: &[u32], x: f32, y: f32, owner: u8, fog: bool) -> Intent {
         let mine = || ids.iter().copied().filter(|&id| self.alive(id) && self.ents[id as usize].owner == owner);
@@ -1104,25 +1100,13 @@ impl Game {
         let any_citizen = mine().any(|id| self.is_citizen(id));
         match self.pick(x, y, fog) {
             Pick::Ent(t) if Self::hostile(owner, self.ents[t as usize].owner) => Intent::Attack(t),
-            Pick::Res(r) if any_citizen => Intent::Gather(ResNode::Node(r)),
-            Pick::Ent(t) if any_citizen && self.ents[t as usize].owner == owner && self.ents[t as usize].is_building() => {
-                let b = &self.ents[t as usize];
-                if b.built < 1.0 {
-                    Intent::Build(t)
-                } else if b.kind == Kind::Farm {
-                    Intent::Gather(ResNode::Farm(t))
-                } else if b.kind.is_drop_site() && mine().any(|id| self.ents[id as usize].carry > 0.0) {
-                    Intent::DropOff
-                } else {
-                    Intent::Move
-                }
-            }
+            Pick::Ent(t) if any_citizen && self.ents[t as usize].owner == owner && self.ents[t as usize].is_building() && self.ents[t as usize].built < 1.0 => Intent::Build(t),
             _ => Intent::Move,
         }
     }
 
     /// The right-click: work out what the player meant, then order each unit.
-    /// Soldiers can't gather or build, so they just walk there.
+    /// Soldiers can't build, so they just walk there.
     pub fn smart_order(&mut self, ids: &[u32], x: f32, y: f32, owner: u8) {
         let units: Vec<u32> = ids.iter().copied().filter(|&id| self.alive(id) && self.ents[id as usize].owner == owner && !self.ents[id as usize].is_building()).collect();
         match self.intent(ids, x, y, owner, false) {
@@ -1139,30 +1123,10 @@ impl Game {
                     self.order_attack(u, t);
                 }
             }
-            Intent::Gather(node) => {
-                for &u in &units {
-                    if self.is_citizen(u) {
-                        self.order_gather(u, node);
-                    } else {
-                        self.order_move(u, x, y);
-                    }
-                }
-            }
             Intent::Build(t) => {
                 for &u in &units {
                     if self.is_citizen(u) {
                         self.order_build(u, t);
-                    } else {
-                        self.order_move(u, x, y);
-                    }
-                }
-            }
-            Intent::DropOff => {
-                for &u in &units {
-                    let e = &self.ents[u as usize];
-                    if e.carry > 0.0 {
-                        let back = e.last_node.unwrap_or(ResNode::Farm(u32::MAX));
-                        self.ents[u as usize].set_order(Order::Return(back));
                     } else {
                         self.order_move(u, x, y);
                     }
@@ -1254,8 +1218,8 @@ impl Game {
             mix(e.queue.len() as u32);
         }
         if let Some(p) = self.players.get(owner as usize) {
-            for v in p.stock {
-                mix(v.to_bits());
+            for r in 0..N_RES {
+                mix(p.supply[r] as u32 | (p.used[r] as u32) << 16);
             }
         }
         h
@@ -1277,12 +1241,9 @@ impl Game {
             mix(e.queue.len() as u32);
         }
         for p in &self.players[1..] {
-            for v in p.stock {
-                mix(v.to_bits());
+            for r in 0..N_RES {
+                mix(p.supply[r] as u32 | (p.used[r] as u32) << 16);
             }
-        }
-        for r in self.res.iter().filter(|r| r.alive) {
-            mix(r.amount.to_bits());
         }
         h
     }
@@ -1306,8 +1267,6 @@ impl Game {
             }
             Order::AttackMove { x, y } => self.do_attack_move(i, x, y),
             Order::Attack { target, auto } => self.do_attack(i, target, auto),
-            Order::Gather(node) => self.do_gather(i, node),
-            Order::Return(node) => self.do_return(i, node),
             Order::Build(target) => self.do_build(i, target),
         }
     }
@@ -1387,10 +1346,7 @@ impl Game {
     fn fire(&mut self, i: usize, target: u32) {
         let a = &self.ents[i];
         let st = a.kind.stats();
-        let mut dmg = st.attack * damage_mult(a.kind, self.ents[target as usize].kind);
-        if a.kind.is_military() {
-            dmg *= self.players[a.owner as usize].bonus.attack;
-        }
+        let dmg = st.attack * damage_mult(a.kind, self.ents[target as usize].kind);
         let kind = a.kind as u32 as f32;
         if st.range > 1.5 {
             let (x, y) = (a.x, a.y);
@@ -1489,150 +1445,13 @@ impl Game {
 
     // --- economy ---
 
-    /// Is someone other than `me` already working this farm? When two
-    /// citizens want the same farm, the one with the lower id keeps it.
-    fn farm_taken(&self, farm: u32, me: u32) -> bool {
-        self.ents.iter().any(|e| {
-            e.alive && e.id < me && matches!(e.order, Order::Gather(ResNode::Farm(f)) | Order::Return(ResNode::Farm(f)) if f == farm)
-        })
-    }
-
-    /// A finished farm of `owner`'s that nobody is working.
-    pub fn free_farm(&self, owner: u8) -> Option<u32> {
-        self.ents
-            .iter()
-            .filter(|f| f.alive && f.owner == owner && f.kind == Kind::Farm && f.built >= 1.0)
-            .find(|f| !self.ents.iter().any(|e| e.alive && matches!(e.order, Order::Gather(ResNode::Farm(id)) | Order::Return(ResNode::Farm(id)) if id == f.id)))
-            .map(|f| f.id)
-    }
-
-    fn do_gather(&mut self, i: usize, node: ResNode) {
-        // One farmer per farm. Extras move to a free farm, or stand idle.
-        if let ResNode::Farm(f) = node {
-            if self.farm_taken(f, i as u32) {
-                let owner = self.ents[i].owner;
-                match self.free_farm(owner) {
-                    Some(other) => self.order_gather(i as u32, ResNode::Farm(other)),
-                    None => self.ents[i].set_order(Order::Idle),
-                }
-                return;
-            }
-        }
-        let node = if self.node_valid(node) {
-            node
-        } else {
-            // Tree cut down? Look for another of the same kind nearby.
-            let kind = self.node_kind(node);
-            let (x, y) = (self.ents[i].x, self.ents[i].y);
-            match (node, self.nearest_node(kind, x, y, 10.0)) {
-                (ResNode::Node(_), Some(n)) => {
-                    let n = ResNode::Node(n);
-                    self.ents[i].set_order(Order::Gather(n));
-                    self.ents[i].last_node = Some(n);
-                    n
-                }
-                _ => {
-                    if self.ents[i].carry > 0.0 {
-                        self.ents[i].set_order(Order::Return(node));
-                    } else {
-                        self.ents[i].set_order(Order::Idle);
-                    }
-                    return;
-                }
-            }
-        };
-        let kind = self.node_kind(node);
-        let e = &self.ents[i];
-        if e.carry >= CARRY_MAX || (e.carry > 0.0 && e.carry_kind != kind) && e.carry >= 5.0 {
-            self.ents[i].set_order(Order::Return(node));
-            return;
-        }
-        let goal = match node {
-            ResNode::Node(r) => {
-                let res = &self.res[r];
-                Goal::rect(res.tx, res.ty, 1, 0.75)
-            }
-            ResNode::Farm(id) => {
-                let f = &self.ents[id as usize];
-                Goal::rect(f.tx, f.ty, 3, 0.0)
-            }
-        };
-        match self.travel(i, goal, 3.0) {
-            Travel::Moving => {}
-            Travel::Blocked => self.ents[i].set_order(Order::Idle),
-            Travel::Arrived => {
-                let owner = self.ents[i].owner as usize;
-                let p = &self.players[owner];
-                let mut rate = kind.gather_rate() * p.gather_mult * p.bonus.gather[kind.idx()] * DT;
-                if let ResNode::Farm(_) = node {
-                    rate *= 0.8;
-                }
-                if let ResNode::Node(r) = node {
-                    let res = &mut self.res[r];
-                    rate = rate.min(res.amount);
-                    res.amount -= rate;
-                    if res.amount <= 0.0 {
-                        res.alive = false;
-                        let j = self.map.idx(res.tx, res.ty);
-                        self.map.blocked[j] = false;
-                        self.map.res_at[j] = -1;
-                    }
-                }
-                let e = &mut self.ents[i];
-                if e.carry_kind != kind {
-                    e.carry = 0.0;
-                    e.carry_kind = kind;
-                }
-                e.carry += rate;
-                e.anim = Anim::Work;
-                let (gx, gy) = match node {
-                    ResNode::Node(r) => self.res[r].center(),
-                    ResNode::Farm(_) => (e.x, e.y + 0.3),
-                };
-                e.facing = (gy - e.y).atan2(gx - e.x);
-                let (x, y) = (e.x, e.y);
-                if self.work_stroke(i) {
-                    let farm = if let ResNode::Farm(_) = node { 4.0 } else { 0.0 };
-                    self.push_event(Ev::Work, x, y, kind.idx() as f32 + farm);
-                }
-            }
-        }
-    }
-
-    fn do_return(&mut self, i: usize, node: ResNode) {
-        let (x, y, owner) = (self.ents[i].x, self.ents[i].y, self.ents[i].owner);
-        let Some(site) = self.nearest_drop_site(owner, x, y) else {
-            self.ents[i].set_order(Order::Idle);
-            return;
-        };
-        let goal = self.ents[site].goal(0.7);
-        match self.travel(i, goal, 3.0) {
-            Travel::Moving => {}
-            Travel::Blocked => self.ents[i].set_order(Order::Idle),
-            Travel::Arrived => {
-                let e = &mut self.ents[i];
-                let (k, amt) = (e.carry_kind, e.carry);
-                e.carry = 0.0;
-                let p = &mut self.players[owner as usize];
-                p.stock[k.idx()] += amt;
-                self.add_income(owner, k.idx(), amt);
-                self.push_event(Ev::DropOff, x, y, k.idx() as f32);
-                if self.node_valid(node) || matches!(node, ResNode::Node(_)) {
-                    self.ents[i].set_order(Order::Gather(node));
-                } else {
-                    self.ents[i].set_order(Order::Idle);
-                }
-            }
-        }
-    }
-
     fn do_build(&mut self, i: usize, target: u32) {
         if !self.alive(target) {
             self.ents[i].set_order(Order::Idle);
             return;
         }
         if self.ents[target as usize].built >= 1.0 {
-            return self.after_build(i, target);
+            return self.after_build(i);
         }
         let goal = self.ents[target as usize].goal(0.75);
         match self.travel(i, goal, 3.0) {
@@ -1647,6 +1466,7 @@ impl Game {
                 if b.built >= 1.0 {
                     b.built = 1.0;
                     let (owner, kind) = (b.owner, b.kind);
+                    self.players[owner as usize].built += 1;
                     if owner == self.local {
                         self.push_event(Ev::Built, bx, by, kind as u32 as f32);
                     }
@@ -1661,18 +1481,13 @@ impl Game {
         }
     }
 
-    /// A builder finished: farm it, or help with another building nearby, or go back to work.
-    fn after_build(&mut self, i: usize, target: u32) {
-        // The first builder farms it; the rest move on to the next job.
-        if self.ents[target as usize].kind == Kind::Farm && !self.farm_taken(target, i as u32) {
-            return self.order_gather(i as u32, ResNode::Farm(target));
-        }
+    /// A builder finished: help with another building nearby, or wait.
+    fn after_build(&mut self, i: usize) {
         let (x, y, owner) = (self.ents[i].x, self.ents[i].y, self.ents[i].owner);
         let other = self.ents.iter().find(|b| b.alive && b.owner == owner && b.is_building() && b.built < 1.0 && b.edge_dist(x, y) < 10.0).map(|b| b.id);
-        match (other, self.ents[i].last_node) {
-            (Some(b), _) => self.order_build(i as u32, b),
-            (None, Some(n)) if self.node_valid(n) => self.order_gather(i as u32, n),
-            _ => self.ents[i].set_order(Order::Idle),
+        match other {
+            Some(b) => self.order_build(i as u32, b),
+            None => self.ents[i].set_order(Order::Idle),
         }
     }
 
@@ -1929,4 +1744,183 @@ impl Game {
         -1
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a player has, for printing: kind name → count.
+    fn census(g: &Game, p: u8) -> String {
+        let mut out = String::new();
+        for k in Kind::ALL {
+            let n = g.ents.iter().filter(|e| e.alive && e.owner == p && e.kind == k).count();
+            if n > 0 {
+                out += &format!("{k:?} {n}, ");
+            }
+        }
+        let pl = &g.players[p as usize];
+        for r in Res::ALL.iter().take(7) {
+            out += &format!("{r:?} {}/{} ", pl.used[r.idx()], pl.supply[r.idx()]);
+        }
+        out
+    }
+
+    /// A spot near player 1's Capitol where `kind` can go, searching outward.
+    fn spot(g: &Game, kind: Kind) -> (i32, i32) {
+        let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+        let (cx, cy) = (cap.tx, cap.ty);
+        for r in 3..30 {
+            for y in cy - r..=cy + r {
+                for x in cx - r..=cx + r {
+                    if g.can_place(kind, x, y, 1, 1) {
+                        return (x, y);
+                    }
+                }
+            }
+        }
+        panic!("no spot for {kind:?}");
+    }
+
+    /// A finished building of player 1's, put straight on the map.
+    fn build(g: &mut Game, kind: Kind) -> u32 {
+        let (x, y) = spot(g, kind);
+        let id = g.spawn_building(kind, 1, x, y, 1.0);
+        g.recount_slots();
+        id
+    }
+
+    fn free(g: &Game, r: Res) -> i32 {
+        g.players[1].free(r)
+    }
+
+    #[test]
+    fn a_new_game_starts_with_nobody_short() {
+        for players in 2..=4 {
+            let mut g = Game::new(9, 1, players);
+            g.tick();
+            for p in 1..=players {
+                assert!(Res::ALL.iter().all(|&r| g.players[p as usize].free(r) >= 0), "player {p} starts short");
+                assert_eq!(g.short_of(p, Kind::Citizen), None, "player {p} can train a citizen at once");
+            }
+        }
+    }
+
+    #[test]
+    fn slots_come_free_the_tick_after_a_unit_dies() {
+        let mut g = Game::new(5, 1, 2);
+        let barracks = build(&mut g, Kind::Barracks);
+        let wood = free(&g, Res::Wood);
+        let soldier = g.spawn_unit(Kind::Spearman, 1, 30.0, 30.0);
+        g.tick();
+        assert_eq!(free(&g, Res::Wood), wood - 1, "a soldier holds a wood slot");
+        g.ents[soldier as usize].hp = 0.0;
+        g.tick(); // dies at the end of this tick
+        g.tick();
+        assert_eq!(free(&g, Res::Wood), wood, "and gives it back once dead");
+        // Queued units hold their slots too; cancelling frees them at once.
+        g.apply(1, Command::Train { ids: vec![barracks], kind: Kind::Spearman }).unwrap();
+        assert_eq!(free(&g, Res::Wood), wood - 1);
+        g.apply(1, Command::Cancel { id: barracks }).unwrap();
+        assert_eq!(free(&g, Res::Wood), wood);
+    }
+
+    #[test]
+    fn two_placements_in_one_tick_cannot_share_a_slot() {
+        let mut g = Game::new(5, 1, 2);
+        // Use up wood until exactly 3 are free: one Barracks' worth.
+        while free(&g, Res::Wood) > 3 {
+            g.spawn_unit(Kind::Spearman, 1, 30.0, 30.0);
+            g.recount_slots();
+        }
+        let (x, y) = spot(&g, Kind::Barracks);
+        assert!(g.apply(1, Command::Place { ids: vec![], kind: Kind::Barracks, tx: x, ty: y }).is_ok());
+        let (x, y) = spot(&g, Kind::Barracks);
+        let second = g.apply(1, Command::Place { ids: vec![], kind: Kind::Barracks, tx: x, ty: y });
+        assert_eq!(second.err(), Some(CmdError::Short(Res::Wood)));
+        g.tick();
+        assert_eq!(free(&g, Res::Wood), 0);
+    }
+
+    #[test]
+    fn extractors_need_their_deposit() {
+        let mut g = Game::new(5, 1, 2);
+        // A quarry right beside the Capitol is nowhere near stone.
+        let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+        let (x, y) = (cap.tx + 4, cap.ty);
+        assert!(!g.near_deposit(Kind::Quarry, x, y));
+        let r = g.apply(1, Command::Place { ids: vec![], kind: Kind::Quarry, tx: x, ty: y });
+        assert_eq!(r.err(), Some(CmdError::NoDeposit(Dep::Stone)));
+        // Next to stone it works, and once built it makes stone.
+        let stone = g.players[1].supply[Res::Stone.idx()];
+        build(&mut g, Kind::Quarry);
+        assert_eq!(g.players[1].supply[Res::Stone.idx()], stone + 4);
+    }
+
+    #[test]
+    fn a_lost_producer_leaves_the_newest_units_unsupplied() {
+        let mut g = Game::new(5, 1, 2);
+        let pasture = build(&mut g, Kind::Pasture);
+        assert_eq!(free(&g, Res::Horses), 2);
+        let older = g.spawn_unit(Kind::Horseman, 1, 30.0, 30.0);
+        let newer = g.spawn_unit(Kind::Horseman, 1, 31.0, 30.0);
+        g.tick();
+        assert_eq!(free(&g, Res::Horses), 0);
+        // The pasture burns: 2 horses held, none made. Nothing crashes.
+        g.ents[pasture as usize].hp = 0.0;
+        g.tick();
+        g.tick();
+        assert_eq!(free(&g, Res::Horses), -2);
+        assert!(g.ents[newer as usize].unsupplied && g.ents[older as usize].unsupplied);
+        // A second pasture covers two again; with one more horseman, only the
+        // newest goes without.
+        build(&mut g, Kind::Pasture);
+        let newest = g.spawn_unit(Kind::Horseman, 1, 32.0, 30.0);
+        let hp = g.ents[newest as usize].hp;
+        let older_hp = g.ents[older as usize].hp;
+        for _ in 0..20 {
+            g.tick();
+        }
+        assert!(!g.ents[older as usize].unsupplied && !g.ents[newer as usize].unsupplied);
+        assert!(g.ents[newest as usize].unsupplied);
+        let lost = hp - g.ents[newest as usize].hp;
+        let expect = Kind::Horseman.stats().hp * UNSUPPLIED_DAMAGE; // one second's worth
+        assert!((lost - expect).abs() < 0.01, "lost {lost}, expected {expect}");
+        assert_eq!(g.ents[older as usize].hp, older_hp, "supplied units don't lose health");
+    }
+
+    #[test]
+    fn saves_keep_slots_in_step() {
+        let mut a = Game::new(77, 2, 2);
+        a.set_ai(1, true);
+        for _ in 0..2000 {
+            a.tick();
+        }
+        assert!(a.players[1].used.iter().sum::<u16>() > 10, "the AI should have built things by now");
+        let mut b = Game::load(&a.save()).expect("load");
+        assert_eq!((a.players[1].supply, a.players[1].used), (b.players[1].supply, b.players[1].used));
+        for _ in 0..2000 {
+            a.tick();
+            b.tick();
+        }
+        assert_eq!(a.checksum(), b.checksum());
+    }
+
+    #[test]
+    #[ignore]
+    fn watch_the_ai() {
+        let mut g = Game::new(1234, 1, 2);
+        g.set_ai(1, true);
+        for min in 1..=14 {
+            for _ in 0..20 * 60 {
+                g.tick();
+            }
+            println!("{min:2} min  P1: {}", census(&g, 1));
+            println!("        P2: {}", census(&g, 2));
+            if g.state != 0 {
+                println!("winner {} wonder {}", g.winner, g.by_wonder);
+                break;
+            }
+        }
+    }
 }

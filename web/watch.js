@@ -227,7 +227,7 @@ function renderScoreboard(force) {
   const rows = [];
   for (let p = 1; p <= n; p++) {
     const out = W.defeated(p);
-    rows.push([p, out, W.player_units(p, 0), W.player_units(p, 1), [0, 1, 2, 3].map(r => Math.floor(W.player_stock(p, r)))]);
+    rows.push([p, out, W.player_units(p, 0), W.player_units(p, 1), [R.wood, R.stone, R.grain, R.horses].map(r => W.player_supply(p, r))]);
   }
   const key = JSON.stringify(rows) + observe.view;
   if (!force && key === sbKey) return;

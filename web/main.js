@@ -6,57 +6,70 @@ const WASM_B64 = "/*WASM_BASE64*/";
 const ENT_STRIDE = 18;
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
-const K = { Citizen: 0, Spearman: 1, Archer: 2, Horseman: 3, Capitol: 10, Barracks: 12, Range: 13, Stable: 14, Tower: 15, Settlement: 16, Farm: 17,
-  Granary: 18, Sawmill: 19, Mason: 20, Smithy: 21, Market: 22, Temple: 23, Wonder: 24 };
-const NAMES = { 0: "Citizen", 1: "Spearman", 2: "Archer", 3: "Horseman", 10: "Capitol", 12: "Barracks", 13: "Archery Range", 14: "Stable", 15: "Watch Tower", 16: "Settlement", 17: "Farm",
-  18: "Granary", 19: "Sawmill", 20: "Stonemason", 21: "Smithy", 22: "Market", 23: "Temple", 24: "Wonder" };
+// Units are kinds 0–63, buildings 64 and up (defs.rs).
+const K = { Citizen: 0, Spearman: 1, Archer: 2, Horseman: 3, Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
+  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76 };
+const isBld = k => k >= 64;
+const NAMES = { [K.Citizen]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
+  [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
+  [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture", [K.Wonder]: "Wonder" };
 const DESC = {
-  0: "Gathers resources and constructs buildings.",
-  1: "Sturdy infantry. Deals heavy damage to horsemen.",
-  2: "Fires from range. Strong against spearmen, weak against horsemen.",
-  3: "Fast cavalry. Runs down archers.",
-  12: "Trains spearmen.",
-  13: "Trains archers.",
-  14: "Trains horsemen.",
-  15: "Shoots at enemies in range. Needs stone.",
-  16: "A drop-off point for all resources. Build it near forests and mines.",
-  17: "Endless food, gathered a little slower than berries. One farmer per farm.",
-  18: "Food gathering +20%.",
-  19: "Wood gathering +20%.",
-  20: "Stone and gold gathering +20%.",
-  21: "Your soldiers deal 20% more damage.",
-  22: "Traders bring in 20 gold a minute.",
-  23: "All your units slowly heal.",
-  24: "Finish it and you win. A huge job: put many citizens on it, and defend it.",
+  [K.Citizen]: "Constructs buildings.",
+  [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
+  [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
+  [K.Horseman]: "Fast cavalry. Runs down archers.",
+  [K.Capitol]: "Your seat of power. Lose it and you lose the game.",
+  [K.Barracks]: "Trains spearmen.",
+  [K.Range]: "Trains archers.",
+  [K.Stable]: "Trains horsemen.",
+  [K.Tower]: "Shoots at enemies in range.",
+  [K.Farm]: "Grows grain anywhere on open ground.",
+  [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing, so you can always get more wood.",
+  [K.Quarry]: "Cuts stone from rock next to it.",
+  [K.FishingHut]: "Catches fish from the water next to it.",
+  [K.HuntingLodge]: "Hunts the game grazing next to it.",
+  [K.Orchard]: "Picks fruit from the wild bushes next to it.",
+  [K.Pasture]: "Breeds horses from the wild herd next to it.",
+  [K.Wonder]: "Finish it and you win. A huge job: put many citizens on it, and defend it.",
 };
 // The tech tree, grouped into eras. Your era is the latest one you've built
 // something from. (Requirements themselves live in Rust: Kind::requires.)
 const ERAS = [
-  { name: "Village", kinds: [K.Farm, K.Settlement, K.Barracks] },
-  { name: "Town", kinds: [K.Granary, K.Sawmill, K.Range] },
-  { name: "City", kinds: [K.Mason, K.Tower, K.Smithy, K.Market] },
-  { name: "Kingdom", kinds: [K.Stable, K.Temple] },
+  { name: "Village", kinds: [K.Farm, K.LumberCamp, K.Quarry, K.Barracks] },
+  { name: "Town", kinds: [K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Range] },
+  { name: "City", kinds: [K.Stable, K.Tower] },
   { name: "Empire", kinds: [K.Wonder] },
 ];
-const RES_NAMES = ["food", "wood", "stone", "gold"];
-const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "Gathering", "Returning", "Building"];
+// Resources, in the order of `enum Res` in defs.rs.
+const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", "wool", "iron", "brick", "bread", "clothes", "beer", "nitrate",
+  "gunpowder", "furniture", "books", "circus shows", "coal", "steel", "explosives", "canned food", "heating", "newspapers", "electricity", "oil",
+  "aluminum", "radios", "uranium", "cars", "TVs"];
+const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
+// What an extractor has to stand next to, in the order of `enum Dep`.
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water"];
+const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "Building"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
 const PLIGHT = ["#bbb", "#8cb9f0", "#ec8a77", "#86d69a", "#f2d27f"];
 const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
 // Hotkeys avoid W, A, S and D, which move the camera.
-const BUILD_MENU = [[K.Farm, "Q"], [K.Settlement, "E"], [K.Barracks, "R"], [K.Granary, "T"], [K.Sawmill, "Y"],
-  [K.Range, "U"], [K.Mason, "I"], [K.Tower, "O"], [K.Smithy, "F"], [K.Stable, "G"], [K.Market, "C"], [K.Temple, "V"], [K.Wonder, "B"]];
+const BUILD_MENU = [[K.Farm, "Q"], [K.LumberCamp, "E"], [K.Quarry, "R"], [K.FishingHut, "T"], [K.HuntingLodge, "Y"], [K.Orchard, "U"],
+  [K.Pasture, "I"], [K.Barracks, "O"], [K.Range, "F"], [K.Stable, "G"], [K.Tower, "C"], [K.Wonder, "B"]];
 const TRAIN_KEYS = "QERT";
-const TRAINS = { 10: [K.Citizen], 12: [K.Spearman], 13: [K.Archer], 14: [K.Horseman] };
+const TRAINS = { [K.Capitol]: [K.Citizen], [K.Barracks]: [K.Spearman], [K.Range]: [K.Archer], [K.Stable]: [K.Horseman] };
 
+// Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
-  '<svg viewBox="0 0 16 16"><path d="M8 4.2c2.6-1.6 6 .2 6 4 0 3.4-2.7 6.6-6 6.6S2 11.6 2 8.2c0-3.8 3.4-5.6 6-4z" fill="#c9473a"/><path d="M8 4.5C8 2.8 9 1.6 10.6 1.2" stroke="#6fa046" stroke-width="1.5" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><rect x="1.5" y="5" width="11" height="6.5" rx="1" fill="#8a5a33"/><ellipse cx="12.5" cy="8.25" rx="2.2" ry="3.25" fill="#c8995f"/><ellipse cx="12.5" cy="8.25" rx="1" ry="1.5" fill="#8a5a33"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M2 12l2-6 4-3 5 2 1 6-4 3H5z" fill="#9b958a"/><path d="M4 6l4-3 5 2-4 2z" fill="#c7c2b8"/></svg>',
-  '<svg viewBox="0 0 16 16"><path d="M2 12l2-5 4-2 5 2 1 5-3 2H5z" fill="#a8822b"/><path d="M4 7l4-2 5 2-4 2z" fill="#f2cd5c"/><circle cx="6" cy="11" r="1" fill="#f7dc80"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M8 15V5" stroke="#b58f3c" stroke-width="1.3"/><g fill="#e2bd5a"><ellipse cx="8" cy="3" rx="1.3" ry="2.2"/><ellipse cx="6" cy="6" rx="1.2" ry="2" transform="rotate(-30 6 6)"/><ellipse cx="10" cy="6" rx="1.2" ry="2" transform="rotate(30 10 6)"/><ellipse cx="6.2" cy="9.4" rx="1.2" ry="2" transform="rotate(-30 6.2 9.4)"/><ellipse cx="9.8" cy="9.4" rx="1.2" ry="2" transform="rotate(30 9.8 9.4)"/></g></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M2 8c2.5-3.5 7-3.5 9.5 0-2.5 3.5-7 3.5-9.5 0z" fill="#7fa6bf"/><path d="M11 8l3.5-3v6z" fill="#5f87a0"/><circle cx="5" cy="7.3" r=".8" fill="#1d2a33"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M3 9c0-3.5 3-6 6.5-5.5S14 8 12.5 11 6 14 4.2 12.3C3.4 11.6 3 10.4 3 9z" fill="#b8473a"/><path d="M9 7.5c1.2 0 2 .8 2 1.8s-.8 1.7-2 1.7-2-.7-2-1.7.8-1.8 2-1.8z" fill="#ead2b5"/><path d="M2.5 13.5l2-2" stroke="#ead2b5" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M8 4.2c2.6-1.6 6 .2 6 4 0 3.4-2.7 6.6-6 6.6S2 11.6 2 8.2c0-3.8 3.4-5.6 6-4z" fill="#c9473a"/><path d="M8 4.5C8 2.8 9 1.6 10.6 1.2" stroke="#6fa046" stroke-width="1.5" fill="none"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M4 14l.6-5.5C3.5 7 3.6 4.6 5.5 3.3L7 1.5l.6 2c2.6.3 5.1 2.4 6 5.4l-1.7.8-2.2-1.4-.2 5.7z" fill="#8a5a33"/><path d="M7 1.5l.6 2-1.2 2.6-1.5-1.3z" fill="#3b2618"/><circle cx="9.6" cy="5.6" r=".7" fill="#1d1208"/></svg>',
 ];
+const resIcon = r => RES_ICON[r] || `<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="#6d6455"/><text x="8" y="11" text-anchor="middle" font-size="8" fill="#efe6d1" font-family="sans-serif">${RES_NAMES[r][0].toUpperCase()}</text></svg>`;
 
 // ===========================================================================
 // Mouse cursors, drawn as tiny SVGs. Each shows what a right-click will do.
@@ -74,24 +87,12 @@ const CURSORS = {
   2: svgCursor(`<path d="M2 2l5 1 15 15-4 4L3 7z" fill="#e3e6ea" stroke="${DK}" stroke-width="1.6" stroke-linejoin="round"/>
     <path d="M15 25l10-10" stroke="${DK}" stroke-width="6" stroke-linecap="round"/><path d="M15 25l10-10" stroke="#b5321f" stroke-width="3" stroke-linecap="round"/>
     ${handle("21 21l6 6")}<circle cx="28" cy="28" r="2.6" fill="#b5321f" stroke="${DK}" stroke-width="1.4"/>`, 2, 2),
-  // 3 forage and 9 farm: a sickle
-  3: svgCursor(`${handle("19 19l8 8")}<path d="M19 19C5 18 2 6 11 2c-3 5-2 12 8 17z" fill="#dfe3e8" stroke="${DK}" stroke-width="1.6" stroke-linejoin="round"/>`, 10, 3),
   // 4 build: a hammer
   4: svgCursor(`${handle("13 13l14 14")}<path d="M3 10l7-7 9 9-7 7z" fill="#9da3ab" stroke="${DK}" stroke-width="1.6" stroke-linejoin="round"/>`, 6, 6),
   // 5 rally point: a flag
   5: svgCursor(`<path d="M6 30V3" stroke="${DK}" stroke-width="4" stroke-linecap="round"/><path d="M6 30V3" stroke="#d9c9a8" stroke-width="2"/>
     <path d="M7 4l17 5-17 6z" fill="#3f86e0" stroke="${DK}" stroke-width="1.6" stroke-linejoin="round"/>`, 6, 30),
-  // 6 chop wood: an axe
-  6: svgCursor(`${handle("9 9l18 18")}<path d="M3 14l5-11 9 3-8 11z" fill="#d6d9de" stroke="${DK}" stroke-width="1.6" stroke-linejoin="round"/>`, 4, 9),
-  // 7 mine stone or gold: a pickaxe
-  7: svgCursor(`${handle("10 10l17 17")}<path d="M2 13C7 5 14 2 23 3" fill="none" stroke="${DK}" stroke-width="6" stroke-linecap="round"/>
-    <path d="M2 13C7 5 14 2 23 3" fill="none" stroke="#a9aeb6" stroke-width="3" stroke-linecap="round"/>`, 2, 13),
-  // 8 drop off resources: a crate with an arrow into it
-  8: svgCursor(`<rect x="7" y="15" width="18" height="13" rx="1.5" fill="#a0703f" stroke="${DK}" stroke-width="1.6"/><path d="M7 21h18" stroke="${DK}" stroke-width="1.4"/>
-    <path d="M16 2v10m-5-4 5 5 5-5" fill="none" stroke="${DK}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M16 2v10m-5-4 5 5 5-5" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`, 16, 14),
 };
-CURSORS[9] = CURSORS[3];
 
 // ===========================================================================
 // Boot the WebAssembly module
@@ -176,11 +177,29 @@ function hash2(x, y) { let h = (x * 374761393 + y * 668265263) | 0; h = Math.imu
 function ellipse(c, x, y, rx, ry) { c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); }
 function rr(c, x, y, w, h, r) { c.beginPath(); c.roundRect ? c.roundRect(x, y, w, h, r) : c.rect(x, y, w, h); }
 function fmtTime(s) { s = Math.floor(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
-function costOf(k) { return [0, 1, 2, 3].map(r => W.kind_cost(k, r)); }
+// A kind's slot lists as [[resource, amount], ...]: which 0 cost, 1 makes, 2 consumes.
+function slotsOf(k, which = 0) { const out = []; for (let n = 0; n < W.kind_slots_n(k, which); n++) out.push([W.kind_slots_res(k, which, n), W.kind_slots_amt(k, which, n)]); return out; }
 function stat(k, i) { return W.kind_stat(k, i); }
-function canAfford(k) { return costOf(k).every((c, r) => W.stock(r) >= c); }
+function free(r) { return W.supply(r) - W.used(r); }
+function canAfford(k) { return W.short_of(k) < 0; }
+// The building that makes each resource (for "build a lumber camp" hints).
+let PRODUCER = null;
+function producerOf(r) {
+  if (!PRODUCER) { PRODUCER = {}; for (const k of Object.values(K)) for (const [p] of slotsOf(k, 1)) if (k !== K.Capitol && PRODUCER[p] == null) PRODUCER[p] = k; }
+  return PRODUCER[r];
+}
+// "2 Spearmen", "1 Barracks", "3 Lumber Camps".
+function plural(k, n) {
+  const name = NAMES[k];
+  if (n === 1 || name.endsWith("s")) return `${n} ${name}`;
+  return `${n} ${name.endsWith("man") ? name.slice(0, -3) + "men" : name + "s"}`;
+}
+function slotsHtml(list, mark = true) {
+  return list.map(([r, c]) => `<span class="${mark && free(r) < c ? "short" : ""}" title="${RES_NAMES[r]}">${resIcon(r)}${c}</span>`).join("");
+}
 function costHtml(k) {
-  return '<div class="cost">' + costOf(k).map((c, r) => c ? `<span class="${W.stock(r) < c ? "short" : ""}">${RES_ICON[r]}${c}</span>` : "").join("") + "</div>";
+  const c = slotsOf(k);
+  return '<div class="cost">' + (c.length ? slotsHtml(c) : '<span class="free">free</span>') + "</div>";
 }
 
 // ===========================================================================
@@ -301,7 +320,9 @@ function readWorld() {
 }
 const E = (i, f) => ents[i * ENT_STRIDE + f];
 // field offsets
-const F = { id: 0, kind: 1, owner: 2, x: 3, y: 4, px: 5, py: 6, hp: 7, maxhp: 8, flags: 9, prog: 10, anim: 11, carryK: 12, carry: 13, face: 14, order: 15, rx: 16, ry: 17 };
+// flags: 1 selected, 2 under construction, 4 visible, 8 just hit, 16 unsupplied (yours only).
+// Fields 12 and 13 are free (they were what a citizen carried).
+const F = { id: 0, kind: 1, owner: 2, x: 3, y: 4, px: 5, py: 6, hp: 7, maxhp: 8, flags: 9, prog: 10, anim: 11, face: 14, order: 15, rx: 16, ry: 17 };
 
 function selection() {
   const out = [];
@@ -316,11 +337,16 @@ function drawOverlay() {
   octx.setTransform(dpr, 0, 0, dpr, 0, 0);
   octx.clearRect(0, 0, view._w, view._h);
   for (let i = 0; i < entCount; i++) {
-    const sel = E(i, F.flags) & 1, f = E(i, F.hp) / E(i, F.maxhp);
-    if (!sel && (f >= 1 || E(i, F.kind) >= 10)) continue;
+    const sel = E(i, F.flags) & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(E(i, F.kind)), short = E(i, F.flags) & 16;
+    if (!sel && !short && (f >= 1 || bld)) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
-    const w = E(i, F.kind) >= 10 ? 46 : 22;
+    if (short) { // unsupplied: a small amber warning sign above the bar
+      octx.fillStyle = "#e3b23c"; octx.strokeStyle = "rgba(0,0,0,.7)"; octx.lineWidth = 1.5;
+      octx.beginPath(); octx.moveTo(p.x, p.y - 22); octx.lineTo(p.x + 6, p.y - 12); octx.lineTo(p.x - 6, p.y - 12); octx.closePath(); octx.stroke(); octx.fill();
+      octx.fillStyle = "#1a140c"; octx.fillRect(p.x - 0.75, p.y - 19, 1.5, 4); octx.fillRect(p.x - 0.75, p.y - 14, 1.5, 1.2);
+    }
+    const w = bld ? 46 : 22;
     octx.fillStyle = "rgba(0,0,0,.6)"; octx.fillRect(p.x - w / 2 - 1, p.y - 8, w + 2, 5);
     octx.fillStyle = f > 0.5 ? "#79c95f" : f > 0.25 ? "#e3b23c" : "#e2593f";
     octx.fillRect(p.x - w / 2, p.y - 7, w * Math.max(0, f), 3);
@@ -337,8 +363,9 @@ function drawMinimap() {
   mctx.imageSmoothingEnabled = true;
   mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#f0c94a"], dot = Math.max(1.5, s);
-  for (let kd = 0; kd < 4; kd++) {
+  // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a"], dot = Math.max(1.5, s);
+  for (let kd = 0; kd < 5; kd++) {
     mctx.fillStyle = RES_DOT[kd];
     for (let i = 0; i < resCount; i++) if (resBuf[i * 5 + 2] === kd) mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, dot, dot);
   }
@@ -346,7 +373,7 @@ function drawMinimap() {
   for (let i = 0; i < entCount; i++) {
     const k = E(i, F.kind), o = E(i, F.owner);
     mctx.fillStyle = (E(i, F.flags) & 1) ? "#fff" : PLIGHT[o];
-    if (k >= 10) { const z = stat(k, 6) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
+    if (isBld(k)) { const z = stat(k, 6) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
     else mctx.fillRect(E(i, F.x) * s - 1.5, E(i, F.y) * s - 1.5, 3, 3);
   }
   // What the camera sees is a trapezoid on the ground.
@@ -361,16 +388,18 @@ function drawMinimap() {
 
 // ===========================================================================
 // HUD
-// The resource bar. Built once, then only its numbers change, so the hover
-// tooltip doesn't flicker.
-function setupTopBar() {
+// The resource bar: a chip for every resource the player makes or holds,
+// showing free slots and supply. Rebuilt only when that set of resources
+// changes; otherwise only its numbers change, so the hover tooltip doesn't
+// flicker.
+function setupTopBar(shown = []) {
   const bar = $("res");
   bar.replaceChildren();
   const chips = [];
-  for (let r = 0; r < 4; r++) {
+  for (const r of shown) {
     const c = document.createElement("span");
-    c.className = "chip"; c.tabIndex = 0;
-    c.innerHTML = `${RES_ICON[r]}<b></b><small></small>`;
+    c.className = "chip"; c.tabIndex = 0; c.dataset.r = r;
+    c.innerHTML = `${resIcon(r)}<b></b><small></small>`;
     c.onmouseenter = c.onfocus = () => { resTipFor = r; renderResTip(); };
     c.onmouseleave = c.onblur = () => { resTipFor = -1; $("restip").hidden = true; };
     c.onclick = () => { resTipFor = resTipFor === r ? -1 : r; renderResTip(); }; // tap on phones
@@ -381,7 +410,7 @@ function setupTopBar() {
   era.onclick = toggleTech;
   const wonder = document.createElement("span"); wonder.className = "chip foe-wonder"; wonder.hidden = true;
   bar.append(pop, era, wonder);
-  topBar = { chips, pop, era, wonder };
+  topBar = { chips, pop, era, wonder, key: shown.join(",") };
 }
 let topBar = null, resTipFor = -1;
 // Buildings the player has already been told they can build.
@@ -393,22 +422,22 @@ function eraIndex() {
   return e;
 }
 
-// Net change per minute: what's gathered minus what's eaten (food only).
-function netRate(r) { return W.income(r) - (r === 0 ? W.upkeep() : 0); }
-const signed = v => (v >= 0.5 ? "+" : v <= -0.5 ? "−" : "±") + Math.abs(Math.round(v));
-
 function renderTopBar() {
-  if (!topBar) setupTopBar();
+  // Every resource the player makes or holds, in table order.
+  const shown = [];
+  for (let r = 0; r < W.n_res(); r++) if (W.supply(r) || W.used(r)) shown.push(r);
+  if (!topBar || topBar.key !== shown.join(",")) setupTopBar(shown);
   $("res").hidden = !!observe && !observe.view;
-  topBar.chips.forEach((c, r) => {
-    c.querySelector("b").textContent = Math.floor(W.stock(r));
-    const v = netRate(r), sm = c.querySelector("small");
-    sm.textContent = `${signed(v)}/min`;
-    sm.className = v <= -0.5 ? "neg" : v >= 0.5 ? "pos" : "";
-  });
-  const starving = W.starving();
-  topBar.pop.className = "chip pop" + (starving ? " full" : "");
-  topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${W.pop()}${starving ? " · starving" : ""}`;
+  for (const c of topBar.chips) {
+    const r = +c.dataset.r, f = free(r);
+    c.querySelector("b").textContent = f;
+    const sm = c.querySelector("small");
+    sm.textContent = `/ ${W.supply(r)}`;
+    c.classList.toggle("over", f < 0);
+  }
+  const hungry = W.unsupplied();
+  topBar.pop.className = "chip pop" + (hungry ? " full" : "");
+  topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${W.pop()}${hungry ? ` · ${hungry} unsupplied` : ""}`;
   topBar.era.textContent = `${ERAS[eraIndex()].name} era`;
   const ew = W.enemy_wonder();
   topBar.wonder.hidden = ew < 0;
@@ -417,29 +446,32 @@ function renderTopBar() {
   if (resTipFor >= 0) renderResTip();
 }
 
-// Where a resource comes from and where it goes.
+// Where a resource's slots come from and what holds them.
 function renderResTip() {
   const tip = $("restip"), r = resTipFor;
-  if (r < 0) { tip.hidden = true; return; }
-  const inc = W.income(r), n = W.workers(r), bonus = W.gather_bonus(r);
-  const line = (label, v, cls = "") => `<div class="row ${cls}"><span>${label}</span><b>${signed(v)}/min</b></div>`;
-  const bonusFrom = { 0: "Granary", 1: "Sawmill", 2: "Stonemason", 3: "Stonemason" }[r];
-  let html = `<h4>${RES_NAMES[r][0].toUpperCase() + RES_NAMES[r].slice(1)}</h4>`;
-  let gathered = inc;
-  if (r === 3 && W.bonus(2) > 0) { html += line("Market traders", W.bonus(2), "pos"); gathered -= W.bonus(2); }
-  html += line(`Gathering · ${n} citizen${n === 1 ? "" : "s"}`, gathered, "pos");
-  html += bonus > 1 ? `<p>${bonusFrom}: gathering +${Math.round((bonus - 1) * 100)}%</p>` : `<p>A ${bonusFrom} would speed this up by 20%.</p>`;
-  if (r === 0) {
-    for (const k of [K.Citizen, K.Spearman, K.Archer, K.Horseman]) {
-      const c = W.count(k);
-      if (c) html += line(`${c} ${NAMES[k]}${c === 1 ? "" : k === K.Spearman ? "" : "s"} × ${stat(k, 7)}`.replace("Spearman", c === 1 ? "Spearman" : "Spearmen"), -c * stat(k, 7), "neg");
-    }
-    html += `<div class="row total"><span>Net</span><b>${signed(netRate(0))}/min</b></div>`;
-    if (W.starving()) html += `<p class="bad">Starving: your units are losing health.</p>`;
+  const chipEl = topBar && topBar.chips.find(c => +c.dataset.r === r);
+  if (r < 0 || !chipEl) { tip.hidden = true; return; }
+  const line = (label, v, cls = "") => `<div class="row ${cls}"><span>${label}</span><b>${v}</b></div>`;
+  const name = RES_NAMES[r][0].toUpperCase() + RES_NAMES[r].slice(1);
+  let html = `<h4>${name}</h4>`;
+  let made = 0, held = 0;
+  for (const k of Object.values(K)) {
+    const n = k === K.Capitol ? W.count(k) : W.count_built(k);
+    const m = slotsOf(k, 1).find(([p]) => p === r);
+    if (n && m) { html += line(`${plural(k, n)} × ${m[1]}`, `+${n * m[1]}`, "pos"); made += n * m[1]; }
   }
-  html += `<p class="note">Gathering is averaged over the last minute.</p>`;
+  for (const k of Object.values(K)) {
+    const n = W.count(k), c = slotsOf(k).find(([p]) => p === r);
+    if (n && c) { html += line(`${plural(k, n)} × ${c[1]}`, `−${n * c[1]}`, "neg"); held += n * c[1]; }
+  }
+  if (W.used(r) > held) html += line("In training", `−${W.used(r) - held}`, "neg");
+  if (W.supply(r) !== made) html += line("Handicap", `${W.supply(r) - made >= 0 ? "+" : "−"}${Math.abs(W.supply(r) - made)}`);
+  html += `<div class="row total"><span>Free</span><b>${free(r)}</b></div>`;
+  if (free(r) < 0) html += `<p class="bad">You hold more ${RES_NAMES[r]} than you make: your newest units that need it are losing health.</p>`;
+  const p = producerOf(r);
+  html += `<p class="note">Slots are borrowed, not spent: whatever holds them gives them back when it's gone.${p != null ? ` A ${NAMES[p]} makes more.` : ""}</p>`;
   tip.innerHTML = html;
-  const chip = topBar.chips[r].getBoundingClientRect(), app = $("app").getBoundingClientRect();
+  const chip = chipEl.getBoundingClientRect(), app = $("app").getBoundingClientRect();
   tip.style.left = `${Math.max(8, Math.min(app.width - 270, chip.left - app.left))}px`;
   tip.hidden = false;
 }
@@ -477,7 +509,8 @@ function renderTech() {
 function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${Math.floor(E(i, F.carry))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${ERAS.flatMap(e => e.kinds).map(k => W.has_built(k)).join("")}|${Math.floor(W.stock(0))}${Math.floor(W.stock(1))}${Math.floor(W.stock(2))}${Math.floor(W.stock(3))}`;
+  let freeSig = ""; for (let r = 0; r < 7; r++) freeSig += free(r) + ",";
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 18}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${ERAS.flatMap(e => e.kinds).map(k => W.has_built(k)).join("")}|${freeSig}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");
@@ -492,7 +525,7 @@ function renderSelection(force) {
   } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
-    d.innerHTML = `<h3>Outlast your rivals</h3>Select citizens and right-click trees, berries, gold or stone to gather. Every unit eats food all the time, so keep plenty of people on berries and <b>Farms</b>. Then build a <b>Barracks</b>, <b>Archery Range</b> or <b>Stable</b> for an army. Press <kbd class="k">.</kbd> to find idle citizens.`;
+    d.innerHTML = `<h3>Outlast your rivals</h3>Nothing is gathered or spent here: buildings <b>make</b> resources, and everything you have <b>holds</b> some while it exists. Select a citizen and build a <b>Lumber Camp</b> by a forest, a <b>Quarry</b> by rock, <b>Farms</b> for grain. Then a <b>Barracks</b>, <b>Archery Range</b> or <b>Stable</b> for an army. Lose a producer and your newest units that need it start losing health. Press <kbd class="k">.</kbd> to find idle citizens.`;
     panel.append(d);
   } else if (sel.length === 1) {
     singleInfo(panel, sel[0]);
@@ -524,15 +557,16 @@ function singleInfo(panel, i) {
   const atk = stat(k, 1);
   if (atk > 0) html += ` · attack <b>${atk}</b> · ${stat(k, 2) > 1.5 ? `range <b>${stat(k, 2)}</b>` : "melee"}`;
   html += `</div>`;
-  if (k < 10) {
-    let st = ORDER_TEXT[E(i, F.order)];
-    if (k === K.Citizen && E(i, F.carry) >= 1) st += ` · carrying ${Math.floor(E(i, F.carry))} ${RES_NAMES[E(i, F.carryK)]}`;
-    if (owner === ME || observe) html += `<div class="statline">${st}</div>`;
+  if (!isBld(k)) {
+    if (owner === ME || observe) html += `<div class="statline">${ORDER_TEXT[E(i, F.order)]}</div>`;
+    if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
   } else if (E(i, F.flags) & 2) {
     html += `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
+  } else if (slotsOf(k, 1).length) {
+    html += `<div class="statline">Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span></div>`;
   }
   info.innerHTML = html;
-  if (k >= 10 && (owner === ME || observe) && W.queue_len(id) > 0) {
+  if (isBld(k) && (owner === ME || observe) && W.queue_len(id) > 0) {
     const q = W.queue_len(id);
     const line = document.createElement("div"); line.className = "statline";
     line.innerHTML = `Training ${NAMES[W.queue_kind(id, 0)]} · ${Math.floor(E(i, F.prog) * 100)}%`;
@@ -575,7 +609,10 @@ function renderCommands(sel) {
   const kinds = new Set(mine.map(i => E(i, F.kind)));
   const add = (b, key, fn) => { box.append(b); if (key) cmdKeys[key.toLowerCase()] = fn; };
   const unitTip = k => {
-    let h = `<h4>${NAMES[k]}</h4>${costHtml(k)}<p>${DESC[k] || ""}</p>` + (stat(k, 7) > 0 ? `<p>Eats ${stat(k, 7)} food per minute.</p>` : "");
+    let h = `<h4>${NAMES[k]}</h4>${costHtml(k)}<p>${DESC[k] || ""}</p>`;
+    if (slotsOf(k, 1).length) h += `<p>Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span></p>`;
+    const dep = W.kind_deposit(k);
+    if (dep >= 0) h += `<p>Build it next to ${DEP_NAMES[dep]}.</p>`;
     const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
     if (needs.length) h += `<p>Needs ${needs.map(q => `<span class="${W.has_built(q) ? "" : "short"}">${NAMES[q]}</span>`).join(" and ")}.</p>`;
     return h;
@@ -584,7 +621,7 @@ function renderCommands(sel) {
   if (kinds.has(K.Citizen)) {
     for (const [k, key] of BUILD_MENU) {
       const fn = () => startPlacing(k);
-      const locked = k >= 10 && !W.unlocked(k);
+      const locked = isBld(k) && !W.unlocked(k);
       add(cmdButton(`Build ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), locked, tip: unitTip(k) }), key, fn);
     }
   }
@@ -595,7 +632,7 @@ function renderCommands(sel) {
     const fn = () => doTrain(k);
     add(cmdButton(`Train ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), tip: unitTip(k) + `<p>Right-click the map to set a rally point.</p>` }), key, fn);
   }
-  const hasUnits = mine.some(i => E(i, F.kind) < 10);
+  const hasUnits = mine.some(i => !isBld(E(i, F.kind)));
   if (mine.some(i => E(i, F.kind) >= 1 && E(i, F.kind) <= 3)) {
     const fn = () => setAmode(true);
     add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
@@ -612,11 +649,18 @@ function toast(msg, cls = "") {
   setTimeout(() => t.remove(), 3300);
   while ($("toasts").children.length > 4) $("toasts").firstChild.remove();
 }
+// Error codes from Rust (`CmdError::code` in game.rs).
 function explain(code) {
-  if (code >= 1 && code <= 4) return `Not enough ${RES_NAMES[code - 1]}`;
-  if (code >= 100) return `Build a ${NAMES[code - 100]} first`;
+  if (code >= 2000) return `Build a ${NAMES[code - 2000]} first`;
+  if (code >= 1000) {
+    const r = code - 1000, p = producerOf(r);
+    return `Not enough ${RES_NAMES[r]}` + (p != null ? `: build another ${NAMES[p]}` : "");
+  }
+  if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there" }[code] || "Can't do that";
 }
+// Why `k` can't be had right now, as an error code, or 0.
+function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
 
 // ===========================================================================
 // Commands. Everything the player tells the game goes through `issue`, as a
@@ -656,7 +700,7 @@ const mpHooks = {
     readWorld();
     const t = performance.now();
     for (let i = 0; i < entCount; i++) {
-      if (E(i, F.kind) >= 10) continue;
+      if (isBld(E(i, F.kind))) continue;
       const id = E(i, F.id), o = R3.objs.get(id);
       if (!o || o.x === undefined) continue;
       const dx = o.x - (E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha);
@@ -679,17 +723,17 @@ function cleanCmd(arr) {
   if (c < 1 || c > 8) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
-const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || (E(i, F.kind) >= 10) === buildings)).map(i => E(i, F.id));
+const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || isBld(E(i, F.kind)) === buildings)).map(i => E(i, F.id));
 
 function doTrain(k) {
-  if (!canAfford(k)) { toast(explain(1 + costOf(k).findIndex((c, r) => W.stock(r) < c)), "bad"); Sfx.ui("error"); return; }
+  if (!canAfford(k)) { toast(explain(shortCode(k)), "bad"); Sfx.ui("error"); return; }
   const code = issue({ c: 4, ids: myIds(true), a: k });
   if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("queued");
   selKey = "";
 }
 function startPlacing(k) {
-  if (k >= 10 && !W.unlocked(k)) { let n = 0, q; while ((q = W.requires(k, n++)) >= 0) if (!W.has_built(q)) break; toast(explain(100 + q), "bad"); Sfx.ui("error"); return; }
-  if (!canAfford(k)) { toast(explain(1 + costOf(k).findIndex((c, r) => W.stock(r) < c)), "bad"); Sfx.ui("error"); return; }
+  if (isBld(k) && !W.unlocked(k)) { let n = 0, q; while ((q = W.requires(k, n++)) >= 0) if (!W.has_built(q)) break; toast(explain(2000 + q), "bad"); Sfx.ui("error"); return; }
+  if (!canAfford(k)) { toast(explain(shortCode(k)), "bad"); Sfx.ui("error"); return; }
   placing = k; amode = false; updateCursor();
 }
 function setAmode(on) { amode = on; placing = null; updateCursor(); }
@@ -736,7 +780,7 @@ function boxSelect(x0, y0, x1, y1, add, kindFilter = -1) {
     if (kindFilter >= 0 && k !== kindFilter) continue;
     const p = entScreen(i, false);
     if (!p || p.behind || p.x < lx || p.x > hx || p.y < ly || p.y > hy) continue;
-    (k >= 10 ? buildings : units).push(E(i, F.id));
+    (isBld(k) ? buildings : units).push(E(i, F.id));
   }
   let ids = units.length ? units : buildings;
   if (add) ids = [...new Set([...selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id)), ...ids])];
@@ -850,8 +894,11 @@ function marker(w, code) {
 function tryPlace(p, keep) {
   const spot = placementSpot(p.x, p.y);
   if (!spot) return;
-  if (!W.can_place(placing, spot.tx, spot.ty)) { toast(explain(12), "bad"); Sfx.ui("error"); return; }
-  if (!canAfford(placing)) { toast(explain(1 + costOf(placing).findIndex((c, r) => W.stock(r) < c)), "bad"); Sfx.ui("error"); return; }
+  if (!W.can_place(placing, spot.tx, spot.ty)) {
+    const dep = W.kind_deposit(placing);
+    toast(explain(dep >= 0 && W.can_place_ignoring_deposit(placing, spot.tx, spot.ty) ? 20 + dep : 12), "bad"); Sfx.ui("error"); return;
+  }
+  if (!canAfford(placing)) { toast(explain(shortCode(placing)), "bad"); Sfx.ui("error"); return; }
   const code = issue({ c: 6, ids: myIds(false), x: spot.tx, y: spot.ty, a: placing });
   if (code) { toast(explain(code), "bad"); Sfx.ui("error"); return; }
   Sfx.ui("place");
@@ -958,7 +1005,7 @@ function scrollCamera(dt) {
 
 // ===========================================================================
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
-const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Work: 8, Hammer: 9, DropOff: 10, ArrowHit: 11, Starving: 12, WonderBegun: 13, Eliminated: 14 };
+const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, WonderBegun: 13, Eliminated: 14 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -974,7 +1021,7 @@ function handleEvents() {
     }
     switch (type) {
       case EV.Alert:
-        toast(d >= 10 ? `Your ${NAMES[d]} is under attack. Space to view.` : "Your people are under attack. Space to view.", "bad");
+        toast(isBld(d) ? `Your ${NAMES[d]} is under attack. Space to view.` : "Your people are under attack. Space to view.", "bad");
         lastAlert = { x, y, t: performance.now() };
         Sfx.ui("horn");
         break;
@@ -988,21 +1035,13 @@ function handleEvents() {
         break; }
       case EV.Lost: toast(`Your ${NAMES[d]} was destroyed`, "bad"); break;
       case EV.Death: { const kind = d % 100;
-        if (kind >= 10) Sfx.at("crumble", x, y, 200);
+        if (isBld(kind)) Sfx.at("crumble", x, y, 200);
         else Sfx.at("death", x, y, 90, kind === K.Horseman);
         break; }
       case EV.Melee: Sfx.at("melee", x, y, 45, d); break;
-      case EV.Shoot: Sfx.at("bow", x, y, 60, d >= 10); break;
+      case EV.Shoot: Sfx.at("bow", x, y, 60, isBld(d)); break;
       case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;
-      case EV.Work: {
-        const r = d % 4, farm = d >= 4;
-        if (farm) Sfx.at("till", x, y, 120);
-        else if (r === 1) Sfx.at("chop", x, y, 70);
-        else if (r === 0) Sfx.at("forage", x, y, 120);
-        else Sfx.at("mine", x, y, 80, r === 3);
-        break; }
       case EV.Hammer: Sfx.at("hammer", x, y, 90); break;
-      case EV.DropOff: Sfx.at("dropoff", x, y, 150, d); break;
       case EV.WonderBegun:
         if (d !== ME) { toast(`${PNAME[d]} has begun a Wonder! Destroy it before it's finished.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
         else toast("Wonder begun. Put many citizens on it, and protect it.", "good");
@@ -1010,7 +1049,11 @@ function handleEvents() {
       case EV.Eliminated:
         if (d !== ME) toast(`${PNAME[d]} has been eliminated.`, "good");
         break;
-      case EV.Starving: toast("Your food has run out and your people are starving. Put more citizens on food.", "bad"); Sfx.ui("starving"); break;
+      case EV.Short: {
+        const p = producerOf(d);
+        toast(`You hold more ${RES_NAMES[d]} than you make. Your newest units that need it are losing health` + (p != null ? `: build a ${NAMES[p]}.` : "."), "bad");
+        Sfx.ui("starving");
+        break; }
     }
   }
 }
@@ -1298,7 +1341,7 @@ function showEndStats(opts = {}) {
   $("endStats").innerHTML = `<tr><th></th>${head}</tr>` +
     row("Units trained", p => W.player_stat(p, 0)) +
     row("Units and buildings lost", p => W.player_stat(p, 1)) +
-    row("Resources gathered", p => Math.floor(W.player_stat(p, 2))) +
+    row("Buildings built", p => W.player_stat(p, 2)) +
     `<tr><th>Game time</th><td colspan="${ps.length}">${fmtTime(W.game_time())}</td></tr>`;
   $("againBtn").textContent = mp || lastWasMultiplayer ? "Back to menu" : "Play again";
   $("againBtn").hidden = !!opts.watching;

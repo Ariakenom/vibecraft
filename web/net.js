@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 7,    // 7: surrender (command 8), spectators
+  PROTOCOL: 8,    // 8: slots replace stockpiles; kinds renumbered (7: surrender, spectators)
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,

@@ -14,8 +14,8 @@ const sums = await p.evaluate(() => {
   window.simTick0 = simTick;
   for (let t = 0; t < 900; t++) {
     if (t === 50) issue({ c: 1, ids: own(0), x: MW / 2, y: MH / 2 });
-    if (t === 120) issue({ c: 4, ids: own(10), a: 0 });
-    if (t === 121) issue({ c: 4, ids: own(10), a: 0 });
+    if (t === 120) issue({ c: 4, ids: own(K.Capitol), a: 0 });
+    if (t === 121) issue({ c: 4, ids: own(K.Capitol), a: 0 });
     if (t === 500) issue({ c: 1, ids: own(0).slice(0, 2), x: 10.5, y: 12.25 });
     W.tick(); simTick++; Rec.ticks = simTick; W.take_events();
     if ([200, 450, 600, 900].includes(simTick - window.simTick0)) sums[simTick] = W.checksum();

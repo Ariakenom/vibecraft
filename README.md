@@ -34,7 +34,7 @@ screen. Friends on your network use your computer's address, e.g.
 | src/defs.rs          | Unit and building kinds, stats, costs, tech requirements, bonuses, damage table |
 | src/map.rs           | Tile map and the symmetric map generator                        |
 | src/path.rs          | A* pathfinding                                                  |
-| src/game.rs          | The simulation: orders, movement, gathering, building, combat, food, fog, victory |
+| src/game.rs          | The simulation: orders, movement, slots, building, combat, fog, victory |
 | src/ai.rs            | The computer opponent                                           |
 | src/save.rs          | Saving and loading: the whole game to bytes and back            |
 | src/lib.rs           | The Rust/JavaScript boundary: exported functions, render buffers, the two multiplayer copies |
@@ -124,13 +124,13 @@ loaded games misbehave.
 
 ## Common changes
 
-**Tune a unit or building.** Stats and costs are the `static … Stats` lines
-in `src/defs.rs`. Tech requirements are `Kind::requires`; bonuses are
-`Bonuses::from_buildings`.
+**Tune a unit or building.** Stats, slot costs and what producers make are
+the `static … Stats` lines in `src/defs.rs`. Tech requirements are
+`Kind::requires`. Units are kinds 0–63, buildings 64 and up.
 
 **Add a building or unit kind.**
 - Rust:
-  - add it to `Kind` and `Kind::from_u32` in `src/defs.rs`;
+  - add it to `Kind` and `Kind::ALL` in `src/defs.rs`;
   - give it stats in `Kind::stats`, its requirements, and (for buildings)
     a place in `BUILDABLE`;
   - if the AI should build it, add it to its plan in `src/ai.rs`.
@@ -422,17 +422,21 @@ versions don't play together.
   for a Wonder too, on Normal and Hard. Lose your Capitol and everything you
   own falls with it.
 - **Progress comes from buildings, not research.** Each building unlocks
-  others and gives a lasting bonus. Press K for the tech tree.
-- **No population cap.** Every unit eats food each minute; if the granary
-  empties, your units slowly lose health. One citizen per farm.
+  others. Press K for the tech tree.
+- **Resources are slots** (being rebuilt; see
+  `docs/design/economy-and-eras.md`). Nothing is gathered or stockpiled:
+  producers make slots (a lumber camp by a forest makes 4 wood), and
+  everything you have holds some while it exists, giving them back when
+  it's gone. Lose a producer and you hold more than you make: your newest
+  units that need it lose health until it fits again.
 - **Maps:** two players get an 80×80 map with 180° symmetry; three or four
   get 96×96 with four-way symmetry, so every start is the same, just turned.
 
 **Controls.**
 - **Camera:** WASD, arrows or screen edges move it; the wheel zooms;
   middle-drag rotates and tilts.
-- **Build:** Q farm, E settlement, R barracks, T granary, Y sawmill,
-  U range, I stonemason, O tower, F smithy, G stable, C market, V temple,
+- **Build:** Q farm, E lumber camp, R quarry, T fishing hut, Y hunting
+  lodge, U orchard, I pasture, O barracks, F range, G stable, C tower,
   B wonder.
 - **Train:** Q.
 - **Other keys:**

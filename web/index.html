@@ -42,8 +42,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .res .chip svg { align-self: center; }
 .res .chip:hover, .res .chip:focus-visible { background: #ffffff10; }
 .res .chip small { font-size: 12px; font-weight: 500; color: var(--muted); }
-.res .chip small.pos { color: var(--good); }
-.res .chip small.neg { color: var(--bad); }
+.res .chip.over b { color: var(--bad); }
 .res .era { background: transparent; border: 1px solid var(--line); border-radius: 3px; padding: 1px 9px; font: 400 14px var(--display); letter-spacing: .04em; color: var(--bronze); cursor: pointer; }
 .res .era:hover { border-color: var(--bronze); }
 .res .foe-wonder { color: var(--bad); font-weight: 700; }
@@ -125,6 +124,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .cost { display: flex; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .cost span { display: inline-flex; align-items: center; gap: 3px; }
 .cost .short { color: var(--bad); }
+.cost .free { color: var(--muted); }
+.cost.inline { display: inline-flex; gap: 8px; vertical-align: middle; margin-left: 4px; }
+.statline.bad { color: var(--bad); }
 
 /* ---- overlays ---- */
 .overlay { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(ellipse at center, #15120dcc, #0b0907f2); overflow: auto; padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
@@ -385,7 +387,7 @@ body.observing #hint { display: none; }
     <section id="scoreboard" hidden aria-label="Players">
       <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
       <table>
-        <thead><tr><th>Player</th><th title="Living units">People</th><th title="Soldiers">Army</th><th class="r">Food</th><th class="r">Wood</th><th class="r">Stone</th><th class="r">Gold</th></tr></thead>
+        <thead><tr><th>Player</th><th title="Living units">People</th><th title="Soldiers">Army</th><th class="r" title="Wood made">Wood</th><th class="r" title="Stone made">Stone</th><th class="r" title="Grain made">Grain</th><th class="r" title="Horses made">Horses</th></tr></thead>
         <tbody id="sbBody"></tbody>
       </table>
     </section>
