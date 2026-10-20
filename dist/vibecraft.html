@@ -249,6 +249,21 @@ body.observing #hint { display: none; }
   #rpSeek { width: 100%; }
 }
 
+/* chat */
+#chat { position: absolute; left: 10px; bottom: 60px; z-index: 3; width: min(420px, calc(100% - 20px)); display: grid; gap: 4px; pointer-events: none; }
+#chatLog { display: grid; gap: 2px; max-height: 40vh; overflow: hidden; }
+#chatLog.open { overflow: auto; pointer-events: auto; background: #1b1610cc; border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+#chat p, .chat-log p { margin: 0; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+#chatLog p { text-shadow: 0 1px 2px #000, 0 0 4px #000; }
+#chatLog.open p { text-shadow: none; }
+#chat p b, .chat-log p b { font-weight: 700; }
+#chatLine { pointer-events: auto; display: flex; align-items: center; gap: 6px; background: #1b1610ee; border: 1px solid var(--bronze); border-radius: 3px; padding: 4px 6px; }
+#chatLine label { color: var(--muted); font-size: 13px; }
+#chatInput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: 500 15px var(--body); outline: none; }
+.lobby-chat { display: grid; gap: 6px; }
+.chat-log { max-height: 120px; overflow: auto; border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; display: grid; gap: 2px; align-content: start; }
+#lobbyChatInput { flex: 1; min-width: 0; }
+
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 </style>
 
@@ -266,6 +281,7 @@ body.observing #hint { display: none; }
     </span>
     <button class="tbtn" id="pauseBtn" aria-pressed="false" title="Pause (P)">Pause</button>
     <button class="tbtn" id="speedBtn" title="Game speed">1×</button>
+    <button class="tbtn" id="chatBtn" title="Chat (Enter)" hidden>Chat</button>
     <button class="tbtn" id="netBtn" title="Network details (F8)" hidden>Net</button>
     <button class="tbtn" id="menuBtn" title="Menu">Menu</button>
   </header>
@@ -275,6 +291,10 @@ body.observing #hint { display: none; }
     <div id="toasts" aria-live="polite"></div>
     <div id="hint" hidden></div>
     <div id="netWait" hidden></div>
+    <div id="chat">
+      <div id="chatLog" aria-live="polite" hidden></div>
+      <div id="chatLine" hidden><label for="chatInput">Say:</label><input id="chatInput" autocomplete="off" spellcheck="false" placeholder="Enter to send, Esc to close"></div>
+    </div>
     <section id="scoreboard" hidden aria-label="Players">
       <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
       <table>
@@ -337,6 +357,10 @@ body.observing #hint { display: none; }
           <label for="relayUrl">Relay server</label>
           <input id="relayUrl" value="ws://localhost:8787" spellcheck="false">
           <span class="note">To play with friends from your own copy, run <code>node server.js</code> (see README).</span>
+        </div>
+        <div class="lobby-chat" id="lobbyChat" hidden>
+          <div class="chat-log" id="lobbyChatLog" aria-live="polite" hidden></div>
+          <div class="row"><input id="lobbyChatInput" placeholder="Say something to the others here" autocomplete="off" spellcheck="false" aria-label="Chat message"><button class="ghost" id="lobbyChatSend">Send</button></div>
         </div>
         <p class="note" id="mpStatus" aria-live="polite"></p>
         <div class="row"><button class="ghost" id="watchHostBtn" hidden>Watch their game</button></div>
@@ -3888,6 +3912,7 @@ class Watcher {
     this.status();
   }
   peers(peers) {
+    Chat.setOthers(peers.length);
     const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token));
     if (host) { this.host = host; this.hostSeen = performance.now(); }
     else this.host = null;
@@ -3955,12 +3980,19 @@ class Watcher {
       stopWatching("The game couldn't be read.");
     } finally { this.loading = false; }
   }
-  // Every frame: run the ticks we have, at the game's own pace. Fall behind
-  // (a slow connection, a hidden tab) and it catches up faster.
-  pump(dt) {
+  // Many times a second (animation frames, and the worker clock when the tab
+  // is hidden): run the ticks we have, at the game's own pace. Time is
+  // measured here, not taken from the frame, so slow frames lose nothing.
+  // Fall behind (a slow connection, a hidden tab) and it catches up faster.
+  pump() {
+    const now = performance.now();
+    const dt = Math.min(1, (now - (this.lastPump || now)) / 1000);
+    this.lastPump = now;
     if (!this.loaded) return 0;
     const behind = this.avail - this.k;
-    acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : 1);
+    // Keep a small buffer (a few ticks) so play is smooth; anything beyond
+    // that is drained a little faster than real time.
+    acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : behind > 5 ? 1.25 : 1);
     let steps = 0;
     while (acc >= SIM_MS && this.k < this.avail && steps < 60) { this.step(); acc -= SIM_MS; steps++; }
     if (this.k >= this.avail) acc = Math.min(acc, SIM_MS);
@@ -3999,6 +4031,7 @@ async function startWatching(code) {
     const r = await Net.game(code);
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
+    Chat.attach(r);
     watcher = new Watcher(code, r);
   } catch (e) {
     if (gen === lobbyGen) stopWatching(`Couldn't reach that game: ${e.message || e}`);
@@ -4092,6 +4125,151 @@ function renderReplayList() {
       }));
     ul.append(li);
   }
+}
+
+</script>
+<script>
+"use strict";
+// ===========================================================================
+// Chat: short messages between everyone in the room (the lobby, then the
+// game): players and spectators alike. It has nothing to do with the
+// simulation, so it goes straight through the room on its own topic and is
+// never part of a replay.
+//
+// In a game: Enter (or the Chat button) opens the line, Enter sends, Escape
+// closes. Recent messages show at the bottom left and fade. In the lobby
+// there's a small box under the seats.
+//
+// Message (topic "chat"): {v, id, token, name, slot, text}. `name` is a
+// colour, "Spectator" or "Guest"; `slot` colours it. Over the relay only:
+// claude.ai's room keeps just the latest value, which would lose messages.
+
+const CHAT = { MAX: 200, KEEP: 60, SHOW_MS: 12000, GAP_MS: 400 };
+const Chat = {
+  log: [],            // [{name, slot, text, mine, at}]
+  seen: new Set(),    // ids already shown (a message is never shown twice)
+  others: 0,          // people in the room besides me
+  lastSent: 0,
+  open: false,
+
+  // A new room: someone else's people, so a fresh log.
+  attach(r) {
+    this.log = []; this.seen.clear(); this.others = 0;
+    r.on("chat", d => this.receive(d));
+    this.render();
+  },
+  // How many others are in the room (from the room's peer lists).
+  setOthers(n) { this.others = n; this.sync(); },
+  available() { return !!room && !Net.room && this.others > 0; },
+
+  // Who I am, as others see me.
+  me() {
+    if (watcher || (observe && observe.kind !== "out")) return { name: "Spectator", slot: 0 };
+    if (running && ME >= 1) return { name: PNAME[ME], slot: ME };
+    // In a lobby: my seat's colour.
+    const list = guestOf ? (guestOf.host ? guestOf.host.seats : []) : seats;
+    const i = guestOf ? list.indexOf("f:" + myToken) : 0;
+    const slot = i >= 0 ? slotOf(i, list) : 0;
+    return slot ? { name: PNAME[slot], slot } : { name: "Guest", slot: 0 };
+  },
+  send(text) {
+    text = String(text || "").replace(/\s+/g, " ").trim().slice(0, CHAT.MAX);
+    if (!text || !this.available()) return false;
+    const now = performance.now();
+    if (now - this.lastSent < CHAT.GAP_MS) return false;
+    this.lastSent = now;
+    const { name, slot } = this.me();
+    const id = myToken + ":" + Math.random().toString(36).slice(2, 10);
+    room.emit("chat", { v: NET.PROTOCOL, id, token: myToken, name, slot, text });
+    this.add({ name, slot, text, mine: true }, id);
+    return true;
+  },
+  receive(d) {
+    if (!d || d.v !== NET.PROTOCOL || typeof d.text !== "string" || typeof d.id !== "string" || d.id.length > 40) return;
+    const text = d.text.replace(/\s+/g, " ").trim().slice(0, CHAT.MAX);
+    if (!text) return;
+    const name = PNAME.includes(d.name) && d.name !== "Nature" ? d.name : d.name === "Spectator" ? "Spectator" : "Guest";
+    const slot = Number.isInteger(d.slot) && d.slot >= 1 && d.slot <= 4 && PNAME[d.slot] === name ? d.slot : 0;
+    if (this.add({ name, slot, text, mine: false }, d.id) && !document.hidden) Sfx.ui("queued");
+  },
+  add(m, id) {
+    if (this.seen.has(id)) return false;
+    this.seen.add(id);
+    m.at = performance.now();
+    this.log.push(m);
+    if (this.log.length > CHAT.KEEP) this.log.shift();
+    this.render();
+    return true;
+  },
+
+  // ---- the page ----
+  line(m) {
+    const p = document.createElement("p");
+    const who = document.createElement("b");
+    who.textContent = m.name + ":";
+    who.style.color = m.slot ? PLIGHT[m.slot] : "var(--muted)";
+    p.append(who, document.createTextNode(" " + m.text)); // text, never HTML
+    if (m.mine) p.className = "mine";
+    return p;
+  },
+  render() {
+    // In the game: the recent lines (all of them while typing).
+    const box = $("chatLog");
+    const now = performance.now();
+    const recent = this.open ? this.log.slice(-20) : this.log.filter(m => now - m.at < CHAT.SHOW_MS).slice(-6);
+    box.replaceChildren(...recent.map(m => this.line(m)));
+    box.hidden = !recent.length;
+    box.classList.toggle("open", this.open);
+    box.scrollTop = box.scrollHeight;
+    // In the lobby: the whole log.
+    const lobby = $("lobbyChatLog");
+    lobby.replaceChildren(...this.log.slice(-30).map(m => this.line(m)));
+    lobby.hidden = !this.log.length;
+    lobby.scrollTop = lobby.scrollHeight;
+  },
+  // Show or hide what depends on there being someone to talk to.
+  sync() {
+    const ok = this.available();
+    $("chatBtn").hidden = !ok;
+    $("lobbyChat").hidden = !ok;
+    if (!ok && this.open) this.close();
+  },
+  // Once a second: let old lines fade from the game view.
+  tick() { if (!this.open && this.log.length) this.render(); },
+
+  show() {
+    if (!this.available() || !running) return;
+    this.open = true;
+    $("chatLine").hidden = false;
+    $("chatInput").focus();
+    this.render();
+  },
+  close() {
+    this.open = false;
+    $("chatLine").hidden = true;
+    $("chatInput").value = "";
+    $("chatInput").blur();
+    this.render();
+  },
+};
+
+function initChatUi() {
+  const input = $("chatInput");
+  input.maxLength = CHAT.MAX;
+  input.addEventListener("keydown", e => {
+    e.stopPropagation(); // typing isn't hotkeys
+    if (e.key === "Enter") { Chat.send(input.value); Chat.close(); }
+    else if (e.key === "Escape") Chat.close();
+  });
+  input.addEventListener("keyup", e => e.stopPropagation());
+  input.addEventListener("blur", () => { if (Chat.open) setTimeout(() => { if (document.activeElement !== input) Chat.close(); }, 0); });
+  $("chatBtn").onclick = () => (Chat.open ? Chat.close() : Chat.show());
+  const lobbyInput = $("lobbyChatInput");
+  lobbyInput.maxLength = CHAT.MAX;
+  const sendLobby = () => { if (Chat.send(lobbyInput.value)) lobbyInput.value = ""; };
+  lobbyInput.addEventListener("keydown", e => { if (e.key === "Enter") sendLobby(); });
+  $("lobbyChatSend").onclick = sendLobby;
+  setInterval(() => Chat.tick(), 1000);
 }
 
 </script>
@@ -4994,6 +5172,7 @@ const SCROLL_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDo
 window.addEventListener("keydown", e => {
   if (!running) return;
   if (e.key === "F8") { e.preventDefault(); toggleTrace(); return; }
+  if (e.key === "Enter" && Chat.available() && !e.repeat) { e.preventDefault(); Chat.show(); return; }
   if (SCROLL_KEYS.has(e.code)) { keys.add(e.code); e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
@@ -5129,7 +5308,7 @@ function loop(now) {
     const f0 = performance.now();
     scrollCamera(dt);
     if (mp) pumpMultiplayer(performance.now(), false);
-    else if (watcher) { if (watcher.pump(dt)) handleEvents(); }
+    else if (watcher) { if (watcher.pump()) handleEvents(); }
     else if (Replay.on) { if (Replay.pump(dt)) handleEvents(); }
     else if (!paused) {
       acc += dt * 1000 * speed;
@@ -5182,7 +5361,10 @@ try {
   const src = "setInterval(() => postMessage(0), 50);";
   const worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
   workerClock = true;
-  worker.onmessage = () => { if (running && mp) pumpMultiplayer(performance.now(), true); };
+  worker.onmessage = () => {
+    if (running && mp) pumpMultiplayer(performance.now(), true);
+    else if (running && watcher && document.hidden) { if (watcher.pump()) handleEvents(); }
+  };
 } catch { /* no workers here: background tabs will just be slow */ }
 
 function pumpMultiplayer(now, fromWorker) {
@@ -5545,6 +5727,7 @@ function publishLobby() {
 // whoever has gone. During a game, anyone gone is handed to the computer.
 function onHostPeers(peers) {
   setWatchCount(countWatchers(peers));
+  Chat.setOthers(peers.length);
   const here = new Set();
   for (const p of peers) {
     const pr = p.presence || {};
@@ -5577,6 +5760,7 @@ function closeRoom() {
   if (room) room.leave();
   room = null; mp = null;
   setWatchCount(0);
+  Chat.setOthers(0);
   $("watchHostBtn").hidden = true;
   if (pageRoom) pageRoom.presence({ hosting: null });
 }
@@ -5598,6 +5782,7 @@ async function openOwnLobby(note = "", bad = false) {
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
     Watchers.attach(room);
+    Chat.attach(room);
     room.onPeers(onHostPeers);
     publishLobby();
     if (pageRoom) pageRoom.presence({ hosting: roomCode, v: NET.PROTOCOL });
@@ -5622,6 +5807,7 @@ async function joinLobby(code) {
     const r = await Net.game(code);
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
+    Chat.attach(room);
     room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: null });
     room.on("start", onStart);
     room.onPeers(onGuestPeers);
@@ -5633,6 +5819,7 @@ async function joinLobby(code) {
 function onGuestPeers(peers) {
   if (!guestOf) return;
   setWatchCount(mp ? countWatchers(peers) : 0);
+  Chat.setOthers(peers.length);
   const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && Array.isArray(pr.seats));
   if (mp) { if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game."); return; }
   if (!host) { if (guestOf.host) { guestOf.host = null; guestOf.lostAt = performance.now(); } renderLobby(); return; }
@@ -6008,6 +6195,7 @@ $("techClose").onclick = () => { $("techScreen").hidden = true; };
   }
   await loadWasm();
   initWatchUi();
+  initChatUi();
   initRenderer();
   resizeView();
   // A live map behind the title screen.

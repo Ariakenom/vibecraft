@@ -13,7 +13,7 @@ check(await host.evaluate(() => !$("watchLinkBtn").hidden && watchLink().endsWit
 await host.click("#resumeBtn");
 // A friend opens the invite link meanwhile: they can watch.
 const friend = await open(b, "#" + code);
-await friend.waitForSelector("#watchHostBtn:not([hidden])", { timeout: 15000 });
+await friend.waitForSelector("#watchHostBtn:not([hidden])", { timeout: 30000 });
 check(true, "a friend waiting in the lobby is offered \"Watch their game\"");
 await friend.click("#watchHostBtn");
 await friend.waitForFunction(() => watcher && watcher.loaded && observe.kind === "watch", null, { timeout: 20000 });

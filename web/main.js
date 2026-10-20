@@ -896,6 +896,7 @@ const SCROLL_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDo
 window.addEventListener("keydown", e => {
   if (!running) return;
   if (e.key === "F8") { e.preventDefault(); toggleTrace(); return; }
+  if (e.key === "Enter" && Chat.available() && !e.repeat) { e.preventDefault(); Chat.show(); return; }
   if (SCROLL_KEYS.has(e.code)) { keys.add(e.code); e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
@@ -1031,7 +1032,7 @@ function loop(now) {
     const f0 = performance.now();
     scrollCamera(dt);
     if (mp) pumpMultiplayer(performance.now(), false);
-    else if (watcher) { if (watcher.pump(dt)) handleEvents(); }
+    else if (watcher) { if (watcher.pump()) handleEvents(); }
     else if (Replay.on) { if (Replay.pump(dt)) handleEvents(); }
     else if (!paused) {
       acc += dt * 1000 * speed;
@@ -1084,7 +1085,10 @@ try {
   const src = "setInterval(() => postMessage(0), 50);";
   const worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
   workerClock = true;
-  worker.onmessage = () => { if (running && mp) pumpMultiplayer(performance.now(), true); };
+  worker.onmessage = () => {
+    if (running && mp) pumpMultiplayer(performance.now(), true);
+    else if (running && watcher && document.hidden) { if (watcher.pump()) handleEvents(); }
+  };
 } catch { /* no workers here: background tabs will just be slow */ }
 
 function pumpMultiplayer(now, fromWorker) {
@@ -1447,6 +1451,7 @@ function publishLobby() {
 // whoever has gone. During a game, anyone gone is handed to the computer.
 function onHostPeers(peers) {
   setWatchCount(countWatchers(peers));
+  Chat.setOthers(peers.length);
   const here = new Set();
   for (const p of peers) {
     const pr = p.presence || {};
@@ -1479,6 +1484,7 @@ function closeRoom() {
   if (room) room.leave();
   room = null; mp = null;
   setWatchCount(0);
+  Chat.setOthers(0);
   $("watchHostBtn").hidden = true;
   if (pageRoom) pageRoom.presence({ hosting: null });
 }
@@ -1500,6 +1506,7 @@ async function openOwnLobby(note = "", bad = false) {
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
     Watchers.attach(room);
+    Chat.attach(room);
     room.onPeers(onHostPeers);
     publishLobby();
     if (pageRoom) pageRoom.presence({ hosting: roomCode, v: NET.PROTOCOL });
@@ -1524,6 +1531,7 @@ async function joinLobby(code) {
     const r = await Net.game(code);
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
+    Chat.attach(room);
     room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: null });
     room.on("start", onStart);
     room.onPeers(onGuestPeers);
@@ -1535,6 +1543,7 @@ async function joinLobby(code) {
 function onGuestPeers(peers) {
   if (!guestOf) return;
   setWatchCount(mp ? countWatchers(peers) : 0);
+  Chat.setOthers(peers.length);
   const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && Array.isArray(pr.seats));
   if (mp) { if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game."); return; }
   if (!host) { if (guestOf.host) { guestOf.host = null; guestOf.lostAt = performance.now(); } renderLobby(); return; }
@@ -1910,6 +1919,7 @@ $("techClose").onclick = () => { $("techScreen").hidden = true; };
   }
   await loadWasm();
   initWatchUi();
+  initChatUi();
   initRenderer();
   resizeView();
   // A live map behind the title screen.

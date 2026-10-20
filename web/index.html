@@ -249,6 +249,21 @@ body.observing #hint { display: none; }
   #rpSeek { width: 100%; }
 }
 
+/* chat */
+#chat { position: absolute; left: 10px; bottom: 60px; z-index: 3; width: min(420px, calc(100% - 20px)); display: grid; gap: 4px; pointer-events: none; }
+#chatLog { display: grid; gap: 2px; max-height: 40vh; overflow: hidden; }
+#chatLog.open { overflow: auto; pointer-events: auto; background: #1b1610cc; border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+#chat p, .chat-log p { margin: 0; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+#chatLog p { text-shadow: 0 1px 2px #000, 0 0 4px #000; }
+#chatLog.open p { text-shadow: none; }
+#chat p b, .chat-log p b { font-weight: 700; }
+#chatLine { pointer-events: auto; display: flex; align-items: center; gap: 6px; background: #1b1610ee; border: 1px solid var(--bronze); border-radius: 3px; padding: 4px 6px; }
+#chatLine label { color: var(--muted); font-size: 13px; }
+#chatInput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: 500 15px var(--body); outline: none; }
+.lobby-chat { display: grid; gap: 6px; }
+.chat-log { max-height: 120px; overflow: auto; border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; display: grid; gap: 2px; align-content: start; }
+#lobbyChatInput { flex: 1; min-width: 0; }
+
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 </style>
 
@@ -266,6 +281,7 @@ body.observing #hint { display: none; }
     </span>
     <button class="tbtn" id="pauseBtn" aria-pressed="false" title="Pause (P)">Pause</button>
     <button class="tbtn" id="speedBtn" title="Game speed">1×</button>
+    <button class="tbtn" id="chatBtn" title="Chat (Enter)" hidden>Chat</button>
     <button class="tbtn" id="netBtn" title="Network details (F8)" hidden>Net</button>
     <button class="tbtn" id="menuBtn" title="Menu">Menu</button>
   </header>
@@ -275,6 +291,10 @@ body.observing #hint { display: none; }
     <div id="toasts" aria-live="polite"></div>
     <div id="hint" hidden></div>
     <div id="netWait" hidden></div>
+    <div id="chat">
+      <div id="chatLog" aria-live="polite" hidden></div>
+      <div id="chatLine" hidden><label for="chatInput">Say:</label><input id="chatInput" autocomplete="off" spellcheck="false" placeholder="Enter to send, Esc to close"></div>
+    </div>
     <section id="scoreboard" hidden aria-label="Players">
       <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
       <table>
@@ -337,6 +357,10 @@ body.observing #hint { display: none; }
           <label for="relayUrl">Relay server</label>
           <input id="relayUrl" value="ws://localhost:8787" spellcheck="false">
           <span class="note">To play with friends from your own copy, run <code>node server.js</code> (see README).</span>
+        </div>
+        <div class="lobby-chat" id="lobbyChat" hidden>
+          <div class="chat-log" id="lobbyChatLog" aria-live="polite" hidden></div>
+          <div class="row"><input id="lobbyChatInput" placeholder="Say something to the others here" autocomplete="off" spellcheck="false" aria-label="Chat message"><button class="ghost" id="lobbyChatSend">Send</button></div>
         </div>
         <p class="note" id="mpStatus" aria-live="polite"></p>
         <div class="row"><button class="ghost" id="watchHostBtn" hidden>Watch their game</button></div>
@@ -447,4 +471,5 @@ body.observing #hint { display: none; }
 <script src="net.js"></script>
 <script src="render3d.js"></script>
 <script src="watch.js"></script>
+<script src="chat.js"></script>
 <script src="main.js"></script>

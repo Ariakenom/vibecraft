@@ -502,6 +502,7 @@ class Watcher {
     this.status();
   }
   peers(peers) {
+    Chat.setOthers(peers.length);
     const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token));
     if (host) { this.host = host; this.hostSeen = performance.now(); }
     else this.host = null;
@@ -569,12 +570,19 @@ class Watcher {
       stopWatching("The game couldn't be read.");
     } finally { this.loading = false; }
   }
-  // Every frame: run the ticks we have, at the game's own pace. Fall behind
-  // (a slow connection, a hidden tab) and it catches up faster.
-  pump(dt) {
+  // Many times a second (animation frames, and the worker clock when the tab
+  // is hidden): run the ticks we have, at the game's own pace. Time is
+  // measured here, not taken from the frame, so slow frames lose nothing.
+  // Fall behind (a slow connection, a hidden tab) and it catches up faster.
+  pump() {
+    const now = performance.now();
+    const dt = Math.min(1, (now - (this.lastPump || now)) / 1000);
+    this.lastPump = now;
     if (!this.loaded) return 0;
     const behind = this.avail - this.k;
-    acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : 1);
+    // Keep a small buffer (a few ticks) so play is smooth; anything beyond
+    // that is drained a little faster than real time.
+    acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : behind > 5 ? 1.25 : 1);
     let steps = 0;
     while (acc >= SIM_MS && this.k < this.avail && steps < 60) { this.step(); acc -= SIM_MS; steps++; }
     if (this.k >= this.avail) acc = Math.min(acc, SIM_MS);
@@ -613,6 +621,7 @@ async function startWatching(code) {
     const r = await Net.game(code);
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
+    Chat.attach(r);
     watcher = new Watcher(code, r);
   } catch (e) {
     if (gen === lobbyGen) stopWatching(`Couldn't reach that game: ${e.message || e}`);

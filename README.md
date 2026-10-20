@@ -44,6 +44,7 @@ screen. Friends on your network use your computer's address, e.g.
 | web/audio.js         | Synthesized sound effects (Web Audio), volume                   |
 | web/net.js           | Multiplayer: transports, the trace, `Server` and `Client`       |
 | web/watch.js         | Recording games, replays, spectators, and watching after you're out |
+| web/chat.js          | Chat between everyone in the room (lobby and game)              |
 | server.js            | The WebSocket relay that carries multiplayer messages           |
 | assets/models.py     | Builds the 3D models in Blender and writes web/models.glb (see assets/README.md) |
 | web/models.glb       | The models, embedded in the page by build.sh                    |
@@ -266,6 +267,7 @@ Two topics carry the game itself. Every message carries
   and ticks not listed had no commands. `early` holds commands not yet
   bundled.
 - `watch` and `feed`: spectators (see Watching).
+- `chat`: `{id, token, name, slot, text}`, to everyone (see Chat).
 
 ### Lobby and transports
 
@@ -333,6 +335,17 @@ Spectator messages, both carrying `v` and the watcher's `token`:
 - `feed`, host to one watcher (`to`): `{game, snap: {id, T, i, n, z, data,
   meta}}` (a snapshot piece), or `{game, from, upTo, ticks, over}` (the
   commands of ticks `from` to `upTo - 1`), or `{game: null}` (no game on).
+
+## Chat
+
+Everyone in the room can talk: players and spectators, in the lobby (a box
+under the seats) and in the game (Enter or the Chat button opens the line,
+Enter sends, Escape closes; lines fade after 12 s). It's not part of the
+simulation and never in replays: messages go straight through the room on
+the `chat` topic. Names are the sender's colour, or "Spectator". Text is
+shown as text, at most 200 characters, and a page sends at most one message
+every 0.4 s. Relay only, like spectating (claude.ai's room keeps only the
+latest value, which would drop messages).
 
 ## Saving
 
@@ -419,4 +432,4 @@ versions don't play together.
   - H home, `.` idle citizen
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
-  - Menu: surrender, copy a watch link for spectators
+  - Enter: chat. Menu: surrender, copy a watch link for spectators
