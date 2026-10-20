@@ -48,7 +48,7 @@ screen. Friends on your network use your computer's address, e.g.
 | server.js            | The WebSocket relay that carries multiplayer messages           |
 | assets/models.py     | Builds the 3D models in Blender and writes web/models.glb (see assets/README.md) |
 | web/models.glb       | The models, embedded in the page by build.sh                    |
-| deploy/              | nginx and systemd config for the live site                      |
+| deploy/              | nginx and relay config for the live site, applied by hand (see Deployment) |
 | test/                | Tests that run with plain Node (see Testing)                    |
 | dist/vibecraft.html  | The built game, checked in so it can be deployed as is          |
 
@@ -374,42 +374,50 @@ bytes, gzipped, in a JSON envelope with the camera and control groups.
 ## Deployment
 
 The game runs at https://ginnu.freemyip.com/vibecraft/ on the host `ginnu`
-(Ubuntu, reached with `ssh ginnu`). The files in `deploy/` are the server
-config:
+(Ubuntu, reached with `ssh ginnu`). The server's own setup (systemd units,
+nginx, the autodeploy script) is kept in the `Ariakenom/devops` repo under
+`ginnu/`; that copy is what's live.
 
-| On the server                                    | From                          |
-|--------------------------------------------------|-------------------------------|
-| `/var/www/vibecraft/index.html`                  | `dist/vibecraft.html`         |
-| `/opt/vibecraft/server.js`                       | `server.js`                   |
-| `/etc/systemd/system/vibecraft-relay.service`    | `deploy/vibecraft-relay.service` (Node 12 from apt, port 8787) |
-| `/etc/nginx/snippets/vibecraft.conf`             | `deploy/nginx-vibecraft.conf`, included from the HTTPS server block in `/etc/nginx/conf.d/chatapp.conf` |
+| On the server                                    | From                          | Updated |
+|--------------------------------------------------|-------------------------------|---------|
+| `/var/www/vibecraft/index.html`                  | `dist/vibecraft.html`         | automatically |
+| `/opt/vibecraft/server.js`                       | `server.js`                   | automatically |
+| `/etc/systemd/system/vibecraft-relay.service`    | `deploy/vibecraft-relay.service` (Node 12 from apt, port 8787) | by hand |
+| `/etc/nginx/snippets/vibecraft.conf`             | `deploy/nginx-vibecraft.conf`, included from the HTTPS server block in `/etc/nginx/conf.d/chatapp.conf` | by hand |
 
 nginx serves the page at `/vibecraft/` (gzipped: 2 MB becomes about 0.5 MB; `Cache-Control: no-cache`, so browsers reuse their copy after a quick check) and proxies the WebSocket at
 `/vibecraft/relay` to the relay on 127.0.0.1:8787 (the firewall keeps 8787
 closed). Only the freemyip name has a certificate; the Tailscale name
 redirects to HTTPS and fails the certificate check.
 
-**Updates deploy themselves.** Every minute ginnu checks GitHub's `main`
-(`deploy/autodeploy.sh`, run by `vibecraft-autodeploy.timer`). When it has
-moved, ginnu copies over whichever of the page, `server.js`, the relay
-service and the nginx snippet changed, restarts or reloads what needs it,
-and writes the deployed commit to
-https://ginnu.freemyip.com/vibecraft/version.txt. So pushing to `main` is
-deploying: commit the rebuilt `dist/vibecraft.html` along with the source.
-Safeguards: a page without its wasm is refused, `server.js` must pass
-`node --check`, an nginx config `nginx -t` rejects is put back, and the
-previous files are kept in `/opt/vibecraft/backup/`. See what happened
-with `ssh ginnu journalctl -u vibecraft-autodeploy -n 30`.
+**The page and the relay deploy themselves.** Every minute
+`vibecraft-autodeploy.timer` on ginnu checks GitHub's `main`. When it has
+moved, ginnu copies over the page and `server.js` if they changed and writes
+the deployed commit to https://ginnu.freemyip.com/vibecraft/version.txt.
+A changed `server.js` restarts the relay (`vibecraft-relay-restart.path`
+watches the file). So pushing to `main` is deploying: commit the rebuilt
+`dist/vibecraft.html` along with the source. Safeguards: a page without its
+wasm is refused, `server.js` must pass `node --check`, and the previous files
+are kept in `/opt/vibecraft/backup/`. See what happened with
+`ssh ginnu journalctl -u vibecraft-autodeploy -n 30`.
 
-Set it up once (or again, after changing the autodeploy files):
+**System config is not deployed from here.** The autodeploy runs as the
+unprivileged user `vibecraft`, which can write only `/opt/vibecraft` and
+`/var/www/vibecraft`; it never installs systemd units or nginx config, so a
+push to `main` can't gain root on ginnu. When you change
+`deploy/vibecraft-relay.service` or `deploy/nginx-vibecraft.conf`, apply it
+by hand (below) and copy it into the devops repo. The deploy log notes these
+files on every deploy as a reminder.
 
-    ssh -t ginnu 'curl -fsSL https://raw.githubusercontent.com/Ariakenom/vibecraft/main/deploy/install-autodeploy.sh | sudo sh'
+The autodeploy itself (script, units, setup) lives in the devops repo.
 
-To update by hand instead:
+To update by hand:
 
     ./build.sh && scp dist/vibecraft.html ginnu:/var/www/vibecraft/index.html
     # if server.js changed:
-    scp server.js ginnu:/tmp/ && ssh -t ginnu 'sudo mv /tmp/server.js /opt/vibecraft/ && sudo systemctl restart vibecraft-relay'
+    scp server.js ginnu:/tmp/ && ssh -t ginnu 'sudo install -o vibecraft -g vibecraft -m 644 /tmp/server.js /opt/vibecraft/server.js'   # the relay restarts itself
+    # if deploy/vibecraft-relay.service changed:
+    scp deploy/vibecraft-relay.service ginnu:/tmp/ && ssh -t ginnu 'sudo mv /tmp/vibecraft-relay.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart vibecraft-relay'
     # if deploy/nginx-vibecraft.conf changed:
     scp deploy/nginx-vibecraft.conf ginnu:/tmp/ && ssh -t ginnu 'sudo mv /tmp/nginx-vibecraft.conf /etc/nginx/snippets/vibecraft.conf && sudo nginx -t && sudo systemctl reload nginx'
 
