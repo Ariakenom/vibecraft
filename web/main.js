@@ -4,6 +4,7 @@ const WASM_B64 = "/*WASM_BASE64*/";
 // ===========================================================================
 // Constants shared with the Rust side
 const ENT_STRIDE = 18;
+const PROJ_STRIDE = 10; // x, y, px, py, loosed from x, y, shooter kind, at a building, target x, y
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
@@ -313,7 +314,7 @@ function readWorld() {
   resCount = W.res_count();
   resBuf = viewOf("res", W.res_ptr(), resCount * 5);
   projCount = W.proj_count();
-  projBuf = viewOf("proj", W.proj_ptr(), projCount * 4);
+  projBuf = viewOf("proj", W.proj_ptr(), projCount * PROJ_STRIDE);
   byId.reset();
   for (let i = 0; i < entCount; i++) byId.set(ents[i * ENT_STRIDE], i);
 }

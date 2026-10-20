@@ -244,6 +244,12 @@ pub struct Projectile {
     pub damage: f32,
     pub attacker: u32,
     pub alive: bool,
+    /// For drawing only: where it was loosed, by what kind, and whether it
+    /// flies at a building (the page arcs it from the bow to the target).
+    pub sx: f32,
+    pub sy: f32,
+    pub shooter: Kind,
+    pub at_building: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1720,8 +1726,9 @@ impl Game {
         let dmg = st.attack * damage_mult(a.kind, self.ents[target as usize].kind);
         let kind = a.kind as u32 as f32;
         if st.range > 1.5 {
-            let (x, y) = (a.x, a.y);
-            self.proj.push(Projectile { x, y, px: x, py: y, target, damage: dmg, attacker: a.id, alive: true });
+            let (x, y, shooter) = (a.x, a.y, a.kind);
+            let at_building = self.ents[target as usize].is_building();
+            self.proj.push(Projectile { x, y, px: x, py: y, target, damage: dmg, attacker: a.id, alive: true, sx: x, sy: y, shooter, at_building });
             self.push_event(Ev::Shoot, x, y, kind);
         } else {
             let t = &self.ents[target as usize];

@@ -25,7 +25,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 2: slots replace stockpiles (economy Phase 1).
 /// 3: people, houses, builders (economy Phase 2).
 /// 4: explored ground, eras, the AI's scout (economy Phase 3).
-const VERSION: u32 = 4;
+/// 5: arrows remember where they were loosed from.
+const VERSION: u32 = 5;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -275,6 +276,9 @@ impl Game {
             w.f32(p.damage);
             w.u32(p.attacker);
             w.bool(p.alive);
+            w.pt((p.sx, p.sy));
+            w.kind(p.shooter);
+            w.bool(p.at_building);
         }
 
         w.len(self.ais.len());
@@ -412,7 +416,11 @@ impl Game {
         let nproj = r.len(29)?;
         let mut proj = Vec::with_capacity(nproj);
         for _ in 0..nproj {
-            proj.push(Projectile { x: r.f32()?, y: r.f32()?, px: r.f32()?, py: r.f32()?, target: r.u32()?, damage: r.f32()?, attacker: r.u32()?, alive: r.bool()? });
+            let mut p = Projectile { x: r.f32()?, y: r.f32()?, px: r.f32()?, py: r.f32()?, target: r.u32()?, damage: r.f32()?, attacker: r.u32()?, alive: r.bool()?, sx: 0.0, sy: 0.0, shooter: Kind::Archer, at_building: false };
+            (p.sx, p.sy) = r.pt()?;
+            p.shooter = r.kind()?;
+            p.at_building = r.bool()?;
+            proj.push(p);
         }
 
         let nais = r.len(1)?;

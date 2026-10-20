@@ -19,6 +19,10 @@ use std::cell::RefCell;
 
 /// Floats per entity in the render buffer. Keep in sync with `ENT_STRIDE` in the JS.
 const ENT_STRIDE: usize = 18;
+/// Floats per projectile: x, y, previous x, y, where it was loosed (x, y),
+/// the shooter's kind, 1 if it flies at a building, where the target is now
+/// (x, y). `PROJ_STRIDE` in the JS.
+const PROJ_STRIDE: usize = 10;
 
 struct World {
     game: Game,
@@ -144,7 +148,8 @@ pub extern "C" fn render() -> u32 {
         w.proj.clear();
         for p in g.proj.iter() {
             if g.visible_to_player(p.x, p.y) {
-                w.proj.extend_from_slice(&[p.x, p.y, p.px, p.py]);
+                let (tx, ty) = g.ents.get(p.target as usize).map_or((p.x, p.y), |t| (t.x, t.y));
+                w.proj.extend_from_slice(&[p.x, p.y, p.px, p.py, p.sx, p.sy, p.shooter as u32 as f32, p.at_building as u32 as f32, tx, ty]);
             }
         }
         (w.ents.len() / ENT_STRIDE) as u32
@@ -169,7 +174,7 @@ pub extern "C" fn proj_ptr() -> *const f32 {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn proj_count() -> u32 {
-    with(|w| w.proj.len() / 4) as u32
+    with(|w| w.proj.len() / PROJ_STRIDE) as u32
 }
 
 #[unsafe(no_mangle)]

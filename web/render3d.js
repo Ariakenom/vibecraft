@@ -542,18 +542,35 @@ function resourceModels() {
   const bush = new Model();
   bush.add(ball(0.26, 0), "#3e6a2f", 0, 0.2, 0).add(ball(0.2, 0), "#46783a", 0.15, 0.17, 0.1);
   for (let i = 0; i < 9; i++) { const a = i * 2.4; bush.add(ball(0.04, 0), "#c9353f", Math.cos(a) * 0.2, 0.18 + (i % 3) * 0.08, Math.sin(a) * 0.2); }
-  // Grazing animals for horse and game deposits: a body, a neck and head,
-  // four legs. Two or three to a tile, standing at different angles.
-  const beast = (col, mane, scale, antlers) => {
-    const b = new Model();
-    for (const [dx, a] of [[0, 0], [0.3, 2.1], [-0.25, 4.0]]) {
-      const c = Math.cos(a), sn = Math.sin(a), at = (x, z) => [dx + x * c - z * sn, dx * 0.4 + x * sn + z * c];
-      const k = scale * (dx ? 0.85 : 1);
-      let [x, z] = at(0, 0); b.add(box(0.36 * k, 0.19 * k, 0.17 * k).rotateY(-a), col, x, 0.31 * k, z);
-      [x, z] = at(0.2 * k, 0); b.add(box(0.1 * k, 0.18 * k, 0.08 * k).rotateY(-a), mane, x, 0.42 * k, z);
-      [x, z] = at(0.27 * k, 0); b.add(box(0.14 * k, 0.07 * k, 0.07 * k).rotateY(-a), col, x, 0.5 * k, z);
-      if (antlers) { [x, z] = at(0.24 * k, 0); b.add(box(0.02, 0.14 * k, 0.12 * k).rotateY(-a), "#d9c9a8", x, 0.6 * k, z); }
-      for (const [lx, lz] of [[0.13, 0.06], [0.13, -0.06], [-0.13, 0.06], [-0.13, -0.06]]) { [x, z] = at(lx * k, lz * k); b.add(box(0.05 * k, 0.24 * k, 0.05 * k), mane, x, 0.12 * k, z); }
+  // Grazing animals for horse and game deposits. The horse is the
+  // horseman's horse from assets/models.py (`horseman()`), shape for shape
+  // and in its colours, without saddle or rider, scaled like every unit by
+  // UNIT_SCALE: horses look the same wherever they are. Deer are the same
+  // animal, smaller and lighter, with antlers. `herd` places them on a tile:
+  // [x, z, turn] each.
+  const animal = (col, dark, hair, size, antlers, herd) => {
+    const b = new Model(), k = size * UNIT_SCALE;
+    const sph = (r, sx, sy, sz, rz = 0) => new THREE.SphereGeometry(r, 10, 6).scale(sx, sy, sz).rotateZ(rz);
+    // A capsule hanging down from its top: a leg.
+    const limb = (r, len) => { const g = new THREE.CapsuleGeometry(r, len, 3, 6); g.translate(0, -len / 2, 0); return g; };
+    for (const [hx, hz, a] of herd) {
+      const put = (geo, color, x, y, z) => {
+        geo.scale(k, k, k).rotateY(-a);
+        const c = Math.cos(a), sn = Math.sin(a);
+        b.add(geo, color, hx + (x * c - z * sn) * k, y * k, hz + (x * sn + z * c) * k);
+      };
+      put(sph(0.17, 1.7, 0.9, 0.85), col, 0, 0.44, 0);                       // barrel
+      for (const [x, z] of [[0.17, -0.07], [0.17, 0.07], [-0.17, -0.07], [-0.17, 0.07]]) {
+        put(limb(0.045, 0.27), col, x, 0.36, z);                              // leg
+        put(new THREE.CylinderGeometry(0.05, 0.055, 0.05, 8), hair, x, 0.045, z); // hoof
+      }
+      const neck = limb(0.075, 0.2); neck.rotateZ(Math.PI - 0.6); put(neck, col, 0.22, 0.5, 0);
+      put(sph(0.085, 1.5, 0.85, 0.85, -0.35), col, 0.42, 0.75, 0);            // head
+      put(sph(0.05, 1.1, 0.9, 1.3), dark, 0.53, 0.71, 0);                     // muzzle
+      for (const z of [-0.04, 0.04]) put(new THREE.ConeGeometry(0.02, 0.08, 5), col, 0.36, 0.86, z); // ears
+      if (antlers) for (const z of [-0.05, 0.05]) { const an = new THREE.CylinderGeometry(0.008, 0.014, 0.2, 4); an.rotateX(z * 6); put(an, "#d9c9a8", 0.37, 0.95, z); }
+      else { const mane = box(0.3, 0.06, 0.035); mane.rotateZ(-0.95); put(mane, hair, 0.3, 0.7, 0); }
+      const tail = new THREE.CylinderGeometry(0.04, 0.015, antlers ? 0.1 : 0.26, 6); tail.rotateZ(0.5); put(tail, hair, -0.33, 0.4, 0);
     }
     return b.build();
   };
@@ -563,7 +580,8 @@ function resourceModels() {
     if (gold) for (const [x, y, z] of [[0.1, 0.35, 0.2], [-0.15, 0.2, 0.2], [0.25, 0.25, -0.05], [-0.05, 0.4, -0.15]]) r.add(ball(0.05, 0), "#f4d462", x, y, z);
     return r.build();
   };
-  return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: beast("#7b4b2a", "#3b2618", 1.1, false), deer: beast("#a0784c", "#6e5034", 0.85, true) };
+  return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
+    deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]) };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -1601,8 +1619,8 @@ function updateResources() {
     let mesh, scale;
     if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
-    else if (kind === 3) { mesh = "horse"; scale = 0.9 + 0.2 * h2; }
-    else if (kind === 4) { mesh = "deer"; scale = 0.9 + 0.2 * h2; }
+    else if (kind === 3) { mesh = "horse"; scale = 1; } // the size of a horseman's horse
+    else if (kind === 4) { mesh = "deer"; scale = 1; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;
@@ -1625,14 +1643,38 @@ function updateResources() {
   }
 }
 
+// Arrows leave from the bow (a little ahead of an archer, at hand height;
+// from the top of a tower) and arc down to the target's chest. The
+// simulation moves them in a straight line on the ground; height and tilt
+// are worked out here from how far along the way they are.
+const _e = new THREE.Euler();
 function updateArrows(alpha) {
-  const a = R3.arrows;
+  const a = R3.arrows, S = PROJ_STRIDE;
   a.count = Math.min(projCount, 256);
   for (let i = 0; i < a.count; i++) {
-    const px = projBuf[i * 4 + 2], py = projBuf[i * 4 + 3], x = projBuf[i * 4], y = projBuf[i * 4 + 1];
+    const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
+    const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
+    const tx = projBuf[b + 8], ty = projBuf[b + 9];
     const ix = px + (x - px) * alpha, iy = py + (y - py) * alpha;
-    _p.set(ix, groundAt(ix, iy) + 0.55, iy);
-    _q.setFromAxisAngle(_up, -Math.atan2(y - py, x - px));
+    // Which way it flies: towards the target.
+    let dx = tx - ix, dy = ty - iy, d = Math.hypot(dx, dy);
+    if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
+    dx /= d; dy /= d;
+    // The bow: ahead of the shooter, at the height it holds it.
+    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : 0.62;
+    const ahead = isBld(shooter) ? 0 : 0.3;
+    const ox = sx + dx * ahead, oy = sy + dy * ahead;
+    const toH = atBuilding ? 0.9 : 0.55;
+    // How far along: distance flown over that plus the distance still to go.
+    const flown = Math.hypot(ix - ox, iy - oy);
+    const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
+    const t = Math.min(1, flown / total);
+    const arc = Math.min(1.2, total * 0.12);
+    const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
+    _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
+    // Pointing along its path: up as it leaves, down as it lands.
+    const pitch = Math.atan2((h1 - h0) / total + arc * 4 * (1 - 2 * t) / total, 1);
+    _q.setFromEuler(_e.set(0, -Math.atan2(dy, dx), pitch, "YZX"));
     _s.setScalar(1);
     _m4.compose(_p, _q, _s);
     a.setMatrixAt(i, _m4);
