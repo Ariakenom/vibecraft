@@ -73,6 +73,14 @@ the other way, like the ids in a command, go through `scratch_ptr()`.
 computer (only the host sends this), 8 surrender. In single player, `issue()` applies it
 at once. In multiplayer it's applied at once too, and sent to the host.
 
+**Starting up** shows a loading screen (`#boot` in `index.html`) from the
+first paint: the page then loads the wasm, sets up three.js and the models,
+builds the title map and compiles the shaders, pausing a frame between
+steps so the progress bar moves (`Boot` in `main.js`). Its clouds, banner
+and shimmer move only while the page waits on the network; once the page
+is busy they hold still, because on a machine without a fast graphics
+card, animating meanwhile made the first frame several times slower.
+
 **Drawing** (`render3d.js`) reads the render buffers each frame and
 interpolates every unit between its previous and current tick position
 (`px/py` to `x/y`), so motion is smooth at any frame rate. The models come
@@ -376,7 +384,7 @@ config:
 | `/etc/systemd/system/vibecraft-relay.service`    | `deploy/vibecraft-relay.service` (Node 12 from apt, port 8787) |
 | `/etc/nginx/snippets/vibecraft.conf`             | `deploy/nginx-vibecraft.conf`, included from the HTTPS server block in `/etc/nginx/conf.d/chatapp.conf` |
 
-nginx serves the page at `/vibecraft/` and proxies the WebSocket at
+nginx serves the page at `/vibecraft/` (gzipped: 2 MB becomes about 0.5 MB; `Cache-Control: no-cache`, so browsers reuse their copy after a quick check) and proxies the WebSocket at
 `/vibecraft/relay` to the relay on 127.0.0.1:8787 (the firewall keeps 8787
 closed). Only the freemyip name has a certificate; the Tailscale name
 redirects to HTTPS and fails the certificate check.

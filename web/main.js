@@ -1912,21 +1912,59 @@ window.addEventListener("hashchange", () => {
 $("techClose").onclick = () => { $("techScreen").hidden = true; };
 
 // ---- start ----
+// The loading screen (#boot, in index.html) is up from the first paint.
+// Starting is a few heavy steps; between them the page pauses for a frame,
+// so the screen can show how far along we are.
+const Boot = {
+  step(text, part) { $("bootStep").textContent = text; $("bootFill").style.transform = `scaleX(${part})`; },
+  // Let the browser paint. (Animation frames stop in a background tab, so
+  // don't wait for one forever.)
+  breathe() {
+    return new Promise(done => {
+      let went = false;
+      const go = () => { if (!went) { went = true; setTimeout(done, 0); } };
+      requestAnimationFrame(go); setTimeout(go, 120);
+    });
+  },
+  fail(text) { this.step(text, 1); $("bootStep").style.color = "var(--bad)"; $("bootTip").textContent = ""; },
+  // Fade out once the title scene has really been drawn.
+  done() {
+    this.step("Ready", 1);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      $("boot").classList.add("gone");
+      setTimeout(() => $("boot").remove(), 700);
+    }));
+  },
+};
 (async () => {
   if (!window.THREE) {
-    document.body.insertAdjacentHTML("beforeend", '<div class="overlay"><div class="card"><h1>Can\'t load 3D</h1><p class="note">The 3D library (three.js) didn\'t load. It comes from cdn.jsdelivr.net, so check your internet connection and reload.</p></div></div>');
+    Boot.fail("The 3D library (three.js) didn't load. It comes from cdn.jsdelivr.net: check your internet connection and reload.");
     return;
   }
+  $("boot").classList.add("busy"); // see #boot.busy in index.html
+  Boot.step("Waking the engine…", 0.12);
+  await Boot.breathe();
   await loadWasm();
   initWatchUi();
   initChatUi();
+  Boot.step("Carving the models…", 0.3);
+  await Boot.breathe();
   initRenderer();
   resizeView();
+  Boot.step("Shaping the land…", 0.55);
+  await Boot.breathe();
   // A live map behind the title screen.
   newGame();
   running = false; titleSpin = true;
   renderLobby();
+  Boot.step("Lighting the scene…", 0.8);
+  await Boot.breathe();
+  // Compile the shaders before the first frame, in the background where the
+  // browser can (otherwise the first frame does it, and the page freezes).
+  readWorld();
+  try { await Promise.race([R3.renderer.compileAsync(R3.scene, R3.camera), new Promise(r => setTimeout(r, 4000))]); } catch { /* the first frame will */ }
   requestAnimationFrame(loop);
+  Boot.done();
   setInterval(() => { renderNetStatus(); lobbyTick(); }, 1000);
   // On claude.ai the page talks to other viewers through claude.ai. Elsewhere
   // it goes through a relay server: served from a web server, assume the relay

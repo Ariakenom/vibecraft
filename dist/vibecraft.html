@@ -3,7 +3,11 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus+SC&family=Alegreya+Sans:wght@400;500;700&display=swap">
+<!-- Fonts load without holding up the first paint: until they arrive, text
+     shows in the fallback fonts instead of not at all. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus+SC&family=Alegreya+Sans:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="preload" as="script" href="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js">
 <style>
 /* Layout: a game screen — resource bar on top, map in the middle, carved HUD at the bottom. Single dark look by design. */
 :root {
@@ -264,9 +268,92 @@ body.observing #hint { display: none; }
 .chat-log { max-height: 120px; overflow: auto; border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; display: grid; gap: 2px; align-content: start; }
 #lobbyChatInput { flex: 1; min-width: 0; }
 
+/* ---- loading screen: shown from the very first paint until the title scene
+   has been drawn. Every animation is transform or opacity, which the browser
+   runs on its own even while the page is busy building the world. ---- */
+#boot { position: fixed; inset: 0; z-index: 100; overflow: hidden; background: linear-gradient(#0d0b09 0%, #1a1410 45%, #3a2717 72%, #15120d 100%); display: grid; place-items: center; transition: opacity .6s ease; }
+#boot.gone { opacity: 0; pointer-events: none; }
+#boot .glow { position: absolute; left: 50%; top: 66%; width: 140vmax; height: 70vmax; transform: translate(-50%, -50%); background: radial-gradient(ellipse at center, #c99a4555 0%, #c99a451c 30%, transparent 60%); }
+#boot .sun { position: absolute; left: 50%; top: 64%; width: min(26vmin, 220px); aspect-ratio: 1; margin-left: calc(min(26vmin, 220px) / -2); border-radius: 50%; background: radial-gradient(circle at 50% 45%, #ffe2a8 0%, #f2b45c 45%, #c97a35 100%); box-shadow: 0 0 60px 20px #e9a34f44; animation: bootSun 2.4s cubic-bezier(.2,.7,.3,1) both; }
+#boot svg.land { position: absolute; left: 0; bottom: 0; width: 100%; height: 44%; }
+#boot .clouds { position: absolute; left: 0; top: 0; width: 200%; height: auto; aspect-ratio: 20 / 3; opacity: .26; animation: bootDrift 90s linear infinite; will-change: transform; }
+/* The landscape (1200 x 400) covers the bottom 44%, anchored bottom centre,
+   so one of its units is --k on screen. The town and its banner are separate
+   small elements placed with the same scale: animating inside the big
+   drawing would repaint all of it every frame. */
+#boot { --k: max(calc(100vw / 1200), calc(44vh / 400)); }
+#boot svg.town { position: absolute; left: calc(50% - 70 * var(--k)); bottom: calc(190 * var(--k)); width: calc(190 * var(--k)); height: calc(140 * var(--k)); }
+#boot .banner { position: absolute; left: calc(50% + 2 * var(--k)); bottom: calc(300 * var(--k)); width: calc(26 * var(--k)); height: calc(13 * var(--k)); background: #c99a45; clip-path: polygon(0 0, 100% 46%, 0 100%); transform-origin: 0 50%; animation: bootFlag 1.1s ease-in-out infinite alternate; will-change: transform; }
+#boot .panel { position: relative; display: grid; gap: 14px; justify-items: center; text-align: center; padding: 0 20px; margin-top: -18vh; width: min(460px, 100%); }
+#boot h1 { margin: 0; font: 400 clamp(44px, 9vw, 76px)/1 var(--display); letter-spacing: .08em; color: var(--bronze); text-shadow: 0 2px 0 #000, 0 0 30px #c99a4533; animation: bootIn 1s ease both; }
+#boot .sub { margin: 0; color: var(--muted); font-size: 16px; animation: bootIn 1s .15s ease both; }
+#boot .bar { position: relative; width: 100%; height: 6px; border-radius: 3px; background: #0008; border: 1px solid #4d3f2a; overflow: hidden; animation: bootIn 1s .3s ease both; }
+#boot .fill { position: absolute; inset: 0; transform-origin: 0 50%; transform: scaleX(.04); background: linear-gradient(90deg, #8a6528, #c99a45 70%, #f2d27f); transition: transform .25s ease-out; }
+#boot .shine { position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, #fff6 50%, transparent); animation: bootShine 1.4s ease-in-out infinite; will-change: transform; }
+#boot .step { margin: 0; min-height: 1.4em; color: var(--ink); font-size: 15px; letter-spacing: .02em; }
+#boot .tip { margin: 6px 0 0; color: var(--muted); font-size: 14px; max-width: 42ch; min-height: 2.8em; transition: opacity .4s; }
+#boot .tip b { color: var(--bronze); font-weight: 500; }
+/* While the page works (building the world, drawing the first frame), the
+   moving parts hold still: without a fast graphics card, animating meanwhile
+   made the first frame several times slower. They move while we wait on
+   the network, which is the slow part on a real connection. */
+#boot.busy .clouds, #boot.busy .banner, #boot.busy .shine { animation-play-state: paused; }
+#boot.busy .shine { opacity: 0; }
+@keyframes bootSun { from { transform: translateY(40%) scale(.92); } to { transform: translateY(-12%) scale(1); } }
+@keyframes bootDrift { to { transform: translateX(-50%); } }
+@keyframes bootFlag { from { transform: skewY(-6deg) scaleX(.94); } to { transform: skewY(5deg) scaleX(1); } }
+@keyframes bootShine { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+@keyframes bootIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { #boot *, #boot { animation: none !important; transition: none !important; } }
+
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 </style>
 
+<div id="boot" role="status" aria-live="polite">
+  <div class="glow"></div>
+  <div class="sun"></div>
+  <svg class="clouds" viewBox="0 0 2000 300" aria-hidden="true">
+    <defs><g id="cloud"><ellipse cx="0" cy="10" rx="120" ry="16"/><circle cx="-50" cy="0" r="24"/><circle cx="-10" cy="-10" r="32"/><circle cx="34" cy="-2" r="26"/><circle cx="70" cy="6" r="16"/></g></defs>
+    <!-- The pattern repeats after 1000 units, so sliding by half the width loops seamlessly. -->
+    <g fill="#e9c58f">
+      <use href="#cloud" x="170" y="90"/><use href="#cloud" x="640" y="40" transform="scale(.7)" transform-origin="640 40"/><use href="#cloud" x="860" y="120" transform="scale(.85)" transform-origin="860 120"/>
+      <use href="#cloud" x="1170" y="90"/><use href="#cloud" x="1640" y="40" transform="scale(.7)" transform-origin="1640 40"/><use href="#cloud" x="1860" y="120" transform="scale(.85)" transform-origin="1860 120"/>
+    </g>
+  </svg>
+  <svg class="land" viewBox="0 0 1200 400" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <path d="M0 230 C140 180 260 210 380 185 S620 150 760 190 S1020 160 1200 200 V400 H0Z" fill="#2b2117"/>
+    <path d="M0 270 C180 230 300 262 470 240 S760 220 900 252 S1080 236 1200 246 V400 H0Z" fill="#1f1810"/>
+    <g fill="#16110b"><path d="M90 262 l14 -40 l14 40z"/><path d="M110 266 l11 -30 l11 30z"/><path d="M1010 250 l15 -44 l15 44z"/><path d="M1036 254 l11 -32 l11 32z"/><path d="M300 258 l12 -34 l12 34z"/></g>
+    <path d="M0 320 C220 290 420 318 640 300 S980 296 1200 310 V400 H0Z" fill="#15120d"/>
+  </svg>
+  <!-- a far town on the ridge: the Capitol with its banner -->
+  <svg class="town" viewBox="530 70 190 140" aria-hidden="true">
+    <g fill="#241b12" transform="translate(560 120)">
+      <rect x="0" y="40" width="80" height="44"/><rect x="18" y="16" width="44" height="30"/><path d="M14 18 L40 -6 L66 18Z"/>
+      <rect x="-26" y="56" width="22" height="28"/><path d="M-30 58 L-15 44 L0 58Z"/><rect x="84" y="52" width="26" height="32"/><path d="M80 54 L97 40 L114 54Z"/>
+      <rect x="39" y="-34" width="3" height="30"/>
+    </g>
+  </svg>
+  <div class="banner"></div>
+  <div class="panel">
+    <h1>VibeCraft</h1>
+    <p class="sub">Grow a town. Raise an army. Outlast your rivals.</p>
+    <div class="bar"><div class="fill" id="bootFill"></div><div class="shine"></div></div>
+    <p class="step" id="bootStep">Loading…</p>
+    <p class="tip" id="bootTip"></p>
+  </div>
+</div>
+<script>
+// A tip to read while waiting (runs at once: it's tiny and comes before the big scripts).
+(function () {
+  var tips = ["<b>Spears</b> beat horsemen, <b>horsemen</b> beat archers, <b>archers</b> beat spears.",
+    "Every unit eats food. Keep plenty of citizens on <b>berries</b> and <b>farms</b>.",
+    "Press <b>.</b> to find an idle citizen.", "Finish a <b>Wonder</b> to win without conquering anyone.",
+    "Your <b>Capitol</b> and towers shoot back.", "Press <b>K</b> to see the tech tree.",
+    "Send a friend the <b>watch link</b> from the menu, and they can spectate.", "Press <b>Enter</b> in an online game to chat."];
+  document.getElementById("bootTip").innerHTML = tips[Math.floor(Math.random() * tips.length)];
+})();
+</script>
 <div id="app">
   <header id="top">
     <div class="brand">VibeCraft</div>
@@ -6188,21 +6275,59 @@ window.addEventListener("hashchange", () => {
 $("techClose").onclick = () => { $("techScreen").hidden = true; };
 
 // ---- start ----
+// The loading screen (#boot, in index.html) is up from the first paint.
+// Starting is a few heavy steps; between them the page pauses for a frame,
+// so the screen can show how far along we are.
+const Boot = {
+  step(text, part) { $("bootStep").textContent = text; $("bootFill").style.transform = `scaleX(${part})`; },
+  // Let the browser paint. (Animation frames stop in a background tab, so
+  // don't wait for one forever.)
+  breathe() {
+    return new Promise(done => {
+      let went = false;
+      const go = () => { if (!went) { went = true; setTimeout(done, 0); } };
+      requestAnimationFrame(go); setTimeout(go, 120);
+    });
+  },
+  fail(text) { this.step(text, 1); $("bootStep").style.color = "var(--bad)"; $("bootTip").textContent = ""; },
+  // Fade out once the title scene has really been drawn.
+  done() {
+    this.step("Ready", 1);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      $("boot").classList.add("gone");
+      setTimeout(() => $("boot").remove(), 700);
+    }));
+  },
+};
 (async () => {
   if (!window.THREE) {
-    document.body.insertAdjacentHTML("beforeend", '<div class="overlay"><div class="card"><h1>Can\'t load 3D</h1><p class="note">The 3D library (three.js) didn\'t load. It comes from cdn.jsdelivr.net, so check your internet connection and reload.</p></div></div>');
+    Boot.fail("The 3D library (three.js) didn't load. It comes from cdn.jsdelivr.net: check your internet connection and reload.");
     return;
   }
+  $("boot").classList.add("busy"); // see #boot.busy in index.html
+  Boot.step("Waking the engine…", 0.12);
+  await Boot.breathe();
   await loadWasm();
   initWatchUi();
   initChatUi();
+  Boot.step("Carving the models…", 0.3);
+  await Boot.breathe();
   initRenderer();
   resizeView();
+  Boot.step("Shaping the land…", 0.55);
+  await Boot.breathe();
   // A live map behind the title screen.
   newGame();
   running = false; titleSpin = true;
   renderLobby();
+  Boot.step("Lighting the scene…", 0.8);
+  await Boot.breathe();
+  // Compile the shaders before the first frame, in the background where the
+  // browser can (otherwise the first frame does it, and the page freezes).
+  readWorld();
+  try { await Promise.race([R3.renderer.compileAsync(R3.scene, R3.camera), new Promise(r => setTimeout(r, 4000))]); } catch { /* the first frame will */ }
   requestAnimationFrame(loop);
+  Boot.done();
   setInterval(() => { renderNetStatus(); lobbyTick(); }, 1000);
   // On claude.ai the page talks to other viewers through claude.ai. Elsewhere
   // it goes through a relay server: served from a web server, assume the relay
