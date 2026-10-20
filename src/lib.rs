@@ -618,6 +618,32 @@ pub extern "C" fn count(kind: u32) -> u32 {
 pub extern "C" fn count_built(kind: u32) -> u32 {
     game(|g| g.ents.iter().filter(|e| e.alive && e.owner == g.local && e.kind as u32 == kind && e.built >= 1.0).count() as u32)
 }
+/// The kinds, for building the tech tree from: `kind_count` of them,
+/// `kind_at(n)` is the n-th (newcomers left out: nobody makes them).
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_count() -> u32 {
+    Kind::ALL.iter().filter(|&&k| k != Kind::Arrival).count() as u32
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_at(n: u32) -> i32 {
+    Kind::ALL.iter().filter(|&&k| k != Kind::Arrival).nth(n as usize).map_or(-1, |&k| k as i32)
+}
+/// The era a kind belongs to (0 Ancient … 5 Atomic).
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_era(kind: u32) -> u32 {
+    Kind::from_u32(kind).map_or(0, |k| k.era() as u32)
+}
+/// The era player `p` has reached (0 Ancient … 5 Atomic).
+#[unsafe(no_mangle)]
+pub extern "C" fn player_era(p: u32) -> u32 {
+    game(|g| g.players.get(p as usize).map_or(0, |pl| pl.era as u32))
+}
+/// The era the local player has reached.
+#[unsafe(no_mangle)]
+pub extern "C" fn era() -> u32 {
+    player_era(game(|g| g.local as u32))
+}
+
 /// The n-th building `kind` requires, or -1 when there are no more.
 #[unsafe(no_mangle)]
 pub extern "C" fn requires(kind: u32, n: u32) -> i32 {

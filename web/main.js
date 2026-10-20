@@ -34,14 +34,11 @@ const DESC = {
   [K.Pasture]: "Breeds horses from the wild herd next to it.",
   [K.Wonder]: "Finish it and you win. A huge job: put many citizens on it, and defend it.",
 };
-// The tech tree, grouped into eras. Your era is the latest one you've built
-// something from. (Requirements themselves live in Rust: Kind::requires.)
-const ERAS = [
-  { name: "Village", kinds: [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.Barracks] },
-  { name: "Town", kinds: [K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Range] },
-  { name: "City", kinds: [K.Stable, K.Tower] },
-  { name: "Empire", kinds: [K.Wonder] },
-];
+// The six eras, and the house each brings. Which kinds and resources
+// belong to which era comes from Rust (kind_era, res_era); so do the
+// requirements (Kind::requires) and the era a player has reached.
+const ERA_NAMES = ["Ancient", "Medieval", "Gunpowder", "Industrial", "Modern", "Atomic"];
+const HOUSE_NAMES = ["Hut", "Cottage", "Townhouse", "Tenement", "Apartment", "Tower block"];
 // Resources, in the order of `enum Res` in defs.rs.
 const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", "wool", "iron", "brick", "bread", "clothes", "beer", "nitrate",
   "gunpowder", "furniture", "books", "circus shows", "coal", "steel", "explosives", "canned food", "heating", "newspapers", "electricity", "oil",
@@ -431,10 +428,12 @@ const PEOPLE_TIP = -2; // resTipFor value: the people chip's tooltip
 // Buildings the player has already been told they can build.
 let knownUnlocked = new Set();
 
-function eraIndex() {
-  let e = 0;
-  ERAS.forEach((era, i) => { if (era.kinds.some(k => W.has_built(k))) e = i; });
-  return e;
+function eraIndex() { return W.era(); }
+// Every kind but newcomers, in Rust's order (units first, then buildings).
+let ALL_KINDS = null;
+function allKinds() {
+  if (!ALL_KINDS) { ALL_KINDS = []; for (let n = 0; n < W.kind_count(); n++) ALL_KINDS.push(W.kind_at(n)); }
+  return ALL_KINDS;
 }
 
 function renderTopBar() {
@@ -455,7 +454,7 @@ function renderTopBar() {
   const hungry = W.unsupplied(), home = W.people(0), beds = W.people(1), units = W.people(2), idle = home - W.people(3);
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
   topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${home + units}<small>/ ${beds}</small><small>· ${idle} free</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
-  topBar.era.textContent = `${ERAS[eraIndex()].name} era`;
+  topBar.era.textContent = `${ERA_NAMES[eraIndex()]} era`;
   const ew = W.enemy_wonder();
   topBar.wonder.hidden = ew < 0;
   if (ew >= 0) topBar.wonder.textContent = `Rival Wonder ${Math.floor(ew * 100)}%`;
@@ -524,31 +523,54 @@ function toggleTech() {
 function renderTech() {
   const body = $("techBody");
   body.replaceChildren();
-  ERAS.forEach((era, i) => {
-    const col = document.createElement("div"); col.className = "era-col" + (i <= eraIndex() ? " reached" : "");
-    col.innerHTML = `<h3>${["I", "II", "III", "IV", "V"][i]} · ${era.name}</h3>`;
-    for (const k of era.kinds) {
-      const card = document.createElement("div");
-      const built = W.has_built(k), open = W.unlocked(k);
-      card.className = "tcard " + (built ? "built" : open ? "open" : "locked");
-      card.append(iconEl(k, ME, 40));
-      const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
-      const info = document.createElement("div");
-      info.innerHTML = `<b>${NAMES[k]}</b><span>${DESC[k] || ""}</span>` +
-        (needs.length ? `<span class="needs">Needs ${needs.map(q => `<i class="${W.has_built(q) ? "ok" : ""}">${NAMES[q]}</i>`).join(" + ")}</span>` : "") +
-        `<span class="state">${built ? "Built" : open ? "Ready to build" : "Locked"}</span>`;
-      card.append(info);
-      col.append(card);
-    }
+  const reached = eraIndex();
+  ERA_NAMES.forEach((name, era) => {
+    const col = document.createElement("div"); col.className = "era-col" + (era <= reached ? " reached" : "") + (era === 0 ? " wide" : "");
+    // The house of this era, and the goods that come with it.
+    const goods = []; for (let r = 0; r < W.n_res(); r++) if (W.res_era(r) === era && W.is_house_good(r)) goods.push(r);
+    const max = W.house_max_goods(era);
+    col.innerHTML = `<h3>${["I", "II", "III", "IV", "V", "VI"][era]} · ${name}</h3>` +
+      `<div class="era-house"><b>${HOUSE_NAMES[era]}</b><span>up to ${max} goods, ${max * 2} people</span><span class="cost inline">${goods.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span></div>`;
+    // Buildings first, then units, each in Rust's order.
+    const kinds = allKinds().filter(k => W.kind_era(k) === era && k !== K.Capitol);
+    kinds.sort((a, b) => isBld(b) - isBld(a));
+    const list = document.createElement("div"); list.className = "era-list";
+    for (const k of kinds) list.append(techCard(k));
+    if (!kinds.length) { const p = document.createElement("p"); p.className = "note"; p.textContent = "Still to come."; list.append(p); }
+    col.append(list);
     body.append(col);
   });
 }
+// One unit or building in the tech tree: what it costs, makes and needs.
+function techCard(k) {
+  const card = document.createElement("div");
+  const bld = isBld(k);
+  // A unit is open when something that trains it is built.
+  const trainers = Object.keys(TRAINS).map(Number).filter(b => TRAINS[b].includes(k));
+  const built = bld ? W.has_built(k) : false, open = bld ? W.unlocked(k) : trainers.some(b => W.has_built(b));
+  card.className = "tcard " + (built ? "built" : open ? "open" : "locked");
+  card.append(iconEl(k, ME, 40));
+  const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
+  if (!bld) needs.push(...trainers);
+  const cost = slotsOf(k), makes = slotsOf(k, 1), dep = W.kind_deposit(k);
+  const info = document.createElement("div");
+  info.innerHTML = `<b>${NAMES[k]}</b>` +
+    `<span class="cost inline">${cost.length ? slotsHtml(cost, false) : '<span class="free">free</span>'}${bld ? "" : `<span title="a person">${PERSON_ICON}1</span>`}</span>` +
+    (makes.length ? `<span>Makes <span class="cost inline">${slotsHtml(makes, false)}</span>${stat(k, 7) ? ` · ${stat(k, 7)} worker${stat(k, 7) === 1 ? "" : "s"}` : ""}</span>` : "") +
+    (dep >= 0 ? `<span>Next to ${DEP_NAMES[dep]}</span>` : "") +
+    (needs.length ? `<span class="needs">Needs ${needs.map(q => `<i class="${W.has_built(q) ? "ok" : ""}">${NAMES[q]}</i>`).join(" + ")}</span>` : "") +
+    `<span class="state">${bld ? (built ? "Built" : open ? "Ready to build" : "Locked") : (open ? "Can train" : "Locked")}</span>`;
+  info.title = DESC[k] || "";
+  card.append(info);
+  return card;
+}
+const PERSON_ICON = '<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>';
 
 function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 7; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 50}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${ERAS.flatMap(e => e.kinds).map(k => W.has_built(k)).join("")}|${freeSig}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 50}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");

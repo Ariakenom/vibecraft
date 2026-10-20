@@ -213,6 +213,30 @@ food producers, and losing soldiers visibly slows the economy.
 
 **Goal:** the new Ancient game is complete and replaces the old one on `main`.
 
+**Status: done and merged to `main`** (October 2026). What came out of it:
+- **AI fog:** an *explored* bit set per player (`Game::explored`, one bit
+  per player per tile, saved), updated with the fog. The AI only builds on
+  explored ground and uses deposits it has seen; its first soldier scouts a
+  round of the map. It still sees enemy units, as before.
+- **Crews: house goods first.** Producers of house goods get their workers
+  before the rest. In id order alone, a big build (a Wonder taking food)
+  set off a spiral: people left, the newest producers (food built for
+  growth) lost their crews, so fewer beds, so more people left, down to
+  zero. Now losing people idles lumber camps first.
+- **Loads only count.** `Game::recount` works out supply, use, beds and so
+  on after a load without settling houses or dealing damage; the next tick
+  does that, exactly as in the saved game. (Before, save → load → save
+  could change houses' goods.)
+- The AI keeps two residents free, trains builders from the last one only
+  when a foundation waits with none, alternates growing beds with its build
+  plan, releases (demolishes) producers whose output nobody uses when
+  everyone is at work, and caps attack waves at what its people can field.
+- **Wonder cost:** 8 wood, 10 stone, 2 each of grain, meat, fruit and
+  horses. Fish was dropped: not every map has water near a base.
+- Tests: `normal_ais_play_a_game_to_the_end` (three seeds, an hour at
+  most; they finish in 25–55 minutes), and `watch_the_ai` to watch one.
+- Save `VERSION` 4, `NET.PROTOCOL` 10.
+
 `src/ai.rs` (largely a rewrite)
 - An economy loop: keep a Builder or two in stock; keep beds ahead of
   people; for the scarcest house good, build its producer; keep workers

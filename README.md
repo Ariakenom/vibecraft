@@ -124,23 +124,37 @@ loaded games misbehave.
 
 ## Common changes
 
-**Tune a unit or building.** Stats, slot costs and what producers make are
-the `static … Stats` lines in `src/defs.rs`. Tech requirements are
-`Kind::requires`. Units are kinds 0–63, buildings 64 and up.
+**Tune a unit or building.** Stats, slot costs, what producers make, their
+workers and the builders a foundation needs are the `static … Stats` lines
+in `src/defs.rs`. Tech requirements are `Kind::requires`; a kind's era is
+`Kind::era`. The population numbers (arrival interval, beds per good, goods
+per house tier) are constants there too, and so is `UNSUPPLIED_DAMAGE`.
+Units are kinds 0–63, buildings 64 and up.
 
 **Add a building or unit kind.**
 - Rust:
-  - add it to `Kind` and `Kind::ALL` in `src/defs.rs`;
-  - give it stats in `Kind::stats`, its requirements, and (for buildings)
-    a place in `BUILDABLE`;
-  - if the AI should build it, add it to its plan in `src/ai.rs`.
+  - add it to `Kind` and `Kind::ALL` in `src/defs.rs` (`ALL`'s order is
+    the tech tree's);
+  - give it stats in `Kind::stats`, its requirements and era, and (for
+    buildings) a place in `BUILDABLE`;
+  - if the AI should build it, add it to `PLAN` in `src/ai.rs`.
 - JS:
-  - add it to `K`, `NAMES` and `DESC` in `main.js`;
-  - for buildings, to `BUILD_MENU` (hotkey) and `ERAS` (tech tree column);
+  - add it to `K`, `NAMES` and `DESC` in `main.js`, and for buildings to
+    `BUILD_MENU` (hotkey). The tech tree builds itself from Rust's data;
   - give it a model: in `assets/models.py` (rebuild `web/models.glb`; see
     `assets/README.md`), and a fallback in `unitModel` or `buildingModel` in
     `render3d.js`.
 - Saves store kinds as numbers, so a new kind doesn't need a new `VERSION`.
+
+**Add a resource.** Add it to `Res` and `Res::ALL` in `src/defs.rs` with its
+era (and `is_house_good` if houses want it), and its name to `RES_NAMES` and
+an icon to `RES_ICON` in `main.js`. Players' slot arrays grow with `N_RES`.
+
+**The economy, in one place.** `Game::resolve` (`src/game.rs`) recounts
+everything each tick in the design's fixed order: crews (house goods'
+producers first), supply, use, unsupplied units, house goods nearest the
+Capitol first, residents who no longer fit. Only houses' residents and
+goods are saved; `Game::recount` works out the rest after a load.
 
 **Add a command.**
 - Add a `Command` variant and its handling in `Game::apply` (`src/game.rs`),
@@ -155,11 +169,19 @@ players, include it in `Game::checksum`.
 
 ## Testing
 
-    cargo test --release      # the simulation: saves, surrender, views
+    cargo test --release      # the simulation: saves, surrender, views, slots, people, a whole AI game
     ./build.sh
     node test/wasm.mjs        # two copies stay identical; copy/restore; timings
     node test/relay.cjs       # the relay: allowed pages, limits, heartbeat, bad messages
     test/browser/run.sh       # headless Chromium: replays, surrender, spectators (see the script for setup)
+
+To watch two computer players play, minute by minute:
+
+    VC_SEED=7 VC_MINUTES=60 VC_EVERY=5 cargo test --release watch_the_ai -- --ignored --nocapture
+
+(also `VC_DIFF` 0–2 and `VC_PLAYERS` 2–4). It prints what each has and its
+people, beds and slots: the quickest way to see whether an economy change
+still plays.
 
 The browser tests check the things that matter by checksum: a replay at
 any tick is the game at that tick, and a spectator's copy is the players'
@@ -430,9 +452,10 @@ versions don't play together.
   for a Wonder too, on Normal and Hard. Lose your Capitol and everything you
   own falls with it.
 - **Progress comes from buildings, not research.** Each building unlocks
-  others. Press K for the tech tree.
-- **Resources are slots** (being rebuilt; see
-  `docs/design/economy-and-eras.md`). Nothing is gathered or stockpiled:
+  others. Press K for the tech tree. Six eras are planned (the design is
+  `docs/design/economy-and-eras.md`, the work plan
+  `docs/plan/economy-and-eras-plan.md`); so far the game is the Ancient era.
+- **Resources are slots.** Nothing is gathered or stockpiled:
   producers make slots (a lumber camp by a forest makes 4 wood), and
   everything you have holds some while it exists, giving them back when
   it's gone. Lose a producer and you hold more than you make: your newest
@@ -441,7 +464,12 @@ versions don't play together.
   receives (up to 3 kinds). While there's a free bed, a newcomer arrives
   at the Capitol every 10 seconds. People at home work the producers; every
   builder and soldier is someone who left home, and holds a bed while
-  alive. Builders are used up at their foundation.
+  alive. Builders are used up at their foundation, which then rises by
+  itself. Everyone busy and every bed full? Demolish something.
+- **The computer** explores before it builds: it uses only deposits it has
+  seen, so it sends its first soldier round the map. Easy, Normal and Hard
+  differ in how much of its people it puts under arms, how soon it attacks,
+  whether it builds a Wonder, and its supply (80%, 100%, 130%).
 - **Maps:** two players get an 80×80 map with 180° symmetry; three or four
   get 96×96 with four-way symmetry, so every start is the same, just turned.
 

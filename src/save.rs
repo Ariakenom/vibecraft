@@ -24,7 +24,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// Bump when the layout changes. Old saves are then refused, not misread.
 /// 2: slots replace stockpiles (economy Phase 1).
 /// 3: people, houses, builders (economy Phase 2).
-const VERSION: u32 = 3;
+/// 4: explored ground, eras, the AI's scout (economy Phase 3).
+const VERSION: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -205,6 +206,7 @@ impl Game {
             w.i32(v);
         }
         w.0.extend_from_slice(&self.fog[..n]);
+        w.0.extend_from_slice(&self.explored[..n]);
 
         w.len(self.deps.len());
         for d in &self.deps {
@@ -256,6 +258,7 @@ impl Game {
             w.u32(p.supply_pct as u32);
             w.u32(p.pop);
             w.f32(p.arrive_timer);
+            w.u8(p.era);
             w.bool(p.defeated);
             w.bool(p.short);
             w.u32(p.trained);
@@ -283,6 +286,10 @@ impl Game {
             w.u32(a.wave_size as u32);
             w.opt_pt(a.alarm);
             w.bool(a.wonder_started);
+            w.bool(a.scout.is_some());
+            w.u32(a.scout.unwrap_or(0));
+            w.u8(a.scout_leg);
+            w.bool(a.last_grew);
         }
 
         w.f32(self.time);
@@ -321,6 +328,7 @@ impl Game {
         let dep_at = (0..n).map(|_| r.i32()).collect::<Option<Vec<_>>>()?;
         let bld_at = (0..n).map(|_| r.i32()).collect::<Option<Vec<_>>>()?;
         let fog = r.take(n)?.to_vec();
+        let explored = r.take(n)?.to_vec();
         let map = Map { w: mw, h: mh, terrain, shade, blocked, dep_at, bld_at };
 
         let ndeps = r.len(9)?;
@@ -392,6 +400,7 @@ impl Game {
             let mut p = Player::new(pct as u16);
             p.pop = r.u32()?;
             p.arrive_timer = r.f32()?;
+            p.era = r.u8()?.min(5);
             p.defeated = r.bool()?;
             p.short = r.bool()?;
             p.trained = r.u32()?;
@@ -420,6 +429,14 @@ impl Game {
             a.wave_size = r.u32()? as usize;
             a.alarm = r.opt_pt()?;
             a.wonder_started = r.bool()?;
+            let has_scout = r.bool()?;
+            let scout = r.u32()?;
+            a.scout = has_scout.then_some(scout);
+            a.scout_leg = r.u8()?;
+            a.last_grew = r.bool()?;
+            if a.scout.is_some_and(|s| s as usize >= ents.len()) {
+                return None;
+            }
             ais.push(a);
         }
 
@@ -456,6 +473,7 @@ impl Game {
         }
 
         let mut g = Game::from_parts(seed, map, deps, ents, players, n_players, proj, fog, ais, local);
+        g.explored = explored;
         g.time = time;
         g.state = state;
         g.winner = winner;
@@ -482,7 +500,12 @@ mod tests {
             }
             let bytes = a.save();
             let mut b = Game::load(&bytes).expect("load");
-            assert_eq!(b.save(), bytes, "save → load → save changed the bytes");
+            let again = b.save();
+            if let Some(i) = (0..bytes.len().min(again.len())).find(|&i| bytes[i] != again[i]) {
+                let n = (a.map.w * a.map.h) as usize;
+                panic!("save → load → save changed byte {i} of {} (map tiles {n}; fog ends at {})", bytes.len(), 22 + n * 11);
+            }
+            assert_eq!(again, bytes, "save → load → save changed the length");
             for t in 0..20 * 60 * 4 {
                 a.tick();
                 b.tick();

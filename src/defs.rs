@@ -229,8 +229,8 @@ static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(De
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
 
 // The Wonder holds a great many slots while it stands, needs three builders
-// and takes four minutes to rise.
-static WONDER: Stats = Stats { builders: 3, ..building(4000.0, 8.0, &[(Wood, 12), (Stone, 12), (Grain, 2), (Fish, 2), (Meat, 2), (Fruit, 2), (Horses, 2)], 240.0, 4) };
+// and takes four minutes to rise. No fish: not every map has water nearby.
+static WONDER: Stats = Stats { builders: 3, ..building(4000.0, 8.0, &[(Wood, 8), (Stone, 10), (Grain, 2), (Meat, 2), (Fruit, 2), (Horses, 2)], 240.0, 4) };
 
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
@@ -247,10 +247,11 @@ pub fn house_max_goods(tier: u8) -> u8 {
 }
 
 impl Kind {
-    /// Every kind, for loops over all of them.
+    /// Every kind, for loops over all of them: units, then buildings in
+    /// tech-tree order (the tech tree panel shows them in this order).
     pub const ALL: [Kind; 19] = {
         use Kind::*;
-        [Builder, Spearman, Archer, Horseman, Arrival, Capitol, Barracks, Range, Stable, Tower, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Wonder, Hut]
+        [Builder, Spearman, Archer, Horseman, Arrival, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
     };
 
     /// Convert a number from JavaScript into a `Kind`. Returns `None` for junk,
@@ -311,6 +312,13 @@ impl Kind {
 
     pub fn is_military(self) -> bool {
         matches!(self, Kind::Spearman | Kind::Archer | Kind::Horseman)
+    }
+
+    /// The era a kind belongs to: 0 Ancient … 5 Atomic. Players can build
+    /// and train kinds of their era and earlier (from Phase 4; for now
+    /// everything is Ancient).
+    pub fn era(self) -> u8 {
+        0
     }
 
     /// The tier of a house, or `None` for anything that isn't one.

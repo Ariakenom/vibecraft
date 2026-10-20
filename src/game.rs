@@ -263,6 +263,9 @@ pub struct Player {
     pub pop: u32,
     /// Seconds until the next newcomer may arrive. Saved.
     pub arrive_timer: f32,
+    /// The era this player has reached: 0 Ancient … 5 Atomic. Never goes
+    /// back. (Phase 4 raises it, when enough houses reach a tier.) Saved.
+    pub era: u8,
     // Worked out every tick (`Game::resolve`), so not saved:
     /// Slots of each good held by houses. They come last: buildings and
     /// units always get what they hold, houses get what's left.
@@ -293,6 +296,7 @@ impl Player {
             supply_pct,
             pop: 0,
             arrive_timer: ARRIVAL_INTERVAL,
+            era: 0,
             housed: [0; N_RES],
             beds: 0,
             residents: 0,
@@ -372,6 +376,10 @@ pub struct Game {
     pub time: f32,
     /// Per tile, for the human player: 0 never seen, 1 explored, 2 visible now.
     pub fog: Vec<u8>,
+    /// Per tile, one bit per player (bit `p`): has player `p` ever seen it?
+    /// Unlike `fog`, kept for everyone, so it's part of the game: the AI only
+    /// builds on ground and deposits it has explored.
+    pub explored: Vec<u8>,
     fog_timer: f32,
     /// 0 while playing, 1 once someone has won.
     pub state: u8,
@@ -428,6 +436,7 @@ impl Game {
         g.recount_pop();
         g.resolve();
         g.update_fog();
+        g.explore();
         g
     }
 
@@ -447,6 +456,7 @@ impl Game {
             proj,
             time: 0.0,
             fog,
+            explored: vec![0; n],
             fog_timer: 0.0,
             state: 0,
             winner: 0,
@@ -460,8 +470,10 @@ impl Game {
             alert_cooldown: 0.0,
             idle_cursor: 0,
         };
-        // Slots aren't saved: they follow from what exists.
-        g.resolve();
+        // Slots aren't saved: they follow from what exists. Only counted
+        // here: a loaded game settles its houses on its next tick, exactly
+        // as the saved one would have.
+        g.recount();
         g
     }
 
@@ -723,6 +735,7 @@ impl Game {
         if self.fog_timer <= 0.0 {
             self.fog_timer = 0.2;
             self.update_fog();
+            self.explore();
         }
         for p in self.player_ids() {
             let ai = &mut self.ais[p as usize];
@@ -790,8 +803,11 @@ impl Game {
     /// residents and goods needs saving.
     ///
     /// 1. Residents at home are everyone living in a house.
-    /// 2. Producers take their crews from them, in id order, while enough
-    ///    are left. A producer without its full crew makes nothing.
+    /// 2. Producers take their crews from them while enough are left:
+    ///    producers of house goods first, then the rest, each in id order.
+    ///    A producer without its full crew makes nothing. (Food first keeps
+    ///    the economy from spiralling: losing people idles a lumber camp
+    ///    before a farm, so beds don't vanish along with them.)
     /// 3. Supply comes from crewed producers.
     /// 4. Use: every building, foundation, unit and queued unit.
     /// 5. (Converters, from the Medieval era.)
@@ -800,6 +816,16 @@ impl Game {
     ///    can use from what's left, keeping goods they already had first.
     /// 8. Residents who no longer fit leave, furthest houses first.
     pub(crate) fn resolve(&mut self) {
+        self.resolve_with(true);
+    }
+
+    /// Work out all the counts `resolve` does, without changing anything
+    /// that's saved (houses' goods and residents, units' health).
+    pub(crate) fn recount(&mut self) {
+        self.resolve_with(false);
+    }
+
+    fn resolve_with(&mut self, settle: bool) {
         let n = self.players.len();
         // Counted in u32, then clamped: no overflow, whatever a save holds.
         let mut supply = vec![[0u32; N_RES]; n];
@@ -815,18 +841,28 @@ impl Game {
             }
             units[e.owner as usize] += e.queue.iter().filter(|k| k.holds_bed()).count() as u32;
         }
-        // 2–4. Crews, supply and use, in one pass in id order.
+        // 2–3. Crews and supply: house goods' producers first, then the rest.
         let mut left = at_home.clone();
-        for e in self.ents.iter_mut().filter(|e| e.alive) {
-            let o = e.owner as usize;
-            let st = e.kind.stats();
-            e.crewed = e.built >= 1.0 && left[o] >= st.workers as u32;
-            if e.crewed && !st.produces.is_empty() {
-                left[o] -= st.workers as u32;
-                for &(r, k) in st.produces {
-                    supply[o][r.idx()] += k as u32;
+        for houses_first in [true, false] {
+            for e in self.ents.iter_mut().filter(|e| e.alive) {
+                let st = e.kind.stats();
+                if st.produces.iter().any(|&(r, _)| r.is_house_good()) != houses_first {
+                    continue;
+                }
+                let o = e.owner as usize;
+                e.crewed = e.built >= 1.0 && left[o] >= st.workers as u32;
+                if e.crewed && !st.produces.is_empty() {
+                    left[o] -= st.workers as u32;
+                    for &(r, k) in st.produces {
+                        supply[o][r.idx()] += k as u32;
+                    }
                 }
             }
+        }
+        // 4. Use.
+        for e in self.ents.iter().filter(|e| e.alive) {
+            let o = e.owner as usize;
+            let st = e.kind.stats();
             for &(r, k) in st.cost {
                 used[o][r.idx()] += k as u32;
             }
@@ -847,10 +883,10 @@ impl Game {
             p.units = units[o];
         }
         // 6.
-        self.supply_units();
+        self.supply_units(settle);
         // 7–8, player by player.
         for owner in self.player_ids() {
-            self.house_goods(owner);
+            self.house_goods(owner, settle);
         }
         let mut arriving = vec![0u32; n];
         for e in self.ents.iter().filter(|e| e.alive && e.kind == Kind::Arrival) {
@@ -877,8 +913,25 @@ impl Game {
     }
 
     /// Steps 7 and 8 of `resolve` for one player.
-    fn house_goods(&mut self, owner: u8) {
+    /// With `settle` false, only count what the houses hold now.
+    fn house_goods(&mut self, owner: u8, settle: bool) {
         let houses = self.houses_by_distance(owner);
+        if !settle {
+            let p = &mut self.players[owner as usize];
+            p.housed = [0; N_RES];
+            p.beds = 0;
+            p.residents = 0;
+            for &i in &houses {
+                let e = &self.ents[i];
+                for (r, slot) in p.housed.iter_mut().enumerate() {
+                    *slot += (e.goods >> r & 1) as u16;
+                }
+                p.beds += e.beds() as u32;
+                p.residents += e.residents as u32;
+            }
+            p.working = p.working.min(p.residents);
+            return;
+        }
         let p = &self.players[owner as usize];
         // What's left for houses after buildings and units.
         let mut left: [i32; N_RES] = std::array::from_fn(|r| p.free(Res::ALL[r]).max(0));
@@ -1013,7 +1066,8 @@ impl Game {
     /// destroyed), their newest units holding it are unsupplied and slowly
     /// lose health, until supply is back or enough have died to fit.
     /// Buildings and queued units still hold their slots but don't suffer.
-    fn supply_units(&mut self) {
+    /// With `settle` false, only mark them (no damage, no message).
+    fn supply_units(&mut self, settle: bool) {
         for e in self.ents.iter_mut() {
             e.unsupplied = false;
         }
@@ -1042,6 +1096,9 @@ impl Game {
                     }
                 }
             }
+            if !settle {
+                continue;
+            }
             let was = self.players[owner as usize].short;
             self.players[owner as usize].short = any;
             if any && !was && owner == self.local {
@@ -1049,7 +1106,7 @@ impl Game {
                 self.push_event(Ev::Short, 0.0, 0.0, r as f32);
             }
         }
-        if UNSUPPLIED_DAMAGE > 0.0 {
+        if settle && UNSUPPLIED_DAMAGE > 0.0 {
             for e in self.ents.iter_mut().filter(|e| e.alive && e.unsupplied) {
                 e.hp -= e.kind.stats().hp * UNSUPPLIED_DAMAGE * DT;
             }
@@ -1983,6 +2040,31 @@ impl Game {
     // -----------------------------------------------------------------------
     // Fog of war (for the human player only; the AI sees everything)
 
+    /// Mark what every player's things can see as explored by them.
+    pub(crate) fn explore(&mut self) {
+        let (w, h) = (self.map.w, self.map.h);
+        for e in self.ents.iter().filter(|e| e.alive && e.owner != GAIA && e.owner < 8) {
+            let st = e.kind.stats();
+            let r = st.sight + st.size as f32 / 2.0;
+            let ri = r.ceil() as i32;
+            let (cx, cy) = (e.x.floor() as i32, e.y.floor() as i32);
+            let bit = 1u8 << e.owner;
+            for dy in -ri..=ri {
+                for dx in -ri..=ri {
+                    let (x, y) = (cx + dx, cy + dy);
+                    if x >= 0 && y >= 0 && x < w && y < h && ((dx * dx + dy * dy) as f32) <= r * r {
+                        self.explored[(y * w + x) as usize] |= bit;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Has player `p` ever seen tile (x, y)?
+    pub fn explored_by(&self, p: u8, x: i32, y: i32) -> bool {
+        self.map.inside(x, y) && self.explored[self.map.idx(x, y)] & (1 << p) != 0
+    }
+
     pub(crate) fn update_fog(&mut self) {
         if self.reveal {
             self.fog.iter_mut().for_each(|v| *v = 2);
@@ -2381,17 +2463,49 @@ mod tests {
         assert!(g.alive(cap), "the Capitol can't be demolished");
     }
 
+    /// Two Normal computer players play a whole game: someone wins, by
+    /// Wonder or conquest, within an hour. Guards against the AI stalling.
+    #[test]
+    fn normal_ais_play_a_game_to_the_end() {
+        for seed in [1234, 7, 42] {
+            let mut g = Game::new(seed, 1, 2);
+            g.set_ai(1, true);
+            let mut ticks = 0;
+            while g.state == 0 && ticks < 20 * 60 * 60 {
+                g.tick();
+                g.events.clear();
+                ticks += 1;
+            }
+            assert_ne!(g.state, 0, "seed {seed}: nobody won in an hour");
+            // The AI explored beyond its start, and only built where it had.
+            let p = g.winner;
+            let seen = g.explored.iter().filter(|&&b| b & (1 << p) != 0).count();
+            assert!(seen > g.explored.len() / 4, "seed {seed}: the winner saw only {seen} tiles");
+            for e in g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner == p) {
+                assert!(g.explored_by(p, e.tx, e.ty), "built on unexplored ground");
+            }
+        }
+    }
+
     #[test]
     #[ignore]
     fn watch_the_ai() {
-        let mut g = Game::new(1234, 1, 2);
+        // VC_SEED, VC_MINUTES and VC_EVERY tune the run from the shell.
+        let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let (seed, minutes, every) = (env("VC_SEED", 1234), env("VC_MINUTES", 14), env("VC_EVERY", 1));
+        let (diff, players) = (env("VC_DIFF", 1), env("VC_PLAYERS", 2) as u8);
+        let mut g = Game::new(seed, diff, players);
         g.set_ai(1, true);
-        for min in 1..=14 {
+        for min in 1..=minutes {
             for _ in 0..20 * 60 {
                 g.tick();
             }
-            println!("{min:2} min  P1: {}", census(&g, 1));
-            println!("        P2: {}", census(&g, 2));
+            if min % every == 0 || g.state != 0 {
+                println!("{min:2} min  P1: {}", census(&g, 1));
+                for p in 2..=players {
+                    println!("        P{p}: {}", census(&g, p));
+                }
+            }
             if g.state != 0 {
                 println!("winner {} wonder {}", g.winner, g.by_wonder);
                 break;
