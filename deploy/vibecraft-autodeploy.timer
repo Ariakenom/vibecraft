@@ -1,9 +1,0 @@
-[Unit]
-Description=Check GitHub for a new VibeCraft every minute
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
-
-[Install]
-WantedBy=timers.target

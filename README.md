@@ -409,9 +409,7 @@ push to `main` can't gain root on ginnu. When you change
 by hand (below) and copy it into the devops repo. The deploy log notes these
 files on every deploy as a reminder.
 
-The autodeploy itself (script, units, setup) lives in the devops repo. The
-`deploy/autodeploy.sh`, `deploy/install-autodeploy.sh` and
-`deploy/vibecraft-autodeploy.*` files here are outdated: don't run them.
+The autodeploy itself (script, units, setup) lives in the devops repo.
 
 To update by hand:
 
