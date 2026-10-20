@@ -1,3 +1,5 @@
 /target
 /assets/*.blend
 /assets/*.blend1
+/test/browser/three.min.js
+/test/browser/node_modules

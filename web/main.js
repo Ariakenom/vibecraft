@@ -399,6 +399,7 @@ const signed = v => (v >= 0.5 ? "+" : v <= -0.5 ? "−" : "±") + Math.abs(Math.
 
 function renderTopBar() {
   if (!topBar) setupTopBar();
+  $("res").hidden = !!observe && !observe.view;
   topBar.chips.forEach((c, r) => {
     c.querySelector("b").textContent = Math.floor(W.stock(r));
     const v = netRate(r), sm = c.querySelector("small");
@@ -481,7 +482,14 @@ function renderSelection(force) {
   selKey = sig;
   const panel = $("sel");
   panel.replaceChildren();
-  if (sel.length === 0) {
+  if (sel.length === 0 && observe) {
+    const d = document.createElement("div");
+    d.className = "tips";
+    d.innerHTML = observe.kind === "replay"
+      ? `<h3>Replay</h3>Play, pause and jump with the bar above. Click a player's name to see the game as they saw it, fog and all; <b>Whole map</b> lifts the fog. Click anything to look at it.`
+      : `<h3>Watching</h3>Click a player's name to see the game as they see it, fog and all; <b>Whole map</b> lifts the fog. Click anything to look at it.`;
+    panel.append(d);
+  } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
     d.innerHTML = `<h3>Outlast your rivals</h3>Select citizens and right-click trees, berries, gold or stone to gather. Every unit eats food all the time, so keep plenty of people on berries and <b>Farms</b>. Then build a <b>Barracks</b>, <b>Archery Range</b> or <b>Stable</b> for an army. Press <kbd class="k">.</kbd> to find idle citizens.`;
@@ -519,12 +527,12 @@ function singleInfo(panel, i) {
   if (k < 10) {
     let st = ORDER_TEXT[E(i, F.order)];
     if (k === K.Citizen && E(i, F.carry) >= 1) st += ` · carrying ${Math.floor(E(i, F.carry))} ${RES_NAMES[E(i, F.carryK)]}`;
-    if (owner === ME) html += `<div class="statline">${st}</div>`;
+    if (owner === ME || observe) html += `<div class="statline">${st}</div>`;
   } else if (E(i, F.flags) & 2) {
     html += `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
   }
   info.innerHTML = html;
-  if (k >= 10 && owner === ME && W.queue_len(id) > 0) {
+  if (k >= 10 && (owner === ME || observe) && W.queue_len(id) > 0) {
     const q = W.queue_len(id);
     const line = document.createElement("div"); line.className = "statline";
     line.innerHTML = `Training ${NAMES[W.queue_kind(id, 0)]} · ${Math.floor(E(i, F.prog) * 100)}%`;
@@ -563,7 +571,7 @@ function renderCommands(sel) {
   box.replaceChildren(tip);
   cmdKeys = {};
   const mine = sel.filter(i => E(i, F.owner) === ME);
-  if (!mine.length) return;
+  if (!mine.length || observe) return;
   const kinds = new Set(mine.map(i => E(i, F.kind)));
   const add = (b, key, fn) => { box.append(b); if (key) cmdKeys[key.toLowerCase()] = fn; };
   const unitTip = k => {
@@ -621,9 +629,11 @@ function explain(code) {
 // once, here, so every computer applies exactly the same numbers.
 function issue(cmd) {
   const r2 = v => Math.round((v || 0) * 100) / 100;
+  if (observe) return 0; // watching: nothing to command
   const arr = [cmd.c, cmd.a || 0, r2(cmd.x), r2(cmd.y), ...(cmd.ids || []).slice(0, 60)];
   const code = applyCmd(ME, arr);
-  if (mp) mp.queue(arr);
+  if (mp) mp.queue(arr); // multiplayer records the confirmed order instead (mpHooks.confirmed)
+  else Rec.mine(arr);
   return code;
 }
 // Run one command on whichever copy of the game is current. No sounds, no
@@ -658,13 +668,15 @@ const mpHooks = {
     return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
   },
   system(cmd) { if (cmd[0] === 7) toast(`${PNAME[cmd[1]] || "A player"} left. The computer takes over their people.`); },
+  // A tick's commands in their final order: what replays and spectators get.
+  confirmed(k, bundle) { Rec.bundle(k, bundle); },
 };
 // Commands arriving from the network are someone else's input: check the shape.
 function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
   if (!arr.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = arr[0] | 0;
-  if (c < 1 || c > 7) return null;
+  if (c < 1 || c > 8) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
 const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || (E(i, F.kind) >= 10) === buildings)).map(i => E(i, F.id));
@@ -884,10 +896,12 @@ const SCROLL_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDo
 window.addEventListener("keydown", e => {
   if (!running) return;
   if (e.key === "F8") { e.preventDefault(); toggleTrace(); return; }
+  if (e.key === "Enter" && Chat.available() && !e.repeat) { e.preventDefault(); Chat.show(); return; }
   if (SCROLL_KEYS.has(e.code)) { keys.add(e.code); e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
   if (!$("loadScreen").hidden) { if (e.key === "Escape") closeLoadScreen(); return; }
+  if (!$("outScreen").hidden) return; // choose first: watch or leave
   if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
@@ -952,6 +966,12 @@ function handleEvents() {
   const ev = f32(W.events_ptr(), n).slice();
   for (let j = 0; j < n; j += 4) {
     const type = ev[j], x = ev[j + 1], y = ev[j + 2], d = ev[j + 3];
+    // Watching: the sounds of the world, but none of the messages meant for a player.
+    if (observe) {
+      if (type === EV.Eliminated) toast(`${PNAME[d]} is out of the game.`);
+      else if (type === EV.WonderBegun) toast(`${PNAME[d]} has begun a Wonder.`);
+      if (type <= 4 || type >= 12) continue;
+    }
     switch (type) {
       case EV.Alert:
         toast(d >= 10 ? `Your ${NAMES[d]} is under attack. Space to view.` : "Your people are under attack. Space to view.", "bad");
@@ -1005,18 +1025,23 @@ let stalledSince = 0;
 
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
+  Watchers.pump(performance.now()); // spectators, also after the game has ended
   if (mp && Trace.cur && last) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
   last = now;
   if (running) {
     const f0 = performance.now();
     scrollCamera(dt);
     if (mp) pumpMultiplayer(performance.now(), false);
+    else if (watcher) { if (watcher.pump()) handleEvents(); }
+    else if (Replay.on) { if (Replay.pump(dt)) handleEvents(); }
     else if (!paused) {
       acc += dt * 1000 * speed;
       let steps = 0;
-      while (acc >= SIM_MS && steps < 8) { W.tick(); acc -= SIM_MS; steps++; }
-      if (steps === 8) acc = 0;
+      const most = Math.max(8, speed * 4);
+      while (acc >= SIM_MS && steps < most) { W.tick(); simTick++; acc -= SIM_MS; steps++; }
+      if (steps === most) acc = 0;
       if (steps) handleEvents();
+      if (!Rec.done) Rec.ticks = simTick;
     }
     const f1 = performance.now();
     readWorld();
@@ -1030,9 +1055,14 @@ function loop(now) {
     drawOverlay();
     updateHoverCursor(now);
     if (frame % 4 === 0) drawMinimap();
-    if (frame % 6 === 0) { renderTopBar(); renderSelection(false); }
+    if (frame % 6 === 0) { renderTopBar(); renderSelection(false); renderScoreboard(false); }
+    syncObserverUi();
     if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
-    if (W.state() !== 0) endGame();
+    // Is the game over? For a player, from their own point of view; for
+    // someone only watching, once anyone has won.
+    // (Multiplayer decides in pumpMultiplayer, on the confirmed copy.)
+    if (observe && observe.kind !== "out") { if (W.winner_player()) observerOver(); }
+    else if (running && !mp && W.state_of(ME) !== 0) endGame();
     frame++;
   } else if (titleSpin) {
     // Slowly circle the town behind the title screen.
@@ -1055,7 +1085,10 @@ try {
   const src = "setInterval(() => postMessage(0), 50);";
   const worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
   workerClock = true;
-  worker.onmessage = () => { if (running && mp) pumpMultiplayer(performance.now(), true); };
+  worker.onmessage = () => {
+    if (running && mp) pumpMultiplayer(performance.now(), true);
+    else if (running && watcher && document.hidden) { if (watcher.pump()) handleEvents(); }
+  };
 } catch { /* no workers here: background tabs will just be slow */ }
 
 function pumpMultiplayer(now, fromWorker) {
@@ -1063,8 +1096,10 @@ function pumpMultiplayer(now, fromWorker) {
   lastPump = now;
   for (const look of roomLookers) look();
   stepMultiplayer(now);
-  // The game is over only once the confirmed copy says so.
-  if (mp && W.state() !== 0 && mp.finalState !== 0) endGame();
+  Watchers.pump(now);
+  // The game is over only once the confirmed copy says so (then the
+  // recording, and what spectators get, has the ending too).
+  if (mp && mp.finalState !== 0) endGame(mp.finalState);
 }
 
 // Multiplayer stepping: the client does the work (net.js).
@@ -1184,7 +1219,9 @@ function newGame(seedArg, local = 0, players = 2) {
 // one just loaded from a save.
 function enterWorld(local = 0) {
   ME = W.local_player();
-  simTick = 0; stalledSince = 0; spectating = false;
+  simTick = 0; stalledSince = 0; outShown = false; surrendered = false;
+  stopObserving();
+  $("outScreen").hidden = true;
   bakeTerrain();
   buildWorld();
   updateFog();
@@ -1201,40 +1238,62 @@ function enterWorld(local = 0) {
   // No pausing or speeding up a game other people are playing too.
   $("pauseBtn").hidden = !!local; $("speedBtn").hidden = !!local; $("restartBtn").hidden = !!local;
   $("quitBtn").textContent = local ? "Leave game" : "New game";
-  if (local) speed = 1;
+  if (local || speed > 2) { speed = 1; $("speedBtn").textContent = "1×"; }
   renderTopBar(); renderSelection(true);
+  // Start recording (a replay, and what spectators are sent). Single player:
+  // me against the computer. Multiplayer fills in who's who when it starts.
+  const who = {};
+  for (let p = 1; p <= W.n_players(); p++) who[p] = p === ME ? "human" : "computer";
+  Rec.begin({ who, mp: !!local });
 }
 
-let spectating = false;
-function endGame() {
-  const st = W.state();
-  // Out of the running, but others play on (multiplayer): watch, or leave.
+let outShown = false;   // the "you're out" card has been shown for this game
+let surrendered = false; // I gave up (for the wording)
+function endGame(st = W.state_of(ME)) {
+  // Out of the running while others play on: watch the rest, or leave.
   if (st === 5) {
-    if (mp && !spectating) {
-      spectating = true;
-      toast("Your Capitol has fallen. You can keep watching, or leave from the menu.", "bad");
+    if (!outShown && !observe) {
+      outShown = true;
+      $("outTitle").textContent = surrendered ? "You surrendered" : "Defeat";
+      $("outWhy").textContent = (surrendered ? "" : "Your Capitol has fallen. ") +
+        (mp && mp.server ? "The others play on. You're the host: if you leave, the game ends for everyone." : "The others play on.");
+      $("outScreen").hidden = false;
+      if (!mp && !paused) togglePause(); // single player waits for you to choose
       Sfx.ui("fanfare", false);
     }
-    if (mp) return;
+    return;
   }
+  showEnd(st);
+}
+// The game is over for me: the end screen.
+function showEnd(st) {
   running = false;
+  $("outScreen").hidden = true;
   const won = st === 1 || st === 3;
-  $("endTitle").textContent = won ? "Victory" : "Defeat";
+  $("endTitle").textContent = won ? "Victory" : surrendered ? "Surrendered" : "Defeat";
   const winner = PNAME[W.winner_player()] || "Someone";
   $("endWhy").textContent = {
     1: "All your rivals have fallen.",
-    2: `${winner} has conquered the land.`,
+    2: surrendered ? `You surrendered. ${winner} wins.` : `${winner} has conquered the land.`,
     3: "Your Wonder stands complete. Your people will be remembered.",
     4: `${winner} finished a Wonder.`,
-    5: "Your Capitol has fallen.",
+    5: surrendered ? "You surrendered." : "Your Capitol has fallen.",
   }[st];
+  Rec.finish(won ? `${PNAME[ME]} won` : W.winner_player() ? `${winner} won${W.by_wonder() ? " with a Wonder" : ""}` : surrendered ? `${PNAME[ME]} surrendered` : `${PNAME[ME]} was out`);
   Sfx.ui("fanfare", won);
+  stopObserving();
   showEndStats();
   if (mp) finishMultiplayer();
 }
-function showEndStats() {
+// From the "you're out" card, or the bar while watching: leave this game.
+function leaveOut() {
+  $("outScreen").hidden = true;
+  if (paused && !mp) togglePause();
+  showEnd(5);
+}
+function showEndStats(opts = {}) {
   const ps = [...Array(W.n_players())].map((_, i) => i + 1);
-  const head = ps.map(p => `<th style="color:${PLIGHT[p]}">${p === ME ? "You" : PNAME[p]}</th>`).join("");
+  const head = ps.map(p => `<th style="color:${PLIGHT[p]}">${p === ME && ME ? "You" : PNAME[p]}</th>`).join("");
   const row = (label, f) => `<tr><th>${label}</th>${ps.map(p => `<td>${f(p)}</td>`).join("")}</tr>`;
   $("endStats").innerHTML = `<tr><th></th>${head}</tr>` +
     row("Units trained", p => W.player_stat(p, 0)) +
@@ -1242,11 +1301,14 @@ function showEndStats() {
     row("Resources gathered", p => Math.floor(W.player_stat(p, 2))) +
     `<tr><th>Game time</th><td colspan="${ps.length}">${fmtTime(W.game_time())}</td></tr>`;
   $("againBtn").textContent = mp || lastWasMultiplayer ? "Back to menu" : "Play again";
+  $("againBtn").hidden = !!opts.watching;
+  $("toMenuBtn").textContent = opts.watching ? "Stop watching" : "Change difficulty";
+  $("replayBtn").hidden = !Rec.replay;
   $("endScreen").hidden = false;
 }
 
 function togglePause() {
-  if (mp) return;
+  if (mp || watcher) return;
   paused = !paused;
   $("pauseBtn").setAttribute("aria-pressed", String(paused));
   $("pauseBtn").textContent = paused ? "Resume" : "Pause";
@@ -1367,6 +1429,7 @@ function renderLobby() {
   btn.textContent = active < 2 ? "Add an opponent to begin" : friends ? `Start game (${active} players)` : "Begin";
   const link = inviteLink();
   $("inviteRow").hidden = !link;
+  $("lobbyWatchLink").hidden = !link;
   if (link && $("inviteLink").value !== link) $("inviteLink").value = link;
   const diff = guest && guestOf.host ? guestOf.host.diff : difficulty;
   for (const b of $("diff").children) { b.disabled = guest; b.setAttribute("aria-pressed", String(+b.dataset.d === diff)); }
@@ -1387,6 +1450,8 @@ function publishLobby() {
 // The host's view of the room: seat whoever has arrived, free the seats of
 // whoever has gone. During a game, anyone gone is handed to the computer.
 function onHostPeers(peers) {
+  setWatchCount(countWatchers(peers));
+  Chat.setOthers(peers.length);
   const here = new Set();
   for (const p of peers) {
     const pr = p.presence || {};
@@ -1418,6 +1483,9 @@ function closeRoom() {
   clearInterval(startTimer);
   if (room) room.leave();
   room = null; mp = null;
+  setWatchCount(0);
+  Chat.setOthers(0);
+  $("watchHostBtn").hidden = true;
   if (pageRoom) pageRoom.presence({ hosting: null });
 }
 
@@ -1426,7 +1494,8 @@ async function openOwnLobby(note = "", bad = false) {
   const gen = ++lobbyGen;
   closeRoom();
   guestOf = null;
-  if (codeIn(location.hash)) try { history.replaceState(null, "", location.href.split("#")[0]); } catch { /* not allowed here */ }
+  leaveWatching();
+  if (codeIn(location.hash) || watchIn(location.hash)) try { history.replaceState(null, "", location.href.split("#")[0]); } catch { /* not allowed here */ }
   seats = seats.map(s => isFriend(s) ? "open" : s);
   renderLobby();
   mpStatus(note, bad);
@@ -1436,6 +1505,8 @@ async function openOwnLobby(note = "", bad = false) {
     const r = await Net.game(roomCode);
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
+    Watchers.attach(room);
+    Chat.attach(room);
     room.onPeers(onHostPeers);
     publishLobby();
     if (pageRoom) pageRoom.presence({ hosting: roomCode, v: NET.PROTOCOL });
@@ -1451,6 +1522,7 @@ async function joinLobby(code) {
   if (!code || code === roomCode && !guestOf) return;
   const gen = ++lobbyGen;
   closeRoom();
+  leaveWatching();
   guestOf = { code, host: null, lostAt: performance.now() };
   renderLobby();
   if (!netOk) { openOwnLobby("This page can't go online, so it can't join that game.", true); return; }
@@ -1459,6 +1531,7 @@ async function joinLobby(code) {
     const r = await Net.game(code);
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
+    Chat.attach(room);
     room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: null });
     room.on("start", onStart);
     room.onPeers(onGuestPeers);
@@ -1469,6 +1542,8 @@ async function joinLobby(code) {
 
 function onGuestPeers(peers) {
   if (!guestOf) return;
+  setWatchCount(mp ? countWatchers(peers) : 0);
+  Chat.setOthers(peers.length);
   const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && Array.isArray(pr.seats));
   if (mp) { if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game."); return; }
   if (!host) { if (guestOf.host) { guestOf.host = null; guestOf.lostAt = performance.now(); } renderLobby(); return; }
@@ -1476,8 +1551,9 @@ function onGuestPeers(peers) {
   if (Array.isArray(host.kicked) && host.kicked.includes(myToken)) { openOwnLobby("The host gave your seat away. Here's your own game.", true); return; }
   const seated = host.seats.includes("f:" + myToken);
   mpStatus(!seated ? "No free seat right now. You'll get one if the host opens a seat."
-    : host.playing ? "The host is in a game. You'll play together when they're back."
+    : host.playing ? "The host is in a game. You'll play together when they're back. Meanwhile you can watch it."
     : "You're in. Waiting for the host to start…");
+  $("watchHostBtn").hidden = !host.playing || !!Net.room;
   renderLobby();
 }
 
@@ -1508,7 +1584,7 @@ function beginGame() {
     lastWasMultiplayer = false; lastPlayers = active.length;
     $("startScreen").hidden = true;
     newGame(undefined, 0, active.length);
-    running = true;
+    running = true; Rec.real = true;
     publishLobby(); // friends who arrive now wait for the next game
     return;
   }
@@ -1535,7 +1611,13 @@ function startMultiplayer(me, d, seq) {
   difficulty = [0, 1, 2].includes(d.diff) ? d.diff : 1;
   $("startScreen").hidden = true;
   newGame(d.seed >>> 0, me, n);
-  for (const s of Array.isArray(d.ai) ? d.ai : []) W.set_ai(s, 1);
+  const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
+  for (const s of ai) W.set_ai(s, 1);
+  // Record from here: the start everyone shares, then the confirmed bundles.
+  const who = {};
+  for (let p = 1; p <= n; p++) who[p] = ai.includes(p) ? "computer" : "human";
+  Rec.begin({ who, mp: true });
+  Rec.real = true;
   W.mp_save(); // the confirmed copy starts out identical
   mp = seq;
   lastPump = 0;
@@ -1562,6 +1644,8 @@ function dropPlayer(slot) {
 function endMultiplayer(reason) {
   if (!mp) return;
   running = false;
+  stopObserving(); $("outScreen").hidden = true;
+  Rec.finish(reason);
   $("endTitle").textContent = "Game over";
   $("endWhy").textContent = reason;
   showEndStats();
@@ -1628,7 +1712,7 @@ async function makeSave() {
 
 let saving = false;
 async function saveGame() {
-  if (mp || !running || saving || W.state() !== 0) return;
+  if (mp || observe || !running || saving || W.state_of(ME) !== 0) return;
   saving = true;
   try {
     const save = await makeSave();
@@ -1642,9 +1726,9 @@ async function saveGame() {
   } finally { saving = false; }
 }
 
-function downloadSave(save) {
+function downloadSave(save, kind = "") {
   const d = new Date(save.saved), pad = v => String(v).padStart(2, "0");
-  const name = `vibecraft-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.vibecraft`;
+  const name = `vibecraft-${kind ? kind + "-" : ""}${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.vibecraft`;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(save)], { type: "application/json" }));
   a.download = name;
@@ -1660,6 +1744,7 @@ async function loadSave(save) {
     bytes = await pipeBytes(bytes, new DecompressionStream("gzip"));
   }
   finishMultiplayer(); lastWasMultiplayer = false;
+  leaveWatching(); Replay.close();
   if (guestOf) openOwnLobby(); // we were waiting in someone's lobby: we're playing alone now
   u8(W.load_buffer(bytes.length), bytes.length).set(bytes);
   if (!W.load_game(bytes.length)) { toast("That save is damaged, or from another version of the game.", "bad"); return; }
@@ -1668,7 +1753,7 @@ async function loadSave(save) {
   if (save.cam) { Object.assign(cam, save.cam); clampCam(); }
   if (save.groups) groups = save.groups;
   for (const id of ["loadScreen", "menuScreen", "startScreen", "endScreen"]) $(id).hidden = true;
-  running = true;
+  running = true; Rec.real = true;
   lastPlayers = W.n_players(); // for Restart and Play again
   publishLobby(); // friends who open our link now wait for the next game
   toast(`Loaded: ${fmtTime(W.game_time())} into the game`);
@@ -1679,6 +1764,7 @@ function openLoadScreen(from) {
   loadReturn = from;
   $(from).hidden = true;
   renderSaveList();
+  renderReplayList();
   $("loadScreen").hidden = false;
 }
 function closeLoadScreen() {
@@ -1744,18 +1830,49 @@ $("diff").addEventListener("click", e => {
 // Back to the lobby: a host reopens theirs (which also clears what the last
 // game left in the room); a guest goes back to their host's.
 const toMenu = () => {
+  if (watcher) return stopWatching();
   const wasGuestOf = guestOf && guestOf.code;
+  if (running && !observe) Rec.finish();
+  Replay.close(); stopObserving(); $("outScreen").hidden = true;
   finishMultiplayer(); lastWasMultiplayer = false; running = false; titleSpin = true;
   $("endScreen").hidden = true; $("menuScreen").hidden = true; $("startScreen").hidden = false;
   if (wasGuestOf) joinLobby(wasGuestOf); else openOwnLobby();
 };
 $("startBtn").onclick = beginGame;
 $("leaveLobbyBtn").onclick = () => openOwnLobby();
-$("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endScreen").hidden = true; newGame(undefined, 0, lastPlayers); running = true; };
+$("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endScreen").hidden = true; newGame(undefined, 0, lastPlayers); running = true; Rec.real = true; };
 $("toMenuBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
-$("speedBtn").onclick = () => { speed = speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1; $("speedBtn").textContent = `${speed}×`; };
-$("menuBtn").onclick = () => { if (!running) return; if (!paused && !mp) togglePause(); $("saveBtn").hidden = $("menuLoadBtn").hidden = !!mp; $("menuScreen").hidden = false; };
+// Watching the rest of a single-player game, it can go faster.
+$("speedBtn").onclick = () => {
+  const steps = observe ? [1, 2, 4, 8] : [1, 1.5, 2];
+  speed = steps[(steps.indexOf(speed) + 1) % steps.length];
+  $("speedBtn").textContent = `${speed}×`;
+};
+$("menuBtn").onclick = () => {
+  if (!running) return;
+  if (!paused && !mp && !watcher) togglePause();
+  const playing = !observe && W.state_of(ME) === 0;
+  $("menuTitle").textContent = mp || watcher ? "Menu" : "Paused";
+  $("saveBtn").hidden = $("menuLoadBtn").hidden = !!mp || !!observe;
+  $("restartBtn").hidden = !!mp || !!observe;
+  $("surrenderBtn").hidden = !playing;
+  delete $("surrenderBtn").dataset.sure; $("surrenderBtn").textContent = "Surrender";
+  $("watchLinkBtn").hidden = !watchLink() || !!observe && observe.kind !== "out";
+  $("quitBtn").textContent = watcher ? "Stop watching" : Replay.on ? "Exit replay" : mp ? "Leave game" : "New game";
+  $("menuScreen").hidden = false;
+};
+// Two clicks, so a slip doesn't end your game.
+$("surrenderBtn").onclick = e => {
+  const b = e.currentTarget;
+  if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Really surrender?"; return; }
+  $("menuScreen").hidden = true;
+  if (paused) togglePause();
+  surrendered = true;
+  issue({ c: 8 });
+};
+$("outWatchBtn").onclick = () => { $("outScreen").hidden = true; startObserving("out"); if (paused && !mp) togglePause(); };
+$("outLeaveBtn").onclick = leaveOut;
 $("saveBtn").onclick = () => saveGame();
 $("menuLoadBtn").onclick = () => openLoadScreen("menuScreen");
 $("startLoadBtn").onclick = () => openLoadScreen("startScreen");
@@ -1764,11 +1881,13 @@ $("loadFileBtn").onclick = () => $("loadFile").click();
 $("loadFile").onchange = async e => {
   const f = e.target.files[0]; e.target.value = "";
   if (!f) return;
-  try { await loadSave(JSON.parse(await f.text())); }
-  catch { toast("That file isn't a VibeCraft save.", "bad"); }
+  try {
+    const d = JSON.parse(await f.text());
+    if (d && d.kind === "replay") await Replay.open(d); else await loadSave(d);
+  } catch { toast("That file isn't a VibeCraft save or replay.", "bad"); }
 };
 $("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused) togglePause(); };
-$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers); };
+$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers); Rec.real = true; };
 $("quitBtn").onclick = toMenu;
 // Copy the invite link. Some app views refuse the clipboard: then select it
 // so it can be copied by hand.
@@ -1785,7 +1904,11 @@ $("joinBtn").onclick = joinTyped;
 $("joinLink").addEventListener("keydown", e => { if (e.key === "Enter") joinTyped(); });
 $("relayUrl").addEventListener("change", () => { Net.relayUrl = $("relayUrl").value.trim(); openOwnLobby(); });
 // Opening an invite link in a tab that already has the game open.
-window.addEventListener("hashchange", () => { const c = codeIn(location.hash); if (c && !inGame()) joinLobby(c); });
+window.addEventListener("hashchange", () => {
+  const w = watchIn(location.hash);
+  if (w && !(running && !observe)) { startWatching(w); return; }
+  const c = codeIn(location.hash); if (c && !inGame()) joinLobby(c);
+});
 $("techClose").onclick = () => { $("techScreen").hidden = true; };
 
 // ---- start ----
@@ -1795,6 +1918,8 @@ $("techClose").onclick = () => { $("techScreen").hidden = true; };
     return;
   }
   await loadWasm();
+  initWatchUi();
+  initChatUi();
   initRenderer();
   resizeView();
   // A live map behind the title screen.
@@ -1834,7 +1959,8 @@ $("techClose").onclick = () => { $("techScreen").hidden = true; };
       ? "Playing with friends can't reach claude.ai from this page. Your browser may be blocking it: in Firefox, turn off Enhanced Tracking Protection for this site (the shield in the address bar), or pause your ad blocker here, then reload."
       : "Playing with friends isn't available in this view. You need to be signed in to claude.ai and invited to this game (the owner adds you with Share).", true);
   }
-  const invited = codeIn(location.hash);
-  if (invited && netOk) joinLobby(invited);
+  const invited = codeIn(location.hash), toWatch = watchIn(location.hash);
+  if (toWatch && netOk) startWatching(toWatch);
+  else if (invited && netOk) joinLobby(invited);
   else if (netOk) openOwnLobby($("mpStatus").textContent, $("mpStatus").classList.contains("bad"));
 })();
