@@ -3,24 +3,29 @@
 //! `Game::save` writes the whole simulation into a compact little-endian
 //! byte string, and `Game::load` reads one back. Everything that affects
 //! what happens next is stored (entities with their orders and paths, the
-//! map's blocked/occupied tiles, resources, players, AI brains, timers), so
+//! map's blocked/occupied tiles, deposits, players, AI brains, timers), so
 //! a loaded game carries on exactly as the saved one would have: same
 //! checksum, tick for tick. Scratch space (pathfinder buffers, the spatial
-//! grid) is rebuilt instead, and pending UI events are dropped.
+//! grid) is rebuilt instead, and pending UI events are dropped. Supply and
+//! use of slots aren't stored either: they follow from what exists, and are
+//! recounted on load.
 //!
 //! No serde here (the crate has no dependencies), so it's done by hand with a
 //! tiny writer and reader. The reader never panics on bad input: every read
 //! is bounds-checked and returns `None`, which `load` passes on.
 
 use crate::ai::Ai;
-use crate::defs::{Bonuses, Kind, Res};
+use crate::defs::{Dep, Kind};
 use crate::game::*;
-use crate::map::{Map, Resource};
+use crate::map::{Deposit, Map};
 use crate::path::Goal;
 
 const MAGIC: &[u8; 4] = b"VCSV";
 /// Bump when the layout changes. Old saves are then refused, not misread.
-const VERSION: u32 = 1;
+/// 2: slots replace stockpiles (economy Phase 1).
+/// 3: people, houses, builders (economy Phase 2).
+/// 4: explored ground, eras, the AI's scout (economy Phase 3).
+const VERSION: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -60,21 +65,6 @@ impl W {
     fn kind(&mut self, k: Kind) {
         self.u8(k as u8);
     }
-    fn res(&mut self, r: Res) {
-        self.u8(r as u8);
-    }
-    fn node(&mut self, n: ResNode) {
-        match n {
-            ResNode::Node(i) => {
-                self.u8(0);
-                self.u32(i as u32);
-            }
-            ResNode::Farm(id) => {
-                self.u8(1);
-                self.u32(id);
-            }
-        }
-    }
     fn order(&mut self, o: Order) {
         match o {
             Order::Idle => self.u8(0),
@@ -91,16 +81,12 @@ impl W {
                 self.u32(target);
                 self.bool(auto);
             }
-            Order::Gather(n) => {
-                self.u8(4);
-                self.node(n);
-            }
-            Order::Return(n) => {
-                self.u8(5);
-                self.node(n);
-            }
             Order::Build(id) => {
                 self.u8(6);
+                self.u32(id);
+            }
+            Order::Arrive(id) => {
+                self.u8(7);
                 self.u32(id);
             }
         }
@@ -163,17 +149,6 @@ impl R<'_> {
     fn kind(&mut self) -> Option<Kind> {
         Kind::from_u32(self.u8()? as u32)
     }
-    fn res(&mut self) -> Option<Res> {
-        let v = self.u8()?;
-        (v < 4).then(|| Res::from_idx(v as usize))
-    }
-    fn node(&mut self) -> Option<ResNode> {
-        Some(match self.u8()? {
-            0 => ResNode::Node(self.u32()? as usize),
-            1 => ResNode::Farm(self.u32()?),
-            _ => return None,
-        })
-    }
     fn order(&mut self) -> Option<Order> {
         Some(match self.u8()? {
             0 => Order::Idle,
@@ -186,9 +161,8 @@ impl R<'_> {
                 Order::AttackMove { x, y }
             }
             3 => Order::Attack { target: self.u32()?, auto: self.bool()? },
-            4 => Order::Gather(self.node()?),
-            5 => Order::Return(self.node()?),
             6 => Order::Build(self.u32()?),
+            7 => Order::Arrive(self.u32()?),
             _ => return None,
         })
     }
@@ -225,22 +199,20 @@ impl Game {
         for &b in &m.blocked[..n] {
             w.bool(b);
         }
-        for &v in &m.res_at[..n] {
+        for &v in &m.dep_at[..n] {
             w.i32(v);
         }
         for &v in &m.bld_at[..n] {
             w.i32(v);
         }
         w.0.extend_from_slice(&self.fog[..n]);
+        w.0.extend_from_slice(&self.explored[..n]);
 
-        w.len(self.res.len());
-        for r in &self.res {
-            w.res(r.kind);
-            w.i32(r.tx);
-            w.i32(r.ty);
-            w.f32(r.amount);
-            w.f32(r.max);
-            w.bool(r.alive);
+        w.len(self.deps.len());
+        for d in &self.deps {
+            w.u8(d.kind as u8);
+            w.i32(d.tx);
+            w.i32(d.ty);
         }
 
         w.len(self.ents.len());
@@ -266,12 +238,6 @@ impl Game {
             for v in [e.repath, e.stuck, e.cooldown, e.scan] {
                 w.f32(v);
             }
-            w.res(e.carry_kind);
-            w.f32(e.carry);
-            w.bool(e.last_node.is_some());
-            if let Some(n) = e.last_node {
-                w.node(n);
-            }
             w.f32(e.sfx);
             w.i32(e.tx);
             w.i32(e.ty);
@@ -282,32 +248,22 @@ impl Game {
             }
             w.f32(e.progress);
             w.opt_pt(e.rally);
+            w.u8(e.builders_in);
+            w.u8(e.residents);
+            w.u32(e.goods);
         }
 
         w.len(self.players.len());
         for p in &self.players {
-            for v in p.stock {
-                w.f32(v);
-            }
+            w.u32(p.supply_pct as u32);
             w.u32(p.pop);
-            w.f32(p.upkeep);
-            w.bool(p.starving);
+            w.f32(p.arrive_timer);
+            w.u8(p.era);
             w.bool(p.defeated);
-            w.f32(p.gather_mult);
-            for v in p.bonus.gather {
-                w.f32(v);
-            }
-            w.f32(p.bonus.attack);
-            w.f32(p.bonus.regen);
-            w.f32(p.bonus.gold_per_min);
-            for sec in &p.income {
-                for &v in sec {
-                    w.f32(v);
-                }
-            }
+            w.bool(p.short);
             w.u32(p.trained);
             w.u32(p.lost);
-            w.f32(p.gathered);
+            w.u32(p.built);
         }
 
         w.len(self.proj.len());
@@ -330,16 +286,18 @@ impl Game {
             w.u32(a.wave_size as u32);
             w.opt_pt(a.alarm);
             w.bool(a.wonder_started);
+            w.bool(a.scout.is_some());
+            w.u32(a.scout.unwrap_or(0));
+            w.u8(a.scout_leg);
+            w.bool(a.last_grew);
         }
 
         w.f32(self.time);
         w.u8(self.state);
         w.u8(self.winner);
         w.bool(self.by_wonder);
-        w.u32(self.slot as u32);
-        let (fog_timer, second_timer, alert_cooldown, idle_cursor) = self.save_timers();
+        let (fog_timer, alert_cooldown, idle_cursor) = self.save_timers();
         w.f32(fog_timer);
-        w.f32(second_timer);
         w.f32(alert_cooldown);
         w.u32(idle_cursor);
         w.0
@@ -367,18 +325,19 @@ impl Game {
         let terrain = r.take(n)?.to_vec();
         let shade = r.take(n)?.to_vec();
         let blocked = (0..n).map(|_| r.bool()).collect::<Option<Vec<_>>>()?;
-        let res_at = (0..n).map(|_| r.i32()).collect::<Option<Vec<_>>>()?;
+        let dep_at = (0..n).map(|_| r.i32()).collect::<Option<Vec<_>>>()?;
         let bld_at = (0..n).map(|_| r.i32()).collect::<Option<Vec<_>>>()?;
         let fog = r.take(n)?.to_vec();
-        let map = Map { w: mw, h: mh, terrain, shade, blocked, res_at, bld_at };
+        let explored = r.take(n)?.to_vec();
+        let map = Map { w: mw, h: mh, terrain, shade, blocked, dep_at, bld_at };
 
-        let nres = r.len(18)?;
-        let mut res = Vec::with_capacity(nres);
-        for _ in 0..nres {
-            res.push(Resource { kind: r.res()?, tx: r.i32()?, ty: r.i32()?, amount: r.f32()?, max: r.f32()?, alive: r.bool()? });
+        let ndeps = r.len(9)?;
+        let mut deps = Vec::with_capacity(ndeps);
+        for _ in 0..ndeps {
+            deps.push(Deposit { kind: Dep::from_u8(r.u8()?)?, tx: r.i32()?, ty: r.i32()? });
         }
 
-        let nents = r.len(64)?;
+        let nents = r.len(56)?;
         let mut ents = Vec::with_capacity(nents);
         for i in 0..nents {
             let id = r.u32()?;
@@ -414,9 +373,6 @@ impl Game {
             e.stuck = r.f32()?;
             e.cooldown = r.f32()?;
             e.scan = r.f32()?;
-            e.carry_kind = r.res()?;
-            e.carry = r.f32()?;
-            e.last_node = if r.bool()? { Some(r.node()?) } else { None };
             e.sfx = r.f32()?;
             e.tx = r.i32()?;
             e.ty = r.i32()?;
@@ -425,6 +381,9 @@ impl Game {
             e.queue = (0..nq).map(|_| r.kind()).collect::<Option<Vec<_>>>()?;
             e.progress = r.f32()?;
             e.rally = r.opt_pt()?;
+            e.builders_in = r.u8()?;
+            e.residents = r.u8()?;
+            e.goods = r.u32()?;
             ents.push(e);
         }
 
@@ -434,20 +393,20 @@ impl Game {
         }
         let mut players = Vec::with_capacity(nplayers);
         for _ in 0..nplayers {
-            let stock = [r.f32()?, r.f32()?, r.f32()?, r.f32()?];
-            let pop = r.u32()?;
-            let upkeep = r.f32()?;
-            let starving = r.bool()?;
-            let defeated = r.bool()?;
-            let gather_mult = r.f32()?;
-            let bonus = Bonuses { gather: [r.f32()?, r.f32()?, r.f32()?, r.f32()?], attack: r.f32()?, regen: r.f32()?, gold_per_min: r.f32()? };
-            let mut income = [[0.0; 4]; 60];
-            for sec in income.iter_mut() {
-                for v in sec.iter_mut() {
-                    *v = r.f32()?;
-                }
+            let pct = r.u32()?;
+            if pct > 1000 {
+                return None;
             }
-            players.push(Player { stock, pop, upkeep, starving, defeated, gather_mult, bonus, income, trained: r.u32()?, lost: r.u32()?, gathered: r.f32()? });
+            let mut p = Player::new(pct as u16);
+            p.pop = r.u32()?;
+            p.arrive_timer = r.f32()?;
+            p.era = r.u8()?.min(5);
+            p.defeated = r.bool()?;
+            p.short = r.bool()?;
+            p.trained = r.u32()?;
+            p.lost = r.u32()?;
+            p.built = r.u32()?;
+            players.push(p);
         }
 
         let nproj = r.len(29)?;
@@ -470,6 +429,14 @@ impl Game {
             a.wave_size = r.u32()? as usize;
             a.alarm = r.opt_pt()?;
             a.wonder_started = r.bool()?;
+            let has_scout = r.bool()?;
+            let scout = r.u32()?;
+            a.scout = has_scout.then_some(scout);
+            a.scout_leg = r.u8()?;
+            a.last_grew = r.bool()?;
+            if a.scout.is_some_and(|s| s as usize >= ents.len()) {
+                return None;
+            }
             ais.push(a);
         }
 
@@ -477,32 +444,23 @@ impl Game {
         let state = r.u8()?;
         let winner = r.u8()?;
         let by_wonder = r.bool()?;
-        let slot = r.u32()? as usize;
-        let timers = (r.f32()?, r.f32()?, r.f32()?, r.u32()?);
-        if slot >= 60 || r.at != bytes.len() {
+        let timers = (r.f32()?, r.f32()?, r.u32()?);
+        if r.at != bytes.len() {
             return None;
         }
 
         // References between things (ids, resource indexes) must point at
         // something that exists, or a damaged save could crash the game later.
         let ok_ent = |id: u32| (id as usize) < ents.len();
-        let ok_node = |n: ResNode| match n {
-            ResNode::Node(i) => i < res.len(),
-            ResNode::Farm(id) => ok_ent(id) || id == u32::MAX,
-        };
-        let refs_ok = ents.iter().all(|e| {
-            let order_ok = match e.order {
-                Order::Attack { target, .. } => ok_ent(target),
-                Order::Build(id) => ok_ent(id),
-                Order::Gather(n) | Order::Return(n) => ok_node(n),
-                _ => true,
-            };
-            order_ok && e.last_node.is_none_or(ok_node)
+        let refs_ok = ents.iter().all(|e| match e.order {
+            Order::Attack { target, .. } => ok_ent(target),
+            Order::Build(id) | Order::Arrive(id) => ok_ent(id),
+            _ => true,
         }) && proj.iter().all(|p| ok_ent(p.target) && ok_ent(p.attacker))
-            && map.res_at.iter().all(|&v| v < res.len() as i32)
+            && map.dep_at.iter().all(|&v| v < deps.len() as i32)
             && map.bld_at.iter().all(|&v| v < ents.len() as i32)
-            && map.res_at.iter().chain(&map.bld_at).all(|&v| v >= -1)
-            && res.iter().all(|x| map.inside(x.tx, x.ty));
+            && map.dep_at.iter().chain(&map.bld_at).all(|&v| v >= -1)
+            && deps.iter().all(|x| map.inside(x.tx, x.ty));
         // Positions must be on the map, or indexing the tile grid would fail.
         let on_map = |x: f32, y: f32| x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 && x < mw as f32 && y < mh as f32;
         let places_ok = ents.iter().all(|e| {
@@ -514,12 +472,12 @@ impl Game {
             return None;
         }
 
-        let mut g = Game::from_parts(seed, map, res, ents, players, n_players, proj, fog, ais, local);
+        let mut g = Game::from_parts(seed, map, deps, ents, players, n_players, proj, fog, ais, local);
+        g.explored = explored;
         g.time = time;
         g.state = state;
         g.winner = winner;
         g.by_wonder = by_wonder;
-        g.slot = slot;
         g.load_timers(timers);
         Some(g)
     }
@@ -542,7 +500,12 @@ mod tests {
             }
             let bytes = a.save();
             let mut b = Game::load(&bytes).expect("load");
-            assert_eq!(b.save(), bytes, "save → load → save changed the bytes");
+            let again = b.save();
+            if let Some(i) = (0..bytes.len().min(again.len())).find(|&i| bytes[i] != again[i]) {
+                let n = (a.map.w * a.map.h) as usize;
+                panic!("save → load → save changed byte {i} of {} (map tiles {n}; fog ends at {})", bytes.len(), 22 + n * 11);
+            }
+            assert_eq!(again, bytes, "save → load → save changed the length");
             for t in 0..20 * 60 * 4 {
                 a.tick();
                 b.tick();

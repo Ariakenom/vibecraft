@@ -42,8 +42,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .res .chip svg { align-self: center; }
 .res .chip:hover, .res .chip:focus-visible { background: #ffffff10; }
 .res .chip small { font-size: 12px; font-weight: 500; color: var(--muted); }
-.res .chip small.pos { color: var(--good); }
-.res .chip small.neg { color: var(--bad); }
+.res .chip.over b { color: var(--bad); }
 .res .era { background: transparent; border: 1px solid var(--line); border-radius: 3px; padding: 1px 9px; font: 400 14px var(--display); letter-spacing: .04em; color: var(--bronze); cursor: pointer; }
 .res .era:hover { border-color: var(--bronze); }
 .res .foe-wonder { color: var(--bad); font-weight: 700; }
@@ -125,6 +124,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .cost { display: flex; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .cost span { display: inline-flex; align-items: center; gap: 3px; }
 .cost .short { color: var(--bad); }
+.cost .free { color: var(--muted); }
+.cost.inline { display: inline-flex; gap: 8px; vertical-align: middle; margin-left: 4px; }
+.statline.bad { color: var(--bad); }
 
 /* ---- overlays ---- */
 .overlay { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(ellipse at center, #15120dcc, #0b0907f2); overflow: auto; padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
@@ -163,8 +165,13 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .saves .empty { justify-content: center; color: var(--muted); background: transparent; border-style: dashed; }
 
 /* tech tree */
-.tech { width: min(1080px, 100%); }
-#techBody { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.tech { width: min(1240px, 100%); }
+#techBody { display: grid; grid-template-columns: minmax(0, 2.4fr) repeat(5, minmax(0, 1fr)); gap: 12px; }
+.era-list { display: grid; gap: 8px; align-content: start; }
+.era-col.wide .era-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.era-house { font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 6px; display: grid; gap: 3px; }
+.era-house b { color: var(--ink); font-weight: 600; }
+.tcard .cost.inline { margin-left: 0; gap: 8px; }
 .era-col { display: grid; gap: 8px; align-content: start; min-width: 0; }
 .era-col h3 { margin: 0 0 2px; font: 400 15px var(--display); color: var(--muted); letter-spacing: .04em; }
 .era-col.reached h3 { color: var(--bronze); }
@@ -180,7 +187,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .tcard.open .state { color: var(--bronze); }
 .tcard.locked { opacity: .6; }
 .tcard.locked canvas { filter: grayscale(1); }
-@media (max-width: 900px) { #techBody { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) { #techBody { grid-template-columns: repeat(2, minmax(0, 1fr)); } .era-col.wide { grid-column: 1 / -1; } }
 @media (max-width: 480px) { #techBody { grid-template-columns: minmax(0, 1fr); } }
 
 @media (max-width: 760px) {
@@ -385,7 +392,7 @@ body.observing #hint { display: none; }
     <section id="scoreboard" hidden aria-label="Players">
       <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
       <table>
-        <thead><tr><th>Player</th><th title="Living units">People</th><th title="Soldiers">Army</th><th class="r">Food</th><th class="r">Wood</th><th class="r">Stone</th><th class="r">Gold</th></tr></thead>
+        <thead><tr><th>Player</th><th title="At home, plus builders and soldiers">People</th><th title="Soldiers">Army</th><th class="r" title="Wood made">Wood</th><th class="r" title="Stone made">Stone</th><th class="r" title="Grain made">Grain</th><th class="r" title="Horses made">Horses</th></tr></thead>
         <tbody id="sbBody"></tbody>
       </table>
     </section>
@@ -493,7 +500,7 @@ body.observing #hint { display: none; }
         <h1 style="font-size: 30px">Tech tree</h1>
         <button class="ghost" id="techClose">Close</button>
       </div>
-      <p class="note">Each building unlocks the next. There are no upgrades to research: build it, and its bonus applies to your whole civilization. Finish the Wonder to win without conquering anyone.</p>
+      <p class="note">Each building unlocks the next; nothing is researched. Costs are slots, held while the thing exists, and every unit is also a person. Later eras come as your houses grow: each era's house holds more kinds of goods. Finish the Wonder to win without conquering anyone.</p>
       <div id="techBody"></div>
     </div>
   </div>

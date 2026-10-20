@@ -38,6 +38,26 @@ cargo tests listed under it.
 **Goal:** resources become borrowed slots. Citizens stop gathering but keep
 building (they become builders in Phase 2). Ancient content only.
 
+**Status: done** (October 2026, branch `economy`). Where it differs from
+the steps below:
+- Supply and use are recounted **every tick**, not every second. It's cheap
+  (a pass over the entities) and makes slots free the tick after something
+  dies with no extra bookkeeping. Phase 2's heavier steps (workers, house
+  goods) can still run once a second.
+- **Lumber camps are free.** With every wood slot held and lumber camps
+  costing wood, a player (or the AI) was stuck for good: nothing makes
+  wood, and there's no demolish. A free lumber camp always gets you out.
+- **Unsupplied units take damage** (1% of max health a second, newest
+  first), done here rather than in Phase 4: it replaces starvation.
+- The Capitol makes 4 wood, 2 stone, 4 grain; players start with 3
+  citizens (each holds 1 grain), so one more can be trained at once.
+- Kinds are numbered units 0–63, buildings 64+. Error codes: `Short(r)` is
+  1000 + r, `Locked(k)` 2000 + k, `NoDeposit(d)` 20 + d.
+- Deposits: forest, stone, fertile land (fruit bushes), horses and game,
+  plus water for fishing huts. The AI skips a project it can't place
+  (no spot) and moves on, so it never stalls waiting for it.
+- Save `VERSION` 2, `NET.PROTOCOL` 8.
+
 `src/defs.rs`
 - Replace `Res` (4 kinds) with a resource enum of about 30 kinds (design,
   *Resources*). For this phase only wood, stone, grain, fish, meat, fruit
@@ -106,6 +126,31 @@ the AI does too.
 
 **Goal:** the population system. Citizens go away.
 
+**Status: done** (October 2026, branch `economy`). Where it differs from
+the steps below:
+- The whole resolution order runs **every tick**, like Phase 1's slots.
+  Saved: house residents and goods, `builders_in`, each player's arrival
+  timer; everything else is recounted.
+- House goods come **last**: building and training check `supply − used`
+  only, and houses share what's left (`Player::spare`). A new building that
+  needs grain takes it from the furthest house.
+- Start: the Capitol makes 2 grain **and 2 fruit**, so both starting huts
+  get 2 goods (8 beds) for the 6 residents and 2 builders.
+- Builders needed: 1 for everything except the Wonder (3). The Wonder now
+  rises in 240 s once its builders are in. A hut costs 1 wood.
+- Cancelling training puts the person in the nearest house with a free
+  bed (not necessarily the one they came from).
+- **Demolish** (command 9, Del pressed twice, not the Capitol): added
+  because a player could get stuck with every bed full, everyone working
+  and no free resident to crew the food producer that would add beds.
+- The arrival timer ticks every 10 s whether or not a bed is free.
+- The AI keeps two residents free (builders and soldiers come from beyond
+  them) and only builds a producer it can crew; otherwise it stalled.
+- Hotkeys: Q hut, E farm, R lumber camp, T quarry, Y fishing hut, U
+  hunting lodge, I orchard, O pasture, F barracks, G range, C stable, V
+  tower, B wonder; `.` idle builder.
+- Save `VERSION` 3, `NET.PROTOCOL` 9.
+
 `src/defs.rs`
 - Kinds: `Hut` (house, tier 0), `Builder` (unit, trained at the Capitol).
   Each building gets `builders_needed: u8` and `workers: u8`.
@@ -168,6 +213,30 @@ food producers, and losing soldiers visibly slows the economy.
 
 **Goal:** the new Ancient game is complete and replaces the old one on `main`.
 
+**Status: done and merged to `main`** (October 2026). What came out of it:
+- **AI fog:** an *explored* bit set per player (`Game::explored`, one bit
+  per player per tile, saved), updated with the fog. The AI only builds on
+  explored ground and uses deposits it has seen; its first soldier scouts a
+  round of the map. It still sees enemy units, as before.
+- **Crews: house goods first.** Producers of house goods get their workers
+  before the rest. In id order alone, a big build (a Wonder taking food)
+  set off a spiral: people left, the newest producers (food built for
+  growth) lost their crews, so fewer beds, so more people left, down to
+  zero. Now losing people idles lumber camps first.
+- **Loads only count.** `Game::recount` works out supply, use, beds and so
+  on after a load without settling houses or dealing damage; the next tick
+  does that, exactly as in the saved game. (Before, save → load → save
+  could change houses' goods.)
+- The AI keeps two residents free, trains builders from the last one only
+  when a foundation waits with none, alternates growing beds with its build
+  plan, releases (demolishes) producers whose output nobody uses when
+  everyone is at work, and caps attack waves at what its people can field.
+- **Wonder cost:** 8 wood, 10 stone, 2 each of grain, meat, fruit and
+  horses. Fish was dropped: not every map has water near a base.
+- Tests: `normal_ais_play_a_game_to_the_end` (three seeds, an hour at
+  most; they finish in 25–55 minutes), and `watch_the_ai` to watch one.
+- Save `VERSION` 4, `NET.PROTOCOL` 10.
+
 `src/ai.rs` (largely a rewrite)
 - An economy loop: keep a Builder or two in stock; keep beds ahead of
   people; for the scarcest house good, build its producer; keep workers
@@ -206,9 +275,9 @@ plays out, and Patrik has played it. Merge to `main`.
   mine nearby if we want that). Event `EraReached` with fanfare and toast.
 - Converters: `consumes` in `recount_slots` step 5, with the shortage rule
   (newest stop first).
-- Unsupplied units (design, *Shortages*): flag in the entity, half speed,
-  no attacks, icon. Behind a constant so it can be switched off if it
-  plays badly.
+- Unsupplied units (design, *Shortages*): done early, in Phase 1, since
+  it replaces starvation: newest units over a shortage lose health, with an
+  icon. The rate is a constant in `defs.rs` (0 switches it off).
 - Damage multipliers by **class** instead of by kind (`damage_mult`).
 - Medieval content: wool, iron, brick, bread, clothes, beer and their
   buildings; Swordsman, Crossbowman, Knight, Trebuchet; Siege workshop.
@@ -244,8 +313,8 @@ markets and trade; deciding the Wonder's fate.
 
 ## Open questions to settle while building
 
-1. Unsupplied units: half speed and no attacks, or something else?
-   Decide in Phase 4 playtests.
+1. Unsupplied units: decided, they take damage (Phase 1). Tune the rate
+   in playtests.
 2. AI fog: real per-AI fog, or an explored bit set? Phase 3.
 3. Map size for 90-minute games: Phase 6 measurement.
 4. Does a building under construction hold all its slots from the start

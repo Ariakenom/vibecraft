@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 7,    // 7: surrender (command 8), spectators
+  PROTOCOL: 10,   // 10: the Phase 3 AI and crews (9: people, demolish; 8: slots; 7: surrender)
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,

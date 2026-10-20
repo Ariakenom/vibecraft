@@ -34,7 +34,7 @@ screen. Friends on your network use your computer's address, e.g.
 | src/defs.rs          | Unit and building kinds, stats, costs, tech requirements, bonuses, damage table |
 | src/map.rs           | Tile map and the symmetric map generator                        |
 | src/path.rs          | A* pathfinding                                                  |
-| src/game.rs          | The simulation: orders, movement, gathering, building, combat, food, fog, victory |
+| src/game.rs          | The simulation: orders, movement, slots, building, combat, fog, victory |
 | src/ai.rs            | The computer opponent                                           |
 | src/save.rs          | Saving and loading: the whole game to bytes and back            |
 | src/lib.rs           | The Rust/JavaScript boundary: exported functions, render buffers, the two multiplayer copies |
@@ -124,23 +124,37 @@ loaded games misbehave.
 
 ## Common changes
 
-**Tune a unit or building.** Stats and costs are the `static … Stats` lines
-in `src/defs.rs`. Tech requirements are `Kind::requires`; bonuses are
-`Bonuses::from_buildings`.
+**Tune a unit or building.** Stats, slot costs, what producers make, their
+workers and the builders a foundation needs are the `static … Stats` lines
+in `src/defs.rs`. Tech requirements are `Kind::requires`; a kind's era is
+`Kind::era`. The population numbers (arrival interval, beds per good, goods
+per house tier) are constants there too, and so is `UNSUPPLIED_DAMAGE`.
+Units are kinds 0–63, buildings 64 and up.
 
 **Add a building or unit kind.**
 - Rust:
-  - add it to `Kind` and `Kind::from_u32` in `src/defs.rs`;
-  - give it stats in `Kind::stats`, its requirements, and (for buildings)
-    a place in `BUILDABLE`;
-  - if the AI should build it, add it to its plan in `src/ai.rs`.
+  - add it to `Kind` and `Kind::ALL` in `src/defs.rs` (`ALL`'s order is
+    the tech tree's);
+  - give it stats in `Kind::stats`, its requirements and era, and (for
+    buildings) a place in `BUILDABLE`;
+  - if the AI should build it, add it to `PLAN` in `src/ai.rs`.
 - JS:
-  - add it to `K`, `NAMES` and `DESC` in `main.js`;
-  - for buildings, to `BUILD_MENU` (hotkey) and `ERAS` (tech tree column);
+  - add it to `K`, `NAMES` and `DESC` in `main.js`, and for buildings to
+    `BUILD_MENU` (hotkey). The tech tree builds itself from Rust's data;
   - give it a model: in `assets/models.py` (rebuild `web/models.glb`; see
     `assets/README.md`), and a fallback in `unitModel` or `buildingModel` in
     `render3d.js`.
 - Saves store kinds as numbers, so a new kind doesn't need a new `VERSION`.
+
+**Add a resource.** Add it to `Res` and `Res::ALL` in `src/defs.rs` with its
+era (and `is_house_good` if houses want it), and its name to `RES_NAMES` and
+an icon to `RES_ICON` in `main.js`. Players' slot arrays grow with `N_RES`.
+
+**The economy, in one place.** `Game::resolve` (`src/game.rs`) recounts
+everything each tick in the design's fixed order: crews (house goods'
+producers first), supply, use, unsupplied units, house goods nearest the
+Capitol first, residents who no longer fit. Only houses' residents and
+goods are saved; `Game::recount` works out the rest after a load.
 
 **Add a command.**
 - Add a `Command` variant and its handling in `Game::apply` (`src/game.rs`),
@@ -155,11 +169,19 @@ players, include it in `Game::checksum`.
 
 ## Testing
 
-    cargo test --release      # the simulation: saves, surrender, views
+    cargo test --release      # the simulation: saves, surrender, views, slots, people, a whole AI game
     ./build.sh
     node test/wasm.mjs        # two copies stay identical; copy/restore; timings
     node test/relay.cjs       # the relay: allowed pages, limits, heartbeat, bad messages
     test/browser/run.sh       # headless Chromium: replays, surrender, spectators (see the script for setup)
+
+To watch two computer players play, minute by minute:
+
+    VC_SEED=7 VC_MINUTES=60 VC_EVERY=5 cargo test --release watch_the_ai -- --ignored --nocapture
+
+(also `VC_DIFF` 0–2 and `VC_PLAYERS` 2–4). It prints what each has and its
+people, beds and slots: the quickest way to see whether an economy change
+still plays.
 
 The browser tests check the things that matter by checksum: a replay at
 any tick is the game at that tick, and a spectator's copy is the players'
@@ -430,22 +452,37 @@ versions don't play together.
   for a Wonder too, on Normal and Hard. Lose your Capitol and everything you
   own falls with it.
 - **Progress comes from buildings, not research.** Each building unlocks
-  others and gives a lasting bonus. Press K for the tech tree.
-- **No population cap.** Every unit eats food each minute; if the granary
-  empties, your units slowly lose health. One citizen per farm.
+  others. Press K for the tech tree. Six eras are planned (the design is
+  `docs/design/economy-and-eras.md`, the work plan
+  `docs/plan/economy-and-eras-plan.md`); so far the game is the Ancient era.
+- **Resources are slots.** Nothing is gathered or stockpiled:
+  producers make slots (a lumber camp by a forest makes 4 wood), and
+  everything you have holds some while it exists, giving them back when
+  it's gone. Lose a producer and you hold more than you make: your newest
+  units that need it lose health until it fits again.
+- **People live in huts.** A hut gets 2 beds for each different food it
+  receives (up to 3 kinds). While there's a free bed, a newcomer arrives
+  at the Capitol every 10 seconds. People at home work the producers; every
+  builder and soldier is someone who left home, and holds a bed while
+  alive. Builders are used up at their foundation, which then rises by
+  itself. Everyone busy and every bed full? Demolish something.
+- **The computer** explores before it builds: it uses only deposits it has
+  seen, so it sends its first soldier round the map. Easy, Normal and Hard
+  differ in how much of its people it puts under arms, how soon it attacks,
+  whether it builds a Wonder, and its supply (80%, 100%, 130%).
 - **Maps:** two players get an 80×80 map with 180° symmetry; three or four
   get 96×96 with four-way symmetry, so every start is the same, just turned.
 
 **Controls.**
 - **Camera:** WASD, arrows or screen edges move it; the wheel zooms;
   middle-drag rotates and tilts.
-- **Build:** Q farm, E settlement, R barracks, T granary, Y sawmill,
-  U range, I stonemason, O tower, F smithy, G stable, C market, V temple,
-  B wonder.
+- **Build:** Q hut, E farm, R lumber camp, T quarry, Y fishing hut,
+  U hunting lodge, I orchard, O pasture, F barracks, G range, C stable,
+  V tower, B wonder. Del (twice) demolishes the selected buildings.
 - **Train:** Q.
 - **Other keys:**
   - Z attack-move, X stop
-  - H home, `.` idle citizen
+  - H home, `.` idle builder
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, copy a watch link for spectators

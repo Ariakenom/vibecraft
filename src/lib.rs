@@ -13,9 +13,8 @@ mod map;
 mod path;
 mod save;
 
-use defs::Kind;
-use defs::Res;
-use game::{Command, Game, Intent, Order, ResNode};
+use defs::{Kind, Res};
+use game::{Command, Game, Intent, Order};
 use std::cell::RefCell;
 
 /// Floats per entity in the render buffer. Keep in sync with `ENT_STRIDE` in the JS.
@@ -95,16 +94,22 @@ pub extern "C" fn render() -> u32 {
             if e.hit_flash > 0.0 {
                 flags |= 8;
             }
+            if e.unsupplied && e.owner == g.local {
+                flags |= 16;
+            }
             let progress = if e.built < 1.0 { e.built } else { e.progress };
             let order = match e.order {
                 Order::Idle => 0,
                 Order::Move { .. } => 1,
                 Order::AttackMove { .. } => 2,
                 Order::Attack { .. } => 3,
-                Order::Gather(_) => 4,
-                Order::Return(_) => 5,
                 Order::Build(_) => 6,
+                Order::Arrive(_) => 7,
             };
+            // A producer short of workers makes nothing: the page shows it idle.
+            if e.built >= 1.0 && !e.crewed && e.owner == g.local {
+                flags |= 32;
+            }
             let (rx, ry) = e.rally.unwrap_or((f32::NAN, f32::NAN));
             w.ents.extend_from_slice(&[
                 e.id as f32,
@@ -119,19 +124,21 @@ pub extern "C" fn render() -> u32 {
                 flags as f32,
                 progress,
                 e.anim as u32 as f32,
-                e.carry_kind as u32 as f32,
-                e.carry,
+                e.residents as f32, // houses: who lives there...
+                e.beds() as f32,    // ...and how many beds it has
                 e.facing,
                 order as f32,
                 rx,
                 ry,
             ]);
         }
+        // Deposits on explored ground: [tx, ty, kind (defs::Dep), 1, 1]. The
+        // last two were a resource's amount and maximum; deposits never run out.
         w.res.clear();
-        for r in g.res.iter().filter(|r| r.alive) {
-            let i = g.map.idx(r.tx, r.ty);
+        for d in g.deps.iter() {
+            let i = g.map.idx(d.tx, d.ty);
             if g.fog[i] > 0 {
-                w.res.extend_from_slice(&[r.tx as f32, r.ty as f32, r.kind as u32 as f32, r.amount, r.max]);
+                w.res.extend_from_slice(&[d.tx as f32, d.ty as f32, d.kind as u32 as f32, 1.0, 1.0]);
             }
         }
         w.proj.clear();
@@ -187,21 +194,8 @@ pub extern "C" fn fog_ptr() -> *const u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn stock(r: u32) -> f32 {
-    game(|g| g.players[g.local as usize].stock[(r as usize).min(3)])
-}
-#[unsafe(no_mangle)]
 pub extern "C" fn pop() -> u32 {
     game(|g| g.players[g.local as usize].pop)
-}
-/// Food eaten per minute by all the player's units.
-#[unsafe(no_mangle)]
-pub extern "C" fn upkeep() -> f32 {
-    game(|g| g.players[g.local as usize].upkeep)
-}
-#[unsafe(no_mangle)]
-pub extern "C" fn starving() -> u32 {
-    game(|g| g.players[g.local as usize].starving as u32)
 }
 #[unsafe(no_mangle)]
 /// 0 playing; from the local player's point of view: 1 won by conquest,
@@ -222,7 +216,7 @@ pub extern "C" fn game_time() -> f32 {
     game(|g| g.time)
 }
 
-/// End-of-game numbers. which: 0 trained, 1 lost, 2 gathered.
+/// End-of-game numbers. which: 0 trained, 1 lost, 2 buildings built.
 #[unsafe(no_mangle)]
 pub extern "C" fn player_stat(player: u32, which: u32) -> f32 {
     game(|g| {
@@ -230,7 +224,7 @@ pub extern "C" fn player_stat(player: u32, which: u32) -> f32 {
         match which {
             0 => p.trained as f32,
             1 => p.lost as f32,
-            _ => p.gathered,
+            _ => p.built as f32,
         }
     })
 }
@@ -284,7 +278,7 @@ pub extern "C" fn select_ids(n: u32) {
         w.game.clear_selection();
         for &id in w.scratch.iter().take(n as usize) {
             if let Some(e) = w.game.ents.get_mut(id as usize) {
-                if e.alive && e.owner == w.game.local {
+                if e.alive && e.owner == w.game.local && e.kind != Kind::Arrival {
                     e.selected = true;
                 }
             }
@@ -292,8 +286,8 @@ pub extern "C" fn select_ids(n: u32) {
     })
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn idle_citizen() -> i32 {
-    game(|g| g.select_idle_citizen())
+pub extern "C" fn idle_builder() -> i32 {
+    game(|g| g.select_idle_builder())
 }
 
 /// Read `n` entity ids that JavaScript wrote into the scratch buffer.
@@ -305,7 +299,8 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 /// scratch buffer first. `code`: 1 right-click, 2 attack-move, 3 stop,
 /// 4 train (`arg` = unit kind), 5 cancel training, 6 place a building
 /// (`arg` = kind, x/y = tile), 7 the computer takes over player `arg`
-/// (sent with owner 0 by the multiplayer host when someone leaves).
+/// (sent with owner 0 by the multiplayer host when someone leaves), 8
+/// surrender, 9 demolish the buildings in the scratch buffer.
 /// Returns 0 or a `CmdError` code.
 ///
 /// In single player the page calls this at once. In multiplayer it calls
@@ -338,6 +333,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
                 None => return 12,
             },
             8 => Command::Surrender,
+            9 => Command::Demolish { ids },
             _ => return 0,
         };
         match w.game.apply(owner as u8, cmd) {
@@ -348,8 +344,8 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
 }
 
 /// What right-clicking (x, y) would do with the `n` ids in the scratch
-/// buffer, for the mouse cursor: 0 nothing, 1 move, 2 attack, 3 forage,
-/// 4 build, 5 rally, 6 chop wood, 7 mine, 8 drop off, 9 farm.
+/// buffer, for the mouse cursor: 0 nothing, 1 move, 2 attack, 4 build,
+/// 5 rally. (3 and 6–9 were gathering.)
 #[unsafe(no_mangle)]
 pub extern "C" fn intent(n: u32, x: f32, y: f32) -> u32 {
     with(|w| {
@@ -361,13 +357,6 @@ pub extern "C" fn intent(n: u32, x: f32, y: f32) -> u32 {
             Intent::Attack(_) => 2,
             Intent::Build(_) => 4,
             Intent::Rally => 5,
-            Intent::DropOff => 8,
-            Intent::Gather(ResNode::Farm(_)) => 9,
-            Intent::Gather(node) => match g.node_kind(node) {
-                Res::Food => 3,
-                Res::Wood => 6,
-                _ => 7,
-            },
         }
     })
 }
@@ -382,6 +371,14 @@ pub extern "C" fn can_place(kind: u32, tx: i32, ty: i32) -> u32 {
         let explored = (ty..ty + s).all(|y| (tx..tx + s).all(|x| g.map.inside(x, y) && g.fog[g.map.idx(x, y)] > 0));
         (explored && g.can_place(kind, tx, ty, g.local, 0)) as u32
     })
+}
+
+/// Like `can_place`, but without the deposit check: tells "wrong spot" from
+/// "not next to its deposit" in the message the player sees.
+#[unsafe(no_mangle)]
+pub extern "C" fn can_place_ignoring_deposit(kind: u32, tx: i32, ty: i32) -> u32 {
+    let Some(kind) = Kind::from_u32(kind) else { return 0 };
+    game(|g| g.spot_free(kind, tx, ty, g.local, 0) as u32)
 }
 
 /// Make this a two-player game seen through player `local`'s eyes (1 or 2).
@@ -468,21 +465,38 @@ pub extern "C" fn checksum() -> u32 {
 pub extern "C" fn debug_count(owner: u32, kind: u32) -> u32 {
     game(|g| g.ents.iter().filter(|e| e.alive && e.owner as u32 == owner && e.kind as u32 == kind).count() as u32)
 }
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_stock(owner: u32, r: u32) -> f32 {
-    game(|g| g.players[(owner as usize).min(g.n_players as usize)].stock[(r as usize).min(3)])
-}
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_idle(owner: u32) -> u32 {
-    game(|g| g.ents.iter().filter(|e| e.alive && e.owner as u32 == owner && !e.is_building() && e.order == Order::Idle).count() as u32)
-}
-
 /// Unit/building data for the UI, so costs live in one place (defs.rs).
-#[unsafe(no_mangle)]
-pub extern "C" fn kind_cost(kind: u32, r: u32) -> u32 {
-    Kind::from_u32(kind).map_or(0, |k| k.stats().cost[(r as usize).min(3)])
+/// A kind's slot lists: `which` 0 cost, 1 what it produces, 2 what it
+/// consumes. `kind_slots_n` says how many entries; `kind_slots_res` and
+/// `kind_slots_amt` read the n-th.
+fn slots_of(kind: u32, which: u32) -> defs::Slots {
+    let Some(k) = Kind::from_u32(kind) else { return &[] };
+    let s = k.stats();
+    match which {
+        0 => s.cost,
+        1 => s.produces,
+        _ => s.consumes,
+    }
 }
-/// which: 0 hp, 1 attack, 2 range, 3 speed, 4 sight, 5 time, 6 size, 7 upkeep, 8 cooldown
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_slots_n(kind: u32, which: u32) -> u32 {
+    slots_of(kind, which).len() as u32
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_slots_res(kind: u32, which: u32, n: u32) -> i32 {
+    slots_of(kind, which).get(n as usize).map_or(-1, |&(r, _)| r as i32)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_slots_amt(kind: u32, which: u32, n: u32) -> u32 {
+    slots_of(kind, which).get(n as usize).map_or(0, |&(_, k)| k as u32)
+}
+/// The deposit a kind has to be built next to (`defs::Dep`), or -1.
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_deposit(kind: u32) -> i32 {
+    Kind::from_u32(kind).and_then(|k| k.stats().needs_deposit).map_or(-1, |d| d as i32)
+}
+/// which: 0 hp, 1 attack, 2 range, 3 speed, 4 sight, 5 time, 6 size, 7 workers, 8 cooldown,
+/// 9 builders needed, 10 house tier (-1 if not a house)
 #[unsafe(no_mangle)]
 pub extern "C" fn kind_stat(kind: u32, which: u32) -> f32 {
     let Some(k) = Kind::from_u32(kind) else { return 0.0 };
@@ -495,7 +509,9 @@ pub extern "C" fn kind_stat(kind: u32, which: u32) -> f32 {
         4 => s.sight,
         5 => s.time,
         6 => s.size as f32,
-        7 => s.upkeep,
+        7 => s.workers as f32,
+        9 => s.builders as f32,
+        10 => k.house_tier().map_or(-1.0, |t| t as f32),
         _ => s.cooldown,
     }
 }
@@ -503,58 +519,131 @@ pub extern "C" fn kind_stat(kind: u32, which: u32) -> f32 {
 pub extern "C" fn kind_radius(kind: u32) -> f32 {
     Kind::from_u32(kind).map_or(0.3, |k| k.radius())
 }
-/// Debug: citizens of `owner` gathering resource `r` (4 = idle, 5 = building).
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_workers(owner: u32, r: u32) -> u32 {
-    game(|g| {
-        g.ents
-            .iter()
-            .filter(|e| e.alive && e.owner as u32 == owner && e.kind == Kind::Citizen)
-            .filter(|e| match (e.order, r) {
-                (Order::Gather(n) | Order::Return(n), r) if r < 4 => g.node_kind(n) as u32 == r,
-                (Order::Idle, 4) => true,
-                (Order::Build(_), 5) => true,
-                _ => false,
-            })
-            .count() as u32
-    })
-}
 
 // ---------------------------------------------------------------------------
-// Economy and tech tree, for the HUD
+// Slots and tech tree, for the HUD
 
-/// The player's average income of resource `r` per minute, over the last minute.
+/// How many kinds of resource there are.
 #[unsafe(no_mangle)]
-pub extern "C" fn income(r: u32) -> f32 {
-    game(|g| g.players[g.local as usize].income_per_min((r as usize).min(3), g.time))
+pub extern "C" fn n_res() -> u32 {
+    defs::N_RES as u32
 }
-/// How many of the player's citizens are gathering resource `r`.
+/// The era resource `r` first matters in (0 Ancient … 5 Atomic).
 #[unsafe(no_mangle)]
-pub extern "C" fn workers(r: u32) -> u32 {
-    debug_workers(game(|g| g.local as u32), r)
+pub extern "C" fn res_era(r: u32) -> u32 {
+    Res::from_idx(r as usize).map_or(0, |r| r.era() as u32)
+}
+/// The local player's supply of resource `r`: slots their producers make.
+#[unsafe(no_mangle)]
+pub extern "C" fn supply(r: u32) -> u32 {
+    player_supply(game(|g| g.local as u32), r)
+}
+/// The local player's use of resource `r`: slots their things hold.
+#[unsafe(no_mangle)]
+pub extern "C" fn used(r: u32) -> u32 {
+    player_used(game(|g| g.local as u32), r)
+}
+/// Player `p`'s supply of resource `r` (spectators' scoreboard too).
+#[unsafe(no_mangle)]
+pub extern "C" fn player_supply(p: u32, r: u32) -> u32 {
+    game(|g| g.players.get(p as usize).zip(Res::from_idx(r as usize)).map_or(0, |(pl, r)| pl.supply[r.idx()] as u32))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn player_used(p: u32, r: u32) -> u32 {
+    game(|g| g.players.get(p as usize).zip(Res::from_idx(r as usize)).map_or(0, |(pl, r)| pl.used[r.idx()] as u32))
+}
+/// The first resource the local player lacks free slots of for `kind`, or -1.
+#[unsafe(no_mangle)]
+pub extern "C" fn short_of(kind: u32) -> i32 {
+    let Some(k) = Kind::from_u32(kind) else { return -1 };
+    game(|g| g.short_of(g.local, k).map_or(-1, |r| r as i32))
+}
+/// The local player's people: `which` 0 residents at home, 1 beds, 2 units
+/// (each holds a bed; queued ones too), 3 residents at work, 4 newcomers on
+/// their way.
+#[unsafe(no_mangle)]
+pub extern "C" fn people(which: u32) -> u32 {
+    player_people(game(|g| g.local as u32), which)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn player_people(p: u32, which: u32) -> u32 {
+    game(|g| {
+        g.players.get(p as usize).map_or(0, |pl| match which {
+            0 => pl.residents,
+            1 => pl.beds,
+            2 => pl.units,
+            3 => pl.working,
+            _ => pl.arriving,
+        })
+    })
+}
+/// Slots of resource `r` the local player's houses hold.
+#[unsafe(no_mangle)]
+pub extern "C" fn housed(r: u32) -> u32 {
+    game(|g| Res::from_idx(r as usize).map_or(0, |r| g.players[g.local as usize].housed[r.idx()] as u32))
+}
+/// The goods a house gets, one bit per resource.
+#[unsafe(no_mangle)]
+pub extern "C" fn house_goods(id: u32) -> u32 {
+    game(|g| g.ents.get(id as usize).map_or(0, |e| e.goods))
+}
+/// Builders who have reached a foundation so far.
+#[unsafe(no_mangle)]
+pub extern "C" fn builders_in(id: u32) -> u32 {
+    game(|g| g.ents.get(id as usize).map_or(0, |e| e.builders_in as u32))
+}
+/// 1 if resource `r` is something houses want.
+#[unsafe(no_mangle)]
+pub extern "C" fn is_house_good(r: u32) -> u32 {
+    Res::from_idx(r as usize).is_some_and(|r| r.is_house_good()) as u32
+}
+/// The most goods a house of `tier` can use.
+#[unsafe(no_mangle)]
+pub extern "C" fn house_max_goods(tier: u32) -> u32 {
+    defs::house_max_goods(tier.min(5) as u8) as u32
+}
+
+/// How many of the local player's units are unsupplied right now.
+#[unsafe(no_mangle)]
+pub extern "C" fn unsupplied() -> u32 {
+    game(|g| g.ents.iter().filter(|e| e.alive && e.owner == g.local && e.unsupplied).count() as u32)
 }
 /// How many living units/buildings of a kind the player has.
 #[unsafe(no_mangle)]
 pub extern "C" fn count(kind: u32) -> u32 {
     debug_count(game(|g| g.local as u32), kind)
 }
-/// The player's gathering multiplier from buildings, for resource `r`.
+/// How many *finished* buildings of a kind the player has.
 #[unsafe(no_mangle)]
-pub extern "C" fn gather_bonus(r: u32) -> f32 {
-    game(|g| g.players[g.local as usize].bonus.gather[(r as usize).min(3)])
+pub extern "C" fn count_built(kind: u32) -> u32 {
+    game(|g| g.ents.iter().filter(|e| e.alive && e.owner == g.local && e.kind as u32 == kind && e.built >= 1.0).count() as u32)
 }
-/// 0 attack multiplier, 1 regen per second, 2 gold per minute.
+/// The kinds, for building the tech tree from: `kind_count` of them,
+/// `kind_at(n)` is the n-th (newcomers left out: nobody makes them).
 #[unsafe(no_mangle)]
-pub extern "C" fn bonus(which: u32) -> f32 {
-    game(|g| {
-        let b = g.players[g.local as usize].bonus;
-        match which {
-            0 => b.attack,
-            1 => b.regen,
-            _ => b.gold_per_min,
-        }
-    })
+pub extern "C" fn kind_count() -> u32 {
+    Kind::ALL.iter().filter(|&&k| k != Kind::Arrival).count() as u32
 }
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_at(n: u32) -> i32 {
+    Kind::ALL.iter().filter(|&&k| k != Kind::Arrival).nth(n as usize).map_or(-1, |&k| k as i32)
+}
+/// The era a kind belongs to (0 Ancient … 5 Atomic).
+#[unsafe(no_mangle)]
+pub extern "C" fn kind_era(kind: u32) -> u32 {
+    Kind::from_u32(kind).map_or(0, |k| k.era() as u32)
+}
+/// The era player `p` has reached (0 Ancient … 5 Atomic).
+#[unsafe(no_mangle)]
+pub extern "C" fn player_era(p: u32) -> u32 {
+    game(|g| g.players.get(p as usize).map_or(0, |pl| pl.era as u32))
+}
+/// The era the local player has reached.
+#[unsafe(no_mangle)]
+pub extern "C" fn era() -> u32 {
+    player_era(game(|g| g.local as u32))
+}
+
 /// The n-th building `kind` requires, or -1 when there are no more.
 #[unsafe(no_mangle)]
 pub extern "C" fn requires(kind: u32, n: u32) -> i32 {
@@ -594,11 +683,22 @@ pub extern "C" fn debug_heal_player() {
     })
 }
 
-/// How many resource nodes the map has in total (explored or not). The 3D
+/// Debug/testing: set an entity's health (0 destroys it on the next tick).
+/// Changes the game outside of commands, so never use it in multiplayer.
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
+    game(|g| {
+        if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive) {
+            e.hp = hp.clamp(0.0, e.kind.stats().hp);
+        }
+    })
+}
+
+/// How many deposit tiles the map has in total (explored or not). The 3D
 /// view sizes its tree and rock meshes from this.
 #[unsafe(no_mangle)]
 pub extern "C" fn res_total() -> u32 {
-    game(|g| g.res.len() as u32)
+    game(|g| g.deps.len() as u32)
 }
 /// Who won (1-4), or 0 while the game is on.
 #[unsafe(no_mangle)]
@@ -698,7 +798,7 @@ mod tests {
         assert_eq!(command(1, 8, 0, 0.0, 0.0, 0), 0);
         tick();
         assert_eq!((defeated(1), state_of(1), state_of(2)), (1, 5, 0));
-        assert_eq!(debug_count(1, 0) + debug_count(1, 10), 0, "everything of theirs fell");
+        assert_eq!(debug_count(1, 0) + debug_count(1, 64), 0, "everything of theirs fell");
         assert_eq!(command(1, 8, 0, 0.0, 0.0, 0), 0, "surrendering twice is harmless");
 
         init(3, 1, 2);
@@ -793,11 +893,6 @@ pub extern "C" fn view_reveal() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn by_wonder() -> u32 {
     game(|g| g.by_wonder as u32)
-}
-/// For the spectators' scoreboard: player `p`'s stock of resource `r`.
-#[unsafe(no_mangle)]
-pub extern "C" fn player_stock(p: u32, r: u32) -> f32 {
-    game(|g| g.players.get(p as usize).map_or(0.0, |pl| pl.stock[(r as usize).min(3)]))
 }
 /// For the spectators' scoreboard: living units of player `p`
 /// (`which` 0), or just their soldiers (1).

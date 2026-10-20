@@ -142,9 +142,11 @@ When a producer is lost or loses workers, use can exceed supply.
 - **Buildings** keep standing and keep their slots. New things can't be
   built until there's free supply again.
 - **Units** over a strategic limit become **unsupplied**, newest first:
-  half speed, can't attack, with a warning icon. *Proposal, to be
-  playtested.* This keeps strategic resources relevant all game: a tank with
-  no oil sits still.
+  they slowly lose health (*1% of max health a second, first guess*), with
+  a warning icon, until supply is back or enough of them have died to fit.
+  This keeps strategic resources relevant all game: a tank with no oil is
+  living on borrowed time. (Decided October 2026, replacing an earlier
+  proposal of half speed and no attacks; still to be tuned in play.)
 
 ### Resolution order (every second)
 
@@ -157,7 +159,8 @@ needs no save data of its own beyond house residents:
 3. Supply from crewed extractors.
 4. Use by buildings, foundations, units and queued units (always counted).
 5. Converters, in the same order, take inputs if free and add outputs.
-6. Units over a strategic limit are marked unsupplied, newest first.
+6. Units over a strategic limit are marked unsupplied, newest first
+   (they lose health until it fits again).
 7. Houses, nearest the Capitol first (ties by id), take goods up to their
    tier's maximum, preferring goods they already had, to avoid churn.
    Capacity follows.
@@ -260,9 +263,10 @@ number of slots, and its fate is decided later.
 
 ## Start of a game (first guess)
 
-Capitol (makes 4 wood, 2 stone, 2 grain by itself, no workers), 2 huts,
-6 residents, 2 Builders. Enough to place a lumber camp, a farm and a third
-hut straight away.
+Capitol (makes 4 wood, 2 stone, 2 grain and 2 fruit by itself, no
+workers), 2 huts, 6 residents, 2 Builders. The two foods give each hut 4
+beds: 8 for 6 residents and 2 builders. Enough to place a lumber camp, a
+farm and a third hut straight away.
 
 ## What it should feel like
 
