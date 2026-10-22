@@ -9,8 +9,9 @@
 // closes. Recent messages show at the bottom left and fade. In the lobby
 // there's a small box under the seats.
 //
-// Message (topic "chat"): {v, id, token, name, slot, text}. `name` is a
-// colour, "Spectator" or "Guest"; `slot` colours it. Over the relay only:
+// Message (topic "chat"): {v, id, token, name, slot, text}. `name` is the
+// name the sender picked, or else their colour, "Spectator" or "Guest";
+// `slot` colours it. Over the relay only:
 // claude.ai's room keeps just the latest value, which would lose messages.
 
 const CHAT = { MAX: 200, KEEP: 60, SHOW_MS: 12000, GAP_MS: 400 };
@@ -33,13 +34,13 @@ const Chat = {
 
   // Who I am, as others see me.
   me() {
-    if (watcher || (observe && observe.kind !== "out")) return { name: "Spectator", slot: 0 };
-    if (running && ME >= 1) return { name: PNAME[ME], slot: ME };
+    if (watcher || (observe && observe.kind !== "out")) return { name: myName || "Spectator", slot: 0 };
+    if (running && ME >= 1) return { name: myName || PNAME[ME], slot: ME };
     // In a lobby: my seat's colour.
     const list = guestOf ? (guestOf.host ? guestOf.host.seats : []) : seats;
     const i = guestOf ? list.indexOf("f:" + myToken) : 0;
     const slot = i >= 0 ? slotOf(i, list) : 0;
-    return slot ? { name: PNAME[slot], slot } : { name: "Guest", slot: 0 };
+    return { name: myName || (slot ? PNAME[slot] : "Guest"), slot };
   },
   send(text) {
     text = String(text || "").replace(/\s+/g, " ").trim().slice(0, CHAT.MAX);
@@ -57,8 +58,8 @@ const Chat = {
     if (!d || d.v !== NET.PROTOCOL || typeof d.text !== "string" || typeof d.id !== "string" || d.id.length > 40) return;
     const text = d.text.replace(/\s+/g, " ").trim().slice(0, CHAT.MAX);
     if (!text) return;
-    const name = PNAME.includes(d.name) && d.name !== "Nature" ? d.name : d.name === "Spectator" ? "Spectator" : "Guest";
-    const slot = Number.isInteger(d.slot) && d.slot >= 1 && d.slot <= 4 && PNAME[d.slot] === name ? d.slot : 0;
+    const name = cleanName(d.name) || "Guest";
+    const slot = Number.isInteger(d.slot) && d.slot >= 1 && d.slot <= 4 ? d.slot : 0;
     if (this.add({ name, slot, text, mine: false }, d.id) && !document.hidden) Sfx.ui("queued");
   },
   add(m, id) {

@@ -131,7 +131,7 @@ const Rec = {
   object(result) {
     return {
       format: REPLAY_FORMAT, kind: "replay", id: this.id, saved: Date.now(),
-      players: this.meta.players, difficulty: this.meta.difficulty, me: this.meta.me, who: this.meta.who,
+      players: this.meta.players, difficulty: this.meta.difficulty, me: this.meta.me, who: this.meta.who, names: this.meta.names || {},
       mp: !!this.meta.mp, watched: !!this.meta.watched, startTime: this.meta.startTime,
       ticks: this.ticks, result, log: this.keys.map(k => [k, this.cmds.get(k)]),
     };
@@ -167,7 +167,8 @@ function playersLine(r) {
   const n = r.players || 2, who = r.who || {};
   return [...Array(n)].map((_, i) => {
     const p = i + 1, w = who[p];
-    return PNAME[p] + (w === "human" ? (p === r.me && !r.watched ? " (you)" : " (person)") : "");
+    const nm = r.names && cleanName(r.names[p]);
+    return (nm ? `${nm} (${PNAME[p]})` : PNAME[p]) + (w === "human" ? (p === r.me && !r.watched ? " (you)" : nm ? "" : " (person)") : "");
   }).join(" · ");
 }
 
@@ -229,7 +230,7 @@ function renderScoreboard(force) {
     const out = W.defeated(p);
     rows.push([p, out, W.player_people(p, 4), W.player_units(p, 1), [R.wood, R.stone, R.grain, R.horses].map(r => W.player_supply(p, r))]);
   }
-  const key = JSON.stringify(rows) + observe.view;
+  const key = JSON.stringify(rows) + observe.view + JSON.stringify(pnames);
   if (!force && key === sbKey) return;
   sbKey = key;
   const who = (Rec.meta && Rec.meta.who) || {};
@@ -240,9 +241,10 @@ function renderScoreboard(force) {
     const name = document.createElement("td");
     const b = document.createElement("button");
     b.className = "sb-name"; b.style.color = PLIGHT[p];
-    b.title = `See the game as ${PNAME[p]} sees it`;
+    b.title = `See the game as ${pnc(p)} sees it`;
     b.setAttribute("aria-pressed", String(observe.view === p));
-    b.innerHTML = `<i style="background:${PCOL[p]}"></i>${PNAME[p]}`;
+    b.innerHTML = `<i style="background:${PCOL[p]}"></i>`;
+    b.append(pn(p)); // a name someone picked: text, never HTML
     const tag = p === ME && observe.kind === "out" ? "you" : out ? "out" : who[p] === "human" ? "" : who[p] === "computer" ? "AI" : "";
     if (tag) { const s = document.createElement("small"); s.textContent = tag; b.append(s); }
     b.onclick = () => setView(observe.view === p ? 0 : p);
@@ -252,7 +254,7 @@ function renderScoreboard(force) {
     body.append(tr);
   }
   $("sbAll").setAttribute("aria-pressed", String(observe.view === 0));
-  $("sbTitle").textContent = observe.view ? `Seeing as ${PNAME[observe.view]}` : "Whole map";
+  $("sbTitle").textContent = observe.view ? `Seeing as ${pn(observe.view)}` : "Whole map";
 }
 
 // Called every frame in observer mode.
@@ -266,7 +268,7 @@ function observerOver() {
   if (!observe || observe.over) return;
   observe.over = true;
   const w = W.winner_player();
-  const why = w ? `${PNAME[w]} won.` : "The game is over.";
+  const why = w ? `${pnc(w)} won.` : "The game is over.";
   if (observe.kind === "replay") { toast(why, "good"); return; }
   Rec.finish(why);
   $("endTitle").textContent = "Game over";
@@ -294,6 +296,7 @@ const Replay = {
     this.keyframes = new Map([[0, start]]);
     this.on = true;
     enterWorld(0);
+    setNames(data.names);
     Rec.done = true; // watching a replay doesn't record one
     ME = 0;
     startObserving("replay");
@@ -396,18 +399,20 @@ const Watchers = {
     let e = this.list.get(d.token);
     if (!e) {
       if (this.list.size >= WATCH.MAX) return;
-      e = { have: -1, game: null, parts: new Set(), snap: null, heard: 0, sent: 0, n: ++this.count };
+      e = { have: -1, game: null, parts: new Set(), snap: null, heard: 0, sent: 0, n: ++this.count, name: "" };
       this.list.set(d.token, e);
     }
     e.heard = performance.now();
+    e.name = cleanName(d.name);
     e.game = typeof d.game === "string" ? d.game : null;
     e.have = e.game === Rec.id && Number.isInteger(d.have) && d.have >= 0 ? d.have : -1;
     e.snap = typeof d.snap === "string" ? d.snap : null;
     e.parts = new Set(Array.isArray(d.parts) ? d.parts.filter(Number.isInteger) : []);
   },
   // Spectators who have the game running, who could take a seat: [[token, n]].
-  ready() { return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0).map(([t, e]) => [t, e.n]); },
+  ready() { return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0).map(([t, e]) => [t, e.n, e.name]); },
   number(token) { const e = this.list.get(token); return e ? e.n : 0; },
+  nameOf(token) { const e = this.list.get(token); return e ? e.name : ""; },
   // Is there a game here to watch?
   serving() { return !!room && !guestOf && Rec.real && !!Rec.id; },
   spend() {
@@ -466,7 +471,7 @@ const Watchers = {
       if (Rec.cmds.has(Rec.ticks) || simTick !== Rec.ticks) return;
       bytes = saveBytes();
     }
-    const T = Rec.ticks, game = Rec.id, meta = { who: Rec.meta.who, players: Rec.meta.players, difficulty: Rec.meta.difficulty };
+    const T = Rec.ticks, game = Rec.id, meta = { who: Rec.meta.who, names: pnames, players: Rec.meta.players, difficulty: Rec.meta.difficulty };
     this.making = true;
     packBytes(bytes).then(({ z, data }) => {
       const parts = [];
@@ -498,13 +503,13 @@ class Watcher {
     r.on("feed", d => this.receive(d));
     r.on("seat", d => this.offered(d));
     r.onPeers(p => this.peers(p));
-    r.presence({ role: "watcher", v: NET.PROTOCOL, token: myToken });
+    r.presence({ role: "watcher", v: NET.PROTOCOL, token: myToken, name: myName });
     this.timer = setInterval(() => this.ask(), WATCH.ASK_MS);
     this.ask();
   }
   // Tell the host what we have.
   ask() {
-    const msg = { v: NET.PROTOCOL, token: myToken, game: this.game, have: this.loaded ? this.avail : -1, snap: this.snapId, parts: this.parts.map((p, i) => p === undefined ? -1 : i).filter(i => i >= 0) };
+    const msg = { v: NET.PROTOCOL, token: myToken, name: myName, game: this.game, have: this.loaded ? this.avail : -1, snap: this.snapId, parts: this.parts.map((p, i) => p === undefined ? -1 : i).filter(i => i >= 0) };
     this.room.emit("watch", msg);
     this.status();
   }
@@ -512,7 +517,7 @@ class Watcher {
     if (!this.room) return; // not watching any more (maybe playing now)
     Chat.setOthers(peers.length);
     const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token));
-    if (host) { this.host = host; this.hostSeen = performance.now(); }
+    if (host) { this.host = host; this.hostSeen = performance.now(); if (this.loaded && host.names && typeof host.names === "object") setNames(host.names); }
     else this.host = null;
     this.status();
   }
@@ -575,7 +580,8 @@ class Watcher {
       this.parts = [];
       enterWorld(0);
       const meta = s.meta && typeof s.meta === "object" ? s.meta : {};
-      Rec.begin({ base: s.T, watched: true, mp: true, who: meta.who && typeof meta.who === "object" ? meta.who : {} });
+      setNames(meta.names);
+      Rec.begin({ base: s.T, watched: true, mp: true, who: meta.who && typeof meta.who === "object" ? meta.who : {}, names: pnames });
       Rec.real = true;
       ME = 0;
       startObserving("watch");

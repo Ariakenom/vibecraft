@@ -385,13 +385,25 @@ Spectator messages, both carrying `v` and the watcher's `token`:
 - `seat`, host to everyone, every 0.5 s while seats are on their way:
   `{game, gameId, host, offers: [{to, slot, T, seq0}, …]}`.
 
+## Names
+
+Everyone can pick a name in the lobby ("Your name"). It's kept in the
+browser (`vibecraft.name`), at most 16 characters, without markup
+characters. It travels in each page's presence (`name`); the host's start
+message carries the game's names (`names`, slot to name), and during a game
+the host's presence keeps them up to date (a spectator who takes a seat
+brings theirs; a seat the computer takes back loses it). Seats without a
+name go by their colour. Names are in the lobby, chat, toasts, the
+scoreboard, the end screen, the host's seat menu, snapshots and replays.
+
 ## Chat
 
 Everyone in the room can talk: players and spectators, in the lobby (a box
 under the seats) and in the game (Enter or the Chat button opens the line,
 Enter sends, Escape closes; lines fade after 12 s). It's not part of the
 simulation and never in replays: messages go straight through the room on
-the `chat` topic. Names are the sender's colour, or "Spectator". Text is
+the `chat` topic. Names are the one the sender picked, or else their colour,
+"Spectator" or "Guest"; the colour of the line is their seat's. Text is
 shown as text, at most 200 characters, and a page sends at most one message
 every 0.4 s. Relay only, like spectating (claude.ai's room keeps only the
 latest value, which would drop messages).

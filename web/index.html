@@ -461,6 +461,10 @@ body.observing #hint { display: none; }
           </div>
         </div>
         <ol class="seats" id="seats"></ol>
+        <div class="row" id="nameRow">
+          <label for="nameInput">Your name</label>
+          <input id="nameInput" maxlength="16" placeholder="So the others know you" autocomplete="nickname" spellcheck="false">
+        </div>
         <div class="invite" id="inviteRow" hidden>
           <label for="inviteLink">Invite friends with this link. They take a free seat when they open it.</label>
           <div class="row"><input id="inviteLink" readonly spellcheck="false"><button class="ghost" id="copyLink">Copy link</button><button class="ghost" id="lobbyWatchLink" title="A link for people who only want to watch your games">Copy watch link</button></div>

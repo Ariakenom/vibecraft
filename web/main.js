@@ -132,6 +132,21 @@ const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
 const PLIGHT = ["#bbb", "#8cb9f0", "#ec8a77", "#86d69a", "#f2d27f"];
 const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
+// The names people pick for themselves (kept in the browser), and this
+// game's: slot -> name, for the seats people play. A seat without one (the
+// computer's, or someone who didn't pick a name) goes by its colour.
+const NAME_KEY = "vibecraft.name";
+const cleanName = s => typeof s === "string" ? s.replace(/[\u0000-\u001f\u007f<>&"'`]/g, "").replace(/\s+/g, " ").trim().slice(0, 16) : "";
+let myName = "";
+try { myName = cleanName(localStorage.getItem(NAME_KEY) || ""); } catch { /* storage blocked */ }
+const pnames = {};
+const pn = p => pnames[p] || PNAME[p];                                        // in tables and labels
+const pnc = p => pnames[p] ? `${pnames[p]} (${PNAME[p]})` : PNAME[p] || "";   // in sentences: who, and which colour
+// Replace this game's names (from the host, a snapshot, a replay).
+function setNames(o) {
+  for (const k of Object.keys(pnames)) delete pnames[k];
+  if (o && typeof o === "object") for (let p = 1; p <= 4; p++) { const n = cleanName(o[p]); if (n) pnames[p] = n; }
+}
 // The build menu has a page per era: Tab goes to the next page, Shift+Tab
 // back. Each page hands out the same hotkeys in order (`PAGE_KEYS`, which
 // avoid W, A, S and D, the camera keys). Buildings in tech-tree order:
@@ -784,7 +799,7 @@ function singleInfo(panel, i) {
   const por = iconEl(k, owner, 72); por.className = "portrait";
   const info = document.createElement("div"); info.className = "info";
   const hp = Math.ceil(E(i, F.hp)), max = E(i, F.maxhp);
-  let html = `<div class="owner" style="color:${PLIGHT[owner]}">${owner === ME ? "Yours" : PNAME[owner]}</div><h3>${NAMES[k]}</h3>
+  let html = `<div class="owner" style="color:${PLIGHT[owner]}">${owner === ME ? "Yours" : pn(owner)}</div><h3>${NAMES[k]}</h3>
     <div class="bar"><i style="width:${(hp / max) * 100}%"></i></div>
     <div class="statline"><b>${hp}</b> / ${max} hp`;
   const atk = stat(k, 1);
@@ -1053,8 +1068,8 @@ const mpHooks = {
   },
   system(cmd) {
     const who = Rec.meta && Rec.meta.who;
-    if (cmd[0] === 7) { toast(`${PNAME[cmd[1]] || "A player"} left. The computer takes over their people.`); if (who) who[cmd[1]] = "computer"; }
-    if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`A spectator takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
+    if (cmd[0] === 7) { toast(`${pnc(cmd[1]) || "A player"} left. The computer takes over their people.`); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
+    if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`${pnames[cmd[1]] || "A spectator"} takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
   },
   // A tick's commands in their final order: what replays and spectators get.
   confirmed(k, bundle) { Rec.bundle(k, bundle); },
@@ -1371,8 +1386,8 @@ function handleEvents() {
     const type = ev[j], x = ev[j + 1], y = ev[j + 2], d = ev[j + 3];
     // Watching: the sounds of the world, but none of the messages meant for a player.
     if (observe) {
-      if (type === EV.Eliminated) toast(`${PNAME[d]} is out of the game.`);
-      else if (type === EV.EraReached) toast(`${PNAME[d >> 4]} has reached the ${ERA_NAMES[d & 15]} era.`);
+      if (type === EV.Eliminated) toast(`${pnc(d)} is out of the game.`);
+      else if (type === EV.EraReached) toast(`${pnc(d >> 4)} has reached the ${ERA_NAMES[d & 15]} era.`);
       if (type <= 4 || type >= 12) continue;
     }
     switch (type) {
@@ -1406,12 +1421,12 @@ function handleEvents() {
       case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;
       case EV.Hammer: Sfx.at("hammer", x, y, 90); break;
       case EV.Eliminated:
-        if (d !== ME) toast(`${PNAME[d]} has been eliminated.`, "good");
+        if (d !== ME) toast(`${pnc(d)} has been eliminated.`, "good");
         break;
       case EV.NukeArmed: toast("A nuke is armed. Select the silo and press Z to launch it.", "good"); Sfx.ui("trained"); break;
       case EV.NukeLaunched:
         // Everyone is told, and shown where it will fall.
-        toast(d === ME ? "Nuke launched. It lands in 20 seconds." : `${PNAME[d]} has launched a nuke! It lands in 20 seconds: get out of the marked area.`, d === ME ? "good" : "bad");
+        toast(d === ME ? "Nuke launched. It lands in 20 seconds." : `${pnc(d)} has launched a nuke! It lands in 20 seconds: get out of the marked area.`, d === ME ? "good" : "bad");
         Sfx.ui("siren");
         lastAlert = { x, y, t: performance.now() };
         break;
@@ -1435,7 +1450,7 @@ function handleEvents() {
           Sfx.ui("fanfare", true);
           selKey = "";
         } else {
-          toast(`${PNAME[who]} has reached the ${ERA_NAMES[era]} era.`, "bad");
+          toast(`${pnc(who)} has reached the ${ERA_NAMES[era]} era.`, "bad");
         }
         break; }
       case EV.Short: {
@@ -1477,7 +1492,7 @@ function loop(now) {
       // Handing a seat to a spectator: right after a tick, before any new command.
       if (pendingSeat && steps) {
         const p = pendingSeat; pendingSeat = null;
-        if (canGiveSeats() && !W.defeated(p.slot)) { becomeServer(); if (mp.server.claim(p.slot, p.token)) lastOffers = 0; }
+        if (canGiveSeats() && !W.defeated(p.slot)) { becomeServer(); if (mp.server.claim(p.slot, p.token)) claimed(p.slot, p.token); }
       }
     }
     const f1 = performance.now();
@@ -1686,7 +1701,8 @@ function enterWorld(local = 0) {
   // me against the computer. Multiplayer fills in who's who when it starts.
   const who = {};
   for (let p = 1; p <= W.n_players(); p++) who[p] = p === ME ? "human" : "computer";
-  Rec.begin({ who, mp: !!local });
+  setNames(local ? {} : { [ME]: myName });
+  Rec.begin({ who, mp: !!local, names: pnames });
 }
 
 let outShown = false;   // the "you're out" card has been shown for this game
@@ -1713,13 +1729,13 @@ function showEnd(st) {
   $("outScreen").hidden = true;
   const won = st === 1;
   $("endTitle").textContent = won ? "Victory" : surrendered ? "Surrendered" : "Defeat";
-  const winner = PNAME[W.winner_player()] || "Someone";
+  const winner = pnc(W.winner_player()) || "Someone";
   $("endWhy").textContent = {
     1: "All your rivals have fallen.",
     2: surrendered ? `You surrendered. ${winner} wins.` : `${winner} has conquered the land.`,
     5: surrendered ? "You surrendered." : "Your Capitol has fallen.",
   }[st];
-  Rec.finish(won ? `${PNAME[ME]} won` : W.winner_player() ? `${winner} won` : surrendered ? `${PNAME[ME]} surrendered` : `${PNAME[ME]} was out`);
+  Rec.finish(won ? `${pnc(ME)} won` : W.winner_player() ? `${winner} won` : surrendered ? `${pnc(ME)} surrendered` : `${pnc(ME)} was out`);
   Sfx.ui("fanfare", won);
   stopObserving();
   showEndStats();
@@ -1733,7 +1749,7 @@ function leaveOut() {
 }
 function showEndStats(opts = {}) {
   const ps = [...Array(W.n_players())].map((_, i) => i + 1);
-  const head = ps.map(p => `<th style="color:${PLIGHT[p]}">${p === ME && ME ? "You" : PNAME[p]}</th>`).join("");
+  const head = ps.map(p => `<th style="color:${PLIGHT[p]}">${p === ME && ME ? "You" : pn(p)}</th>`).join("");
   const row = (label, f) => `<tr><th>${label}</th>${ps.map(p => `<td>${f(p)}</td>`).join("")}</tr>`;
   $("endStats").innerHTML = `<tr><th></th>${head}</tr>` +
     row("Units trained", p => W.player_stat(p, 0)) +
@@ -1796,6 +1812,16 @@ let lastPlayers = 2, lastWasMultiplayer = false, startTimer = 0;
 const kicked = new Set();  // friends the host removed: they don't get a seat again
 const played = new Set();  // games already played, so a leftover "start" never restarts one
 const myToken = Math.random().toString(36).slice(2, 10); // who I am in a room
+const peerNames = new Map(); // token -> the name they picked, from the room's presence
+function notePeerNames(peers) {
+  for (const p of peers) { const pr = p.presence || {}; if (okToken(pr.token)) peerNames.set(pr.token, cleanName(pr.name)); }
+}
+function setMyName(v) {
+  myName = cleanName(v);
+  try { localStorage.setItem(NAME_KEY, myName); } catch { /* storage blocked */ }
+  if (room && !guestOf && !watcher) publishLobby(); else if (room) room.presence({ name: myName });
+  renderLobby();
+}
 const mpStatus = (text, bad = false) => { const s = $("mpStatus"); s.textContent = text; s.classList.toggle("bad", bad); };
 const randomCode = () => Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
 const okToken = t => typeof t === "string" && /^[a-z0-9]{4,12}$/.test(t);
@@ -1832,7 +1858,10 @@ function renderLobby() {
     if (!slot) sw.style.border = "1px dashed var(--line)";
     const who = document.createElement("span");
     who.className = "who";
-    who.textContent = s === "host" ? (guest ? "Host" : "You")
+    const nm = s === "host" ? (guest ? cleanName(guestOf.host && guestOf.host.name) : myName)
+      : s === "f:" + myToken ? myName : isFriend(s) ? peerNames.get(s.slice(2)) || "" : "";
+    const mine = guest ? s === "f:" + myToken : s === "host";
+    who.textContent = nm ? nm + (mine ? " (you)" : "") : s === "host" ? (guest ? "Host" : "You")
       : s === "f:" + myToken ? "You"
       : isFriend(s) ? "Friend"
       : s === "ai" ? "Computer"
@@ -1884,12 +1913,14 @@ function setSeat(i, v) {
 function lobbyChanged() { publishLobby(); renderLobby(); }
 function publishLobby() {
   if (!room || guestOf) return;
-  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, seats, diff: difficulty, playing: inGame(), kicked: [...kicked].slice(-20) });
+  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, name: myName, names: mp ? pnames : null, seats, diff: difficulty, playing: inGame(), kicked: [...kicked].slice(-20) });
 }
 
 // The host's view of the room: seat whoever has arrived, free the seats of
 // whoever has gone. During a game, anyone gone is handed to the computer.
 function onHostPeers(peers) {
+  notePeerNames(peers);
+  if (!inGame()) renderLobby(); // names may have changed
   setWatchCount(countWatchers(peers));
   Chat.setOthers(peers.length);
   const here = new Set();
@@ -1973,7 +2004,7 @@ async function joinLobby(code) {
     if (gen !== lobbyGen) { r.leave(); return; }
     room = r;
     Chat.attach(room);
-    room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: null });
+    room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, name: myName, playing: null });
     room.on("start", onStart);
     room.onPeers(onGuestPeers);
   } catch (e) {
@@ -1983,10 +2014,15 @@ async function joinLobby(code) {
 
 function onGuestPeers(peers) {
   if (!guestOf) return;
+  notePeerNames(peers);
   setWatchCount(mp ? countWatchers(peers) : 0);
   Chat.setOthers(peers.length);
   const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && Array.isArray(pr.seats));
-  if (mp) { if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game."); return; }
+  if (mp) {
+    if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game.");
+    else if (host.names && typeof host.names === "object") setNames(host.names); // the host keeps who's who
+    return;
+  }
   if (!host) { if (guestOf.host) { guestOf.host = null; guestOf.lostAt = performance.now(); } renderLobby(); return; }
   guestOf.host = host;
   if (Array.isArray(host.kicked) && host.kicked.includes(myToken)) { openOwnLobby("The host gave your seat away. Here's your own game.", true); return; }
@@ -2030,8 +2066,9 @@ function beginGame() {
     return;
   }
   const slots = {}, ai = [];
-  active.forEach((s, k) => { if (isFriend(s)) slots[s.slice(2)] = k + 1; else if (s === "ai") ai.push(k + 1); });
-  const settings = { v: NET.PROTOCOL, id: randomCode() + Date.now(), seed: (Math.random() * 1e9) >>> 0, n: active.length, slots, ai, diff: difficulty, host: myToken };
+  const names = { 1: myName };
+  active.forEach((s, k) => { if (isFriend(s)) { slots[s.slice(2)] = k + 1; names[k + 1] = peerNames.get(s.slice(2)) || ""; } else if (s === "ai") ai.push(k + 1); });
+  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: (Math.random() * 1e9) >>> 0, n: active.length, slots, ai, diff: difficulty, host: myToken };
   // Keep telling the guests until all of them have answered.
   const send = () => room && room.emit("start", settings);
   send();
@@ -2057,7 +2094,8 @@ function startMultiplayer(me, d, seq) {
   // Record from here: the start everyone shares, then the confirmed bundles.
   const who = {};
   for (let p = 1; p <= n; p++) who[p] = ai.includes(p) ? "computer" : "human";
-  Rec.begin({ who, mp: true });
+  setNames(d.names);
+  Rec.begin({ who, mp: true, names: pnames });
   Rec.real = true;
   W.mp_save(); // the confirmed copy starts out identical
   mp = seq;
@@ -2095,15 +2133,23 @@ function canGiveSeats() { return !!room && !guestOf && !watcher && running && !R
 
 function giveSeat(slot, token) {
   if (!canGiveSeats() || slot === ME || W.defeated(slot)) return;
-  const n = Watchers.number(token);
+  const n = Watchers.number(token), name = Watchers.nameOf(token);
   if (!mp) {
     pendingSeat = { slot, token };
     if (paused) togglePause();
     $("menuScreen").hidden = true;
   } else if (!mp.server || !mp.server.claim(slot, token)) return;
-  else lastOffers = 0; // tell them now
-  toast(`Handing ${PNAME[slot]} to Spectator ${n}…`);
+  else claimed(slot, token);
+  toast(`Handing ${PNAME[slot]} to ${name || "Spectator " + n}…`);
   renderGameSeats(true);
+}
+
+// A seat is on its way to a spectator: their name goes with it, and they hear now.
+function claimed(slot, token) {
+  const name = Watchers.nameOf(token);
+  if (name) pnames[slot] = name; else delete pnames[slot];
+  lastOffers = 0;
+  publishLobby();
 }
 
 // Single player, right after a tick: from here the game runs the
@@ -2147,6 +2193,7 @@ function takeSeat(w) {
   leaveWatching();
   stopObserving();
   ME = slot;
+  if (myName) pnames[slot] = myName;
   W.set_view(slot, 0);
   W.clear_selection();
   // Commands already confirmed, so late early-news of them isn't taken for new.
@@ -2199,10 +2246,11 @@ function renderGameSeats(force) {
     const state = p === ME ? "you" : W.defeated(p) ? "out"
       : joining || (pendingSeat && pendingSeat.slot === p) ? "joining"
       : srv && srv.active.has(p) || !W.is_ai(p) ? "friend" : "computer";
-    const to = joining ? Watchers.number(joining.token) : pendingSeat && pendingSeat.slot === p ? Watchers.number(pendingSeat.token) : 0;
+    const tk = joining ? joining.token : pendingSeat && pendingSeat.slot === p ? pendingSeat.token : null;
+    const to = tk ? Watchers.nameOf(tk) || `Spectator ${Watchers.number(tk)}` : "";
     rows.push([p, state, to]);
   }
-  const key = JSON.stringify([rows, specs]);
+  const key = JSON.stringify([rows, specs, pnames]);
   if (!force && key === seatsKey) return;
   seatsKey = key;
   const ol = $("gameSeatList");
@@ -2214,12 +2262,12 @@ function renderGameSeats(force) {
     sw.className = "swatch"; sw.style.background = PCOL[p];
     const who = document.createElement("span");
     who.className = "who"; who.style.color = PLIGHT[p];
-    who.textContent = PNAME[p];
+    who.textContent = pnames[p] && state !== "computer" ? `${pnames[p]} (${PNAME[p]})` : PNAME[p];
     li.append(sw, who);
     if (state === "computer" && specs.length) {
       const sel = document.createElement("select");
       sel.setAttribute("aria-label", `Who plays ${PNAME[p]}`);
-      for (const [v, label] of [["", "Computer"], ...specs.map(([t, k]) => [t, `Give to Spectator ${k}`])]) {
+      for (const [v, label] of [["", "Computer"], ...specs.map(([t, k, nm]) => [t, `Give to ${nm || "Spectator " + k}`])]) {
         const o = document.createElement("option");
         o.value = v; o.textContent = label;
         sel.append(o);
@@ -2229,7 +2277,7 @@ function renderGameSeats(force) {
     } else {
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = { you: "You", out: "Out", joining: `Handing to Spectator ${to}…`, friend: "Friend", computer: "Computer" }[state];
+      tag.textContent = { you: "You", out: "Out", joining: `Handing to ${to}…`, friend: "Friend", computer: "Computer" }[state];
       li.append(tag);
     }
     ol.append(li);
@@ -2501,6 +2549,8 @@ $("copyLink").onclick = () => {
 $("inviteLink").onfocus = e => e.target.select();
 const joinTyped = () => { const c = codeIn($("joinLink").value); if (c) joinLobby(c); else mpStatus("That doesn't look like an invite link.", true); };
 $("joinBtn").onclick = joinTyped;
+$("nameInput").value = myName;
+$("nameInput").onchange = e => { setMyName(e.target.value); e.target.value = myName; };
 $("joinLink").addEventListener("keydown", e => { if (e.key === "Enter") joinTyped(); });
 $("relayUrl").addEventListener("change", () => { Net.relayUrl = $("relayUrl").value.trim(); openOwnLobby(); });
 // Opening an invite link in a tab that already has the game open.
