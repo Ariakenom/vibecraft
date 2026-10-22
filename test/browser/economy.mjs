@@ -42,6 +42,14 @@ const keys = await pg.evaluate(() => {
   return [...$("cmd").querySelectorAll("button")].filter(b => /^Train/.test(b.getAttribute("aria-label"))).every(b => b.dataset.key);
 });
 check(keys, "a barracks and a range selected together: every unit has a hotkey");
+// Houses: an Upgrade button (Z), which says why not yet.
+const up = await pg.evaluate(() => {
+  readWorld(); const c = findOwn(K.Capitol); const cx = E(c, F.x) | 0, cy = E(c, F.y) | 0;
+  const h = W.debug_spawn(K.Hut, cx - 9, cy + 6); readWorld(); setSelection([h]); renderSelection(true);
+  const b = [...$("cmd").querySelectorAll("button")].find(b => /^Upgrade/.test(b.getAttribute("aria-label")));
+  return b ? [b.getAttribute("aria-label"), b.classList.contains("locked"), !!cmdKeys["z"]] : null;
+});
+check(up && up[0] === "Upgrade to Cottage" && up[1] && up[2], `a hut has "Upgrade to Cottage" (Z), locked until it's ready (${up})`);
 // Replays say which version of the game made them.
 const v = await pg.evaluate(() => { const v = Rec.object("test").version; return [v, v.protocol === NET.PROTOCOL && v.replay === REPLAY_FORMAT]; });
 check(v[1] && /^[0-9a-f]{12}$/.test(v[0].sim) && typeof v[0].base === "string", `replays carry the game's version (${JSON.stringify(v[0])})`);

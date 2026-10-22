@@ -150,10 +150,14 @@ so on. Each good has an era.
   goods, and you have free slots for the upgrade's materials (a cottage
   holds more wood and stone than a hut). A house is made only of what the era
   before its own has, since that's when it grows: a tenement (which brings
-  the Industrial era) takes more brick, not steel. Upgrading is automatic; a
-  per-house toggle to hold it back is a nice-to-have.
-- A house **falls back** a tier when it gets fewer goods than the lower
-  tier's maximum (a cottage below 3), and gives the extra materials back.
+  the Industrial era) takes more brick, not steel. Upgrading is **the
+  player's call** (Upgrade, Z, on the selected houses; a green arrow marks
+  the ones that are ready), since it holds more materials. The computer
+  upgrades its own. (It was automatic until playtests.)
+- Houses **never fall back**: a house that loses goods keeps its kind and
+  its materials, with fewer beds until the goods return. (They used to drop
+  a tier, which made losing a few buildings snowball: a lower house can't
+  use the higher goods.)
 - When **10 houses** reach a tier, the player enters that era: a badge,
   a fanfare, and that era's buildings and units unlock. The era is kept
   even if houses later drop back.

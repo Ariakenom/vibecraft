@@ -333,7 +333,8 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 /// person takes player `arg` back from the computer (also from the host,
 /// when it hands a seat to a spectator mid-game), 8
 /// surrender, 9 demolish the buildings in the scratch buffer, 10 pause
-/// (`arg` 0) or resume (1) the producers in it.
+/// (`arg` 0) or resume (1) the producers in it, 11 arm a nuke, 12 launch it
+/// at x/y, 14 grow the houses in it into the next kind (where they can).
 /// Returns 0 or a `CmdError` code.
 ///
 /// In single player the page calls this at once. In multiplayer it calls
@@ -384,6 +385,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
                 Some(&id) => Command::Launch { id, x, y },
                 None => return 0,
             },
+            14 => Command::Upgrade { ids },
             _ => return 0,
         };
         match w.game.apply(owner as u8, cmd) {
@@ -646,6 +648,12 @@ pub extern "C" fn next_arrival() -> f32 {
         let every = defs::growth_interval(p.beds);
         (1.0 - p.arrive_timer / every).clamp(0.0, 1.0)
     })
+}
+/// Can house `id` grow now? 0 yes, else why not (a `CmdError` code; 11 for
+/// anything that isn't a house that can grow at all).
+#[unsafe(no_mangle)]
+pub extern "C" fn house_upgrade_state(id: u32) -> i32 {
+    game(|g| if (id as usize) < g.ents.len() { g.house_upgrade(id as usize).err().map_or(0, |e| e.code()) } else { 11 })
 }
 /// Slots of resource `r` the local player's houses hold.
 #[unsafe(no_mangle)]

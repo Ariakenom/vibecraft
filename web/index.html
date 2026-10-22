@@ -149,6 +149,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .cost .free { color: var(--muted); }
 .cost.inline { display: inline-flex; gap: 8px; vertical-align: middle; margin-left: 4px; }
 .statline.bad { color: var(--bad); }
+.statline.good { color: var(--good); }
 
 /* ---- overlays ---- */
 .overlay { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; background: radial-gradient(ellipse at center, #15120dcc, #0b0907f2); overflow: auto; padding-block: 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
@@ -539,6 +540,7 @@ body.observing #hint { display: none; }
       <div class="row">
         <button class="go" id="resumeBtn">Resume</button>
         <button class="ghost" id="saveBtn" title="Save (Ctrl+S)">Save game</button>
+        <button class="ghost" id="saveReplayBtn" title="Keep the game so far among the replays (on the start screen), to watch or download">Save replay</button>
         <button class="ghost" id="menuLoadBtn">Load game</button>
         <button class="ghost" id="restartBtn">Restart</button>
         <button class="ghost" id="quitBtn">New game</button>

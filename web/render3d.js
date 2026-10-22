@@ -1733,7 +1733,34 @@ function nukeFlash(x, y) {
 function gunSmoke(x, y, kind) {
   if (!R3.puffs) return;
   if (R3.puffs.length >= 64) R3.puffs.shift();
-  R3.puffs.push({ x, y, t0: performance.now(), big: isBigGun(kind), seed: Math.random() * 6.28 });
+  const m = muzzle(x, y, kind);
+  R3.puffs.push({ x: m ? m.x : x, y: m ? m.z : y, h: m ? m.y : undefined, t0: performance.now(), big: isBigGun(kind), seed: Math.random() * 6.28 });
+}
+// Where the shot leaves the gun: the end of the shooter's gun (or, for
+// cannon and the like, of the whole piece) furthest along the way it faces.
+const _box = new THREE.Box3(), _mz = new THREE.Vector3(), _best = new THREE.Vector3();
+function muzzle(x, y, kind) {
+  let o = null, bd = 0.6;
+  for (const c of R3.objs.values()) {
+    if (c.kind !== kind || c.x === undefined) continue;
+    const d = Math.hypot(c.x - x, c.y - y);
+    if (d < bd) { bd = d; o = c; }
+  }
+  if (!o) return null;
+  const mesh = (!isBigGun(kind) && o.toolMesh) || o.body;
+  if (!mesh || !mesh.geometry) return null;
+  mesh.updateWorldMatrix(true, false);
+  if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+  const bb = mesh.geometry.boundingBox;
+  const fx = Math.cos(o.face === undefined ? 0 : -o.face), fz = Math.sin(o.face === undefined ? 0 : -o.face);
+  let best = -Infinity;
+  for (let k = 0; k < 8; k++) {
+    _mz.set(k & 1 ? bb.max.x : bb.min.x, k & 2 ? bb.max.y : bb.min.y, k & 4 ? bb.max.z : bb.min.z).applyMatrix4(mesh.matrixWorld);
+    const along = (_mz.x - o.x) * fx + (_mz.z - o.y) * fz;
+    if (along > best + 1e-4) { best = along; _best.copy(_mz); }
+  }
+  if (isBigGun(kind)) { _box.setFromObject(mesh); _best.y = (_box.min.y + _box.max.y) / 2; } // the barrel's height, not a wheel's
+  return { x: _best.x, y: _best.y, z: _best.z };
 }
 function updatePuffs(now) {
   const m = R3.puffMesh;

@@ -93,6 +93,8 @@ pub enum CmdError {
     NoDeposit(Dep),
     /// The tech tree says no: this building is needed first.
     Locked(Kind),
+    /// A house that can't grow yet: a bed is free, or it lacks a good.
+    NotReady,
 }
 
 impl CmdError {
@@ -106,6 +108,7 @@ impl CmdError {
             CmdError::Era(e) => 30 + e as i32,
             CmdError::NoDeposit(d) => 20 + d as i32,
             CmdError::Locked(k) => 2000 + k as i32,
+            CmdError::NotReady => 14,
         }
     }
 }
@@ -403,6 +406,8 @@ pub enum Command {
     Arm { id: u32 },
     /// Launch a silo's armed nuke at (x, y).
     Launch { id: u32, x: f32, y: f32 },
+    /// Grow houses into the next kind, where they can (`Game::house_upgrade`).
+    Upgrade { ids: Vec<u32> },
 }
 
 pub enum Pick {
@@ -726,31 +731,47 @@ impl Game {
     }
 
     /// The best enemy to shoot at within `radius` of entity `i`. Prefers units over buildings.
+    /// What to go for first: 0 units that fight, 1 buildings that fight
+    /// (towers, the Capitol), 2 other units (workers), 3 other buildings.
+    pub fn threat_tier(e: &Entity) -> u8 {
+        let fights = e.kind.stats().attack > 0.0 && e.kind != Kind::Worker;
+        match (e.is_building(), fights) {
+            (false, true) => 0,
+            (true, true) => 1,
+            (false, false) => 2,
+            (true, false) => 3,
+        }
+    }
+
+    /// The enemy to fight within `radius`: whatever fights back first
+    /// (`threat_tier`), the nearest of those.
     pub fn nearest_enemy(&self, i: usize, radius: f32) -> Option<u32> {
         let me = &self.ents[i];
         let (x, y, owner) = (me.x, me.y, me.owner);
         let reach = radius + if me.is_building() { me.kind.stats().size as f32 / 2.0 } else { me.kind.radius() };
         let mut best = None;
-        let mut bd = f32::MAX;
+        let mut bk = (u8::MAX, f32::MAX);
         let me_kind = me.kind;
+        let key = |e: &Entity| (Self::threat_tier(e), e.edge_dist(x, y));
+        let better = |k: (u8, f32), bk: (u8, f32)| k.1 <= reach && (k.0 < bk.0 || (k.0 == bk.0 && k.1 < bk.1));
         self.units_near(x, y, reach + 1.0, |id| {
             let e = &self.ents[id as usize];
             if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) {
-                let d = e.edge_dist(x, y);
-                if d <= reach && d < bd {
-                    bd = d;
+                let k = key(e);
+                if better(k, bk) {
+                    bk = k;
                     best = Some(id);
                 }
             }
         });
-        if best.is_some() {
+        if bk.0 == 0 {
             return best;
         }
         for e in self.ents.iter() {
-            if e.alive && e.is_building() && Self::hostile(owner, e.owner) {
-                let d = e.edge_dist(x, y);
-                if d <= reach && d < bd {
-                    bd = d;
+            if e.alive && e.is_building() && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) {
+                let k = key(e);
+                if better(k, bk) {
+                    bk = k;
                     best = Some(e.id);
                 }
             }
@@ -1312,6 +1333,10 @@ impl Game {
                     self.arm_nuke(id)?;
                 }
             }
+            Command::Upgrade { ids } => {
+                let ids = own(self, &ids);
+                self.upgrade_houses(owner, &ids)?;
+            }
             Command::Launch { id, x, y } => {
                 if own(self, &[id]).len() == 1 {
                     self.launch_nuke(id, x, y)?;
@@ -1462,6 +1487,17 @@ impl Game {
         // Automatic fights give up when the target runs out of sight.
         if auto && d > st.sight * 1.3 {
             return self.end_attack(i);
+        }
+        // ...and turn to anything that fights back, when hitting something
+        // that doesn't (a worker, a house).
+        if auto && Self::threat_tier(&self.ents[target as usize]) > 0 && self.ents[i].scan <= 0.0 {
+            self.ents[i].scan = 0.5;
+            if let Some(t) = self.nearest_enemy(i, st.sight) {
+                if Self::threat_tier(&self.ents[t as usize]) < Self::threat_tier(&self.ents[target as usize]) {
+                    self.ents[i].set_order(Order::Attack { target: t, auto: true });
+                    return;
+                }
+            }
         }
         if d <= st.range {
             let e = &mut self.ents[i];

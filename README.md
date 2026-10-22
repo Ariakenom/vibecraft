@@ -516,8 +516,10 @@ versions don't play together.
   by themselves to build foundations, work producers and become soldiers.
   A producer works only while its workers stand at it, so raids that kill
   them hurt. Move its workers away to pause it.
-- **Eras.** A full hut with three foods becomes a cottage by itself, if a
-  wood and a stone are free. Ten cottages bring the Medieval era: iron
+- **Eras.** A full hut with three foods can be upgraded to a cottage
+  (select it and press Upgrade, Z; a green arrow marks houses that are
+  ready), if a wood and a stone are free. Houses never fall back: one that
+  loses goods keeps its kind, with fewer beds. Ten cottages bring the Medieval era: iron
   mines, brickworks, sheep farms and the converters (a bakery turns grain
   into bread, a weaver wool into clothes, a brewery grain into beer), which
   hold their inputs while they stand; swordsmen, crossbowmen, knights and
@@ -555,11 +557,16 @@ versions don't play together.
   get 144×144 with four-way symmetry, so every start is the same, just turned.
   The sea runs along every edge (fishing huts can stand on the coast), and a
   base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
+  More lie out on the map, the same for everyone: clay, iron, coal,
+  saltpeter, sheep hills, oil and bauxite as well as the Ancient ones.
   The Capitol sees 16 tiles, enough for its own start.
+- **Fights:** units go for what fights back first (soldiers, then towers and
+  the Capitol), then workers, then other buildings, and turn from a worker
+  to a soldier who shows up.
 - **Builders** walk to a foundation and build it while they stand there; it
   shows up only once the first of them gets there (until then its owner sees
-  a mark on the ground). When it's done they become its crew, as many as it
-  needs, and the rest go back to the campfire. A lumber camp takes one
+  a mark on the ground). As many come as will work there, and when it's
+  done they become its crew at once; the rest go back to the campfire. A lumber camp takes one
   worker. The Capitol shows how soon the next newcomer comes, and the cap
   (beds).
 
@@ -581,5 +588,5 @@ versions don't play together.
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
-  - Enter: chat. Menu: surrender, copy a watch link for spectators, and
+  - Enter: chat. Menu: surrender, save a replay (any game, online too), copy a watch link for spectators, and
     (the host) give a computer's seat to a spectator
