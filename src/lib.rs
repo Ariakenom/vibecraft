@@ -127,6 +127,10 @@ pub extern "C" fn render() -> u32 {
                 if g.is_free_worker(e) {
                     flags |= 128;
                 }
+                // A converter whose inputs aren't free (256).
+                if e.built >= 1.0 && !st.consumes.is_empty() && !e.fed {
+                    flags |= 256;
+                }
             }
             // Houses: who lives there and its beds. Producers: workers
             // there and workers needed. Training buildings: recruits inside.
@@ -677,6 +681,17 @@ pub extern "C" fn kind_era(kind: u32) -> u32 {
 pub extern "C" fn player_era(p: u32) -> u32 {
     game(|g| g.players.get(p as usize).map_or(0, |pl| pl.era as u32))
 }
+/// Progress to the local player's next era: `which` 0 houses already at
+/// its tier, 1 how many it takes, 2 the last era there is (0 when there's
+/// nothing further to reach).
+#[unsafe(no_mangle)]
+pub extern "C" fn era_progress(which: u32) -> u32 {
+    match which {
+        0 => game(|g| g.houses_past_era(g.local)),
+        1 => defs::HOUSES_FOR_ERA,
+        _ => defs::LAST_ERA as u32,
+    }
+}
 /// The era the local player has reached.
 #[unsafe(no_mangle)]
 pub extern "C" fn era() -> u32 {
@@ -729,6 +744,32 @@ pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
     game(|g| {
         if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive) {
             e.hp = hp.clamp(0.0, e.kind.stats().hp);
+        }
+    })
+}
+
+/// Debug/testing: put the local player in an era (screenshots, tests).
+/// Changes the game outside of commands, so never use it in multiplayer.
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_set_era(era: u32) {
+    game(|g| {
+        let l = g.local as usize;
+        g.players[l].era = era.min(defs::LAST_ERA as u32) as u8;
+    })
+}
+
+/// Debug/testing: put a finished `kind` of the local player's at a tile
+/// (a unit there, a building with its corner there). Returns its id, or -1.
+/// Changes the game outside of commands, so never use it in multiplayer.
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_spawn(kind: u32, tx: i32, ty: i32) -> i32 {
+    let Some(k) = Kind::from_u32(kind) else { return -1 };
+    game(|g| {
+        let owner = g.local;
+        if k.is_building() {
+            g.spawn_building(k, owner, tx, ty, 1.0) as i32
+        } else {
+            g.spawn_unit(k, owner, tx as f32 + 0.5, ty as f32 + 0.5) as i32
         }
     })
 }

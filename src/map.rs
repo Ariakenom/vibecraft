@@ -129,6 +129,9 @@ enum Feat {
     Stone,
     Horses,
     Game,
+    Iron,
+    Clay,
+    Hills,
 }
 
 /// A symmetry of the map: a way to turn it that lands it on itself.
@@ -217,15 +220,21 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
 
     // Hand-placed starting deposits near base 1, copied to every base.
     // (dx, dy, feature, cluster radius)
-    let clusters: [(i32, i32, Feat, f32); 5] = [
+    // The Medieval ones (iron, clay, sheep hills) sit a little further out,
+    // clear of the road to the middle.
+    let clusters: [(i32, i32, Feat, f32); 8] = [
         (-8, -9, Feat::Tree, 3.4),
         (6, -6, Feat::Fertile, 1.6),
         (9, 4, Feat::Horses, 1.6),
         (-6, 6, Feat::Stone, 1.5),
         (2, 9, Feat::Game, 1.6),
+        (-2, -14, Feat::Iron, 1.5),
+        (14, 8, Feat::Clay, 1.5),
+        (14, -2, Feat::Hills, 1.6),
     ];
     // Neutral deposits out on the map, in 80×80 coordinates (scaled to fit).
-    let neutral: [(i32, i32, Feat, f32); 5] = [
+    let neutral: [(i32, i32, Feat, f32); 6] = [
+        (20, 40, Feat::Iron, 1.5),
         (31, 44, Feat::Horses, 1.6),
         (44, 66, Feat::Stone, 1.5),
         (24, 30, Feat::Game, 1.6),
@@ -241,20 +250,28 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                     continue;
                 }
                 let d = ((dx * dx + dy * dy) as f32).sqrt();
+                // Ground under and around a cluster: no deposit in a lake.
+                if d <= r + 1.0 {
+                    for (px, py) in images(x, y) {
+                        let i = (py * w + px) as usize;
+                        if terrain[i] == WATER || terrain[i] == SAND {
+                            terrain[i] = GRASS;
+                            shade[i] = shade[i].max(110); // drawn as grass, not as the lake bed
+                        }
+                    }
+                }
                 if d > r {
                     continue;
                 }
                 // Bushes and animals are sparse; trees a little ragged; rock is solid.
                 let keep = match f {
-                    Feat::Fertile | Feat::Horses | Feat::Game => (dx + dy) % 2 == 0,
+                    Feat::Fertile | Feat::Horses | Feat::Game | Feat::Hills => (dx + dy) % 2 == 0,
                     Feat::Tree => hash(dx + cx, dy + cy, 3) < 0.88,
                     _ => true,
                 };
                 if keep {
                     for (px, py) in images(x, y) {
-                        let i = (py * w + px) as usize;
-                        terrain[i] = if terrain[i] == WATER { GRASS } else { terrain[i] };
-                        feat[i] = f;
+                        feat[(py * w + px) as usize] = f;
                     }
                 }
             }
@@ -296,6 +313,9 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 Feat::Stone => Dep::Stone,
                 Feat::Horses => Dep::Horses,
                 Feat::Game => Dep::Game,
+                Feat::Iron => Dep::Iron,
+                Feat::Clay => Dep::Clay,
+                Feat::Hills => Dep::Hills,
             };
             dep_at[i] = deps.len() as i32;
             blocked[i] = true;

@@ -70,7 +70,7 @@ const KEEP_FREE: u32 = 2;
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 18] = [
+const PLAN: [(Kind, u32); 28] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -89,6 +89,17 @@ const PLAN: [(Kind, u32); 18] = [
     (Kind::Wonder, 1),
     (Kind::Range, 2),
     (Kind::Stable, 2),
+    // Medieval: iron for the army, then the new house goods.
+    (Kind::IronMine, 1),
+    (Kind::Bakery, 1),
+    (Kind::SheepFarm, 1),
+    (Kind::Weaver, 1),
+    (Kind::Brickworks, 1),
+    (Kind::Brewery, 1),
+    (Kind::IronMine, 2),
+    (Kind::SiegeWorkshop, 1),
+    (Kind::Bakery, 2),
+    (Kind::Weaver, 2),
 ];
 
 /// A snapshot of what the AI owns, gathered once per think.
@@ -106,6 +117,8 @@ struct Census {
     /// Indexed by `Kind as usize`.
     have: Vec<u32>,
     unfinished: Vec<u32>,
+    /// Tiles a worker can walk to from the campfire.
+    reach: Vec<bool>,
 }
 
 /// How a build project went.
@@ -124,8 +137,11 @@ fn producer_of(r: Res) -> Option<Kind> {
     Kind::BUILDABLE.into_iter().find(|k| k.stats().produces.iter().any(|&(p, _)| p == r))
 }
 
-/// The foods houses want in the Ancient era.
-const FOODS: [Res; 4] = [Res::Grain, Res::Fruit, Res::Meat, Res::Fish];
+/// The house goods a player of `era` can make: food in the Ancient era;
+/// bread, clothes and beer join them in the Medieval.
+fn house_goods(era: u8) -> Vec<Res> {
+    Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && producer_of(*r).is_some_and(|k| k.era() <= era)).collect()
+}
 
 // A second `impl Game` block, in a different file. Rust lets you split a
 // type's methods across modules, which keeps the AI code out of game.rs.
@@ -133,6 +149,11 @@ impl Game {
     pub fn ai_think(&mut self, me: u8) {
         let Some(cap) = self.find_first(me, Kind::Capitol) else { return };
         let mut c = self.census(me, (self.ents[cap].x, self.ents[cap].y));
+        // Cancel foundations nobody can reach (`census` left them out).
+        let cut_off: Vec<u32> = self.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0 && !c.unfinished.contains(&e.id)).map(|e| e.id).collect();
+        if !cut_off.is_empty() {
+            let _ = self.apply(me, Command::Demolish { ids: cut_off });
+        }
         let style = &STYLES[self.ais[me as usize].difficulty.min(2) as usize];
         let next = self.ai_economy(style, &mut c);
         self.ai_army(style, next, &mut c);
@@ -140,8 +161,37 @@ impl Game {
         self.ai_fight(&c);
     }
 
-    fn census(&self, me: u8, home: (f32, f32)) -> Census {
+    /// Every tile a unit can walk to from (x, y), moving like the path
+    /// finder does (eight ways, no cutting corners past walls).
+    fn reachable_from(&self, x: f32, y: f32) -> Vec<bool> {
+        let m = &self.map;
+        let mut seen = vec![false; (m.w * m.h) as usize];
+        let (sx, sy) = (x.floor() as i32, y.floor() as i32);
+        if !m.inside(sx, sy) {
+            return seen;
+        }
+        let mut stack = vec![(sx, sy)];
+        seen[m.idx(sx, sy)] = true;
+        while let Some((x, y)) = stack.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if !m.passable(nx, ny) || seen[m.idx(nx, ny)] {
+                    continue;
+                }
+                if dx != 0 && dy != 0 && (!m.passable(x + dx, y) || !m.passable(x, y + dy)) {
+                    continue;
+                }
+                seen[m.idx(nx, ny)] = true;
+                stack.push((nx, ny));
+            }
+        }
+        seen
+    }
+
+    fn census(&mut self, me: u8, home: (f32, f32)) -> Census {
         let mut c = Census { me, home, have: vec![0; 128], ..Default::default() };
+        let (fx, fy) = self.campfire(me).unwrap_or(home);
+        c.reach = self.reachable_from(fx, fy);
         let scout = self.ais[me as usize].scout;
         for e in self.ents.iter().filter(|e| e.alive && e.owner == me) {
             if e.is_building() {
@@ -153,6 +203,12 @@ impl Game {
                 c.army.push(e.id);
             }
         }
+        // Foundations no worker can walk to never rise: they go.
+        let cut_off: Vec<u32> = c.unfinished.iter().copied().filter(|&b| {
+            let f = &self.ents[b as usize];
+            f.builders_in < f.kind.stats().builders && !touches(&self.map, &c.reach, f.tx, f.ty, f.kind.stats().size)
+        }).collect();
+        c.unfinished.retain(|b| !cut_off.contains(b));
         // Free workers not yet spoken for by a queue or a foundation.
         let missing: u32 = c.unfinished.iter().map(|&b| self.builders_missing(b)).sum();
         c.spare = self.unclaimed_workers(me).saturating_sub(missing);
@@ -167,9 +223,9 @@ impl Game {
     /// Returns the plan's next project, whose slots the army leaves free.
     fn ai_economy(&mut self, style: &Style, c: &mut Census) -> Option<Kind> {
         let me = c.me;
-        // Everyone at work and nobody free to crew a new producer: tear
-        // down one that makes what nobody uses.
-        if c.spare == 0 {
+        // Too few free to crew a new producer: tear down one that makes
+        // what nobody uses, and its workers come free.
+        if c.spare < 3 {
             self.ai_release(c);
         }
         // One project at a time: wait while a foundation still needs builders.
@@ -216,17 +272,34 @@ impl Game {
         (f.kind.stats().builders as u32).saturating_sub(f.builders_in as u32 + coming)
     }
 
-    /// More beds: a hut if some food is left over for it, otherwise a
-    /// producer of whichever food is scarcest (where there's a spot).
+    /// More beds. While some house lacks goods it could use, a producer of
+    /// whichever good is scarcest: full houses with every good they can use
+    /// become bigger houses, which is how the next era comes. Otherwise a
+    /// hut, if some good is left over for it.
     fn ai_grow(&mut self, c: &mut Census) -> Step {
         let p = self.players[c.me as usize];
-        if FOODS.iter().any(|&r| p.spare(r) > 0) {
+        // A house ready to grow a tier but for its materials: make them.
+        if let Some(k) = self.upgrade_short(c.me).and_then(producer_of) {
+            let step = self.ai_project(k, c, true);
+            if step != Step::Blocked {
+                return step;
+            }
+        }
+        let goods = house_goods(p.era);
+        let lacking = self.ents.iter().any(|e| {
+            e.alive && e.owner == c.me && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| (e.goods.count_ones() as usize) < (house_max_goods(t) as usize).min(goods.len()))
+        });
+        // Short of houses for the next era: more huts come first anyway.
+        let houses = self.ents.iter().filter(|e| e.alive && e.owner == c.me && e.kind.house_tier().is_some()).count() as u32;
+        let few = p.era < LAST_ERA && houses < HOUSES_FOR_ERA + 1;
+        let hut_first = (!lacking || few) && goods.iter().any(|&r| p.spare(r) > 0);
+        if hut_first {
             let step = self.ai_project(Kind::Hut, c, true);
             if step != Step::Blocked {
                 return step;
             }
         }
-        let mut by_supply = FOODS.to_vec();
+        let mut by_supply = goods.clone();
         by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in by_supply {
             let Some(k) = producer_of(r) else { continue };
@@ -235,7 +308,32 @@ impl Game {
                 return step;
             }
         }
+        if !hut_first && goods.iter().any(|&r| p.spare(r) > 0) {
+            return self.ai_project(Kind::Hut, c, true);
+        }
         Step::Blocked
+    }
+
+    /// The material a house that's ready to grow a tier is waiting for.
+    fn upgrade_short(&self, me: u8) -> Option<Res> {
+        let p = &self.players[me as usize];
+        self.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0).find_map(|e| {
+            let (tier, next) = (e.kind.house_tier()?, e.kind.upgrade()?);
+            if next.house_tier()? > p.era + 1 || e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
+                return None;
+            }
+            let had = |r: Res| e.kind.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, k)| k as i32);
+            next.stats().cost.iter().find(|&&(r, k)| p.free(r) < k as i32 - had(r)).map(|&(r, _)| r)
+        })
+    }
+
+    /// What `kind` is short of to build and run: its cost, or a
+    /// converter's inputs.
+    fn ai_short_of(&self, me: u8, kind: Kind) -> Option<Res> {
+        let p = &self.players[me as usize];
+        // Inputs must be spare: a bakery fed with the houses' grain makes
+        // bread for them and no more beds.
+        self.short_of(me, kind).or_else(|| kind.stats().consumes.iter().find(|&&(r, k)| p.spare(r) < k as i32).map(|&(r, _)| r))
     }
 
     /// Tear down the newest crewed producer whose whole output is spare, so
@@ -261,13 +359,13 @@ impl Game {
         let me = c.me;
         let mut what = kind;
         for _ in 0..2 {
-            match self.short_of(me, what).and_then(producer_of) {
-                Some(p) if p != what => what = p,
+            match self.ai_short_of(me, what).and_then(producer_of) {
+                Some(p) if p != what && self.unlocked(me, p) => what = p,
                 Some(_) => return Step::Waiting, // short of what it makes itself
                 None => break,
             }
         }
-        if self.short_of(me, what).is_some() {
+        if self.ai_short_of(me, what).is_some() || !self.unlocked(me, what) {
             return Step::Blocked; // short of something nothing makes yet
         }
         // Its builders and its crew, and some free workers kept back.
@@ -305,12 +403,12 @@ impl Game {
                 // Every other tile: neighbours share most of their spots.
                 near.iter().step_by(2).take(400).find_map(|&(_, i)| {
                     let (x, y) = self.deps[i].center();
-                    self.find_spot(me, kind, x, y, 1, 3)
+                    self.find_spot(me, kind, x, y, 1, 3, &c.reach)
                 })
             }
-            Some(_) => self.find_spot(me, kind, bx, by, 3, 24),
+            Some(_) => self.find_spot(me, kind, bx, by, 3, 24, &c.reach),
             // Further out as the town fills up.
-            None => self.find_spot(me, kind, bx, by, 5, 36),
+            None => self.find_spot(me, kind, bx, by, 5, 36, &c.reach),
         };
         let Some((tx, ty)) = spot else { return false };
         // Builders come from the campfire by themselves.
@@ -327,8 +425,9 @@ impl Game {
     }
 
     /// Spiral outward looking for a free spot, with a one-tile gap around
-    /// it, that we have explored.
-    fn find_spot(&self, me: u8, kind: Kind, x: f32, y: f32, rmin: i32, rmax: i32) -> Option<(i32, i32)> {
+    /// it, that we have explored and our workers can walk to.
+    #[allow(clippy::too_many_arguments)]
+    fn find_spot(&self, me: u8, kind: Kind, x: f32, y: f32, rmin: i32, rmax: i32, reach: &[bool]) -> Option<(i32, i32)> {
         let s = kind.stats().size;
         let (cx, cy) = (x as i32 - s / 2, y as i32 - s / 2);
         for r in rmin..=rmax {
@@ -339,7 +438,7 @@ impl Game {
                 let (dx, dy) = ring_point(r, t);
                 let (tx, ty) = (cx + dx, cy + dy);
                 let seen = self.explored_by(me, tx, ty) && self.explored_by(me, tx + s - 1, ty + s - 1);
-                if seen && self.can_place(kind, tx, ty, me, 1) {
+                if seen && self.can_place(kind, tx, ty, me, 1) && touches(&self.map, reach, tx, ty, s) {
                     return Some((tx, ty));
                 }
             }
@@ -371,9 +470,11 @@ impl Game {
             if c.spare <= crew || army as f32 >= people * style.army_share {
                 break;
             }
-            let unit = self.ents[b as usize].kind.trains()[0];
             let spare = |r: Res| pl.free(r) - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32);
-            if unit.stats().cost.iter().all(|&(r, k)| spare(r) >= k as i32) && self.queue_unit(b, unit).is_ok() {
+            // The best unit it can train and afford: the latest era's.
+            let affordable = |u: &Kind| u.era() <= pl.era && u.stats().cost.iter().all(|&(r, k)| spare(r) >= k as i32);
+            let Some(unit) = self.ents[b as usize].kind.trains().iter().rev().copied().find(affordable) else { continue };
+            if self.queue_unit(b, unit).is_ok() {
                 army += 1;
                 c.spare -= 1;
             }
@@ -444,7 +545,12 @@ impl Game {
         let p = &self.players[me as usize];
         let most = (p.people as f32 * STYLES[diff.min(2) as usize].army_share * 0.8) as usize;
         let wave = self.ais[me as usize].wave_size.min(most.max(4));
-        if self.time >= self.ais[me as usize].next_attack && c.army.len() >= wave {
+        // A town with every bed taken and nobody free can't field a bigger
+        // wave: two minutes late, go with what there is. Losses free beds,
+        // newcomers fill them, and the town moves again.
+        let due = self.ais[me as usize].next_attack;
+        let stuck = p.people >= p.beds && c.spare <= 1 && c.army.len() >= 4 && self.time >= due + 120.0;
+        if (self.time >= due && c.army.len() >= wave) || stuck {
             if let Some((tx, ty)) = self.target_for(me, bx, by) {
                 for &id in &c.army {
                     self.order_attack_move(id, tx, ty);
@@ -471,6 +577,11 @@ impl Game {
             .min_by(|a, b| (a.x - bx).hypot(a.y - by).total_cmp(&(b.x - bx).hypot(b.y - by)))
             .map(|e| (e.x, e.y))
     }
+}
+
+/// Does a footprint have a tile next to it (corners included) in `reach`?
+fn touches(map: &crate::map::Map, reach: &[bool], tx: i32, ty: i32, size: i32) -> bool {
+    (ty - 1..=ty + size).any(|y| (tx - 1..=tx + size).any(|x| (x < tx || y < ty || x >= tx + size || y >= ty + size) && map.inside(x, y) && reach[map.idx(x, y)]))
 }
 
 /// The t-th point on the square ring of radius r (8r points in total).

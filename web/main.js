@@ -8,22 +8,34 @@ const PROJ_STRIDE = 10; // x, y, px, py, loosed from x, y, shooter kind, at a bu
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
-const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
-  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76, Hut: 77 };
+const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8,
+  Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
+  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76, Hut: 77,
+  Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85 };
+// Mounted units: a horse under them (sounds, drawing).
+const isMounted = k => k === K.Horseman || k === K.Knight;
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
-  [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture", [K.Wonder]: "Wonder" };
+  [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture", [K.Wonder]: "Wonder",
+  [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
+  [K.Cottage]: "Cottage", [K.SheepFarm]: "Sheep Farm", [K.IronMine]: "Iron Mine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
+  [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "Siege Workshop" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and is used up doing it), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
-  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people).",
+  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, it becomes a Cottage by itself if 1 more wood and 1 stone are free.",
+  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut.",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
+  [K.Swordsman]: "Armoured infantry. Like spearmen, deadly to riders, but tougher and harder-hitting. Costs iron.",
+  [K.Crossbowman]: "Shoots further and harder than an archer. Strong against infantry, weak against riders. Costs iron.",
+  [K.Knight]: "Heavy cavalry in iron. Runs down archers and crossbowmen.",
+  [K.Trebuchet]: "A slow siege engine with a long reach. Smashes buildings; poor against people, so guard it.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
   [K.Capitol]: "Your seat of power. Lose it and you lose the game.",
-  [K.Barracks]: "Trains spearmen.",
-  [K.Range]: "Trains archers.",
-  [K.Stable]: "Trains horsemen.",
+  [K.Barracks]: "Trains spearmen, and swordsmen from the Medieval era.",
+  [K.Range]: "Trains archers, and crossbowmen from the Medieval era.",
+  [K.Stable]: "Trains horsemen, and knights from the Medieval era.",
   [K.Tower]: "Shoots at enemies in range.",
   [K.Farm]: "Grows grain anywhere on open ground.",
   [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing, so you can always get more wood.",
@@ -33,6 +45,13 @@ const DESC = {
   [K.Orchard]: "Picks fruit from the wild bushes next to it.",
   [K.Pasture]: "Breeds horses from the wild herd next to it.",
   [K.Wonder]: "Finish it and you win. A huge job: put many citizens on it, and defend it.",
+  [K.SheepFarm]: "Raises sheep for wool on the hills next to it.",
+  [K.IronMine]: "Digs iron from the ore next to it. Iron arms the Medieval army.",
+  [K.Brickworks]: "Fires bricks from the clay next to it.",
+  [K.Bakery]: "Bakes bread from grain. It holds its grain while it stands, working or not.",
+  [K.Weaver]: "Weaves clothes from wool. It holds its wool while it stands, working or not.",
+  [K.Brewery]: "Brews beer from grain. It holds its grain while it stands, working or not.",
+  [K.SiegeWorkshop]: "Builds trebuchets.",
 };
 // The six eras, and the house each brings. Which kinds and resources
 // belong to which era comes from Rust (kind_era, res_era); so do the
@@ -45,18 +64,24 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
 const PLIGHT = ["#bbb", "#8cb9f0", "#ec8a77", "#86d69a", "#f2d27f"];
 const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
-// Hotkeys avoid W, A, S and D, which move the camera.
+// Hotkeys avoid W, A, S and D, which move the camera. "⇧E" is Shift+E.
+// Medieval buildings show once the player has a cottage (`buildMenu`).
 const BUILD_MENU = [[K.Hut, "Q"], [K.Farm, "E"], [K.LumberCamp, "R"], [K.Quarry, "T"], [K.FishingHut, "Y"], [K.HuntingLodge, "U"], [K.Orchard, "I"],
-  [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"], [K.Wonder, "B"]];
+  [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"], [K.Wonder, "B"],
+  [K.SheepFarm, "J"], [K.Weaver, "⇧J"], [K.IronMine, "L"], [K.Brickworks, "N"], [K.Bakery, "⇧E"], [K.Brewery, "⇧N"], [K.SiegeWorkshop, "⇧F"]];
+function buildMenu() {
+  const soon = W.era() >= 1 || W.era_progress(0) > 0;
+  return BUILD_MENU.filter(([k]) => W.kind_era(k) <= W.era() || (soon && W.kind_era(k) === W.era() + 1));
+}
 const TRAIN_KEYS = "QERT";
-const TRAINS = { [K.Barracks]: [K.Spearman], [K.Range]: [K.Archer], [K.Stable]: [K.Horseman] };
+const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman], [K.Range]: [K.Archer, K.Crossbowman], [K.Stable]: [K.Horseman, K.Knight], [K.SiegeWorkshop]: [K.Trebuchet] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -67,6 +92,13 @@ const RES_ICON = [
   '<svg viewBox="0 0 16 16"><path d="M3 9c0-3.5 3-6 6.5-5.5S14 8 12.5 11 6 14 4.2 12.3C3.4 11.6 3 10.4 3 9z" fill="#b8473a"/><path d="M9 7.5c1.2 0 2 .8 2 1.8s-.8 1.7-2 1.7-2-.7-2-1.7.8-1.8 2-1.8z" fill="#ead2b5"/><path d="M2.5 13.5l2-2" stroke="#ead2b5" stroke-width="1.6" stroke-linecap="round"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M8 4.2c2.6-1.6 6 .2 6 4 0 3.4-2.7 6.6-6 6.6S2 11.6 2 8.2c0-3.8 3.4-5.6 6-4z" fill="#c9473a"/><path d="M8 4.5C8 2.8 9 1.6 10.6 1.2" stroke="#6fa046" stroke-width="1.5" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M4 14l.6-5.5C3.5 7 3.6 4.6 5.5 3.3L7 1.5l.6 2c2.6.3 5.1 2.4 6 5.4l-1.7.8-2.2-1.4-.2 5.7z" fill="#8a5a33"/><path d="M7 1.5l.6 2-1.2 2.6-1.5-1.3z" fill="#3b2618"/><circle cx="9.6" cy="5.6" r=".7" fill="#1d1208"/></svg>',
+  // wool, iron, brick, bread, clothes, beer
+  '<svg viewBox="0 0 16 16"><g fill="#ece6d6"><circle cx="5" cy="9" r="3.2"/><circle cx="9" cy="7" r="3.4"/><circle cx="11" cy="10.5" r="3"/><circle cx="7" cy="11.5" r="2.8"/></g><path d="M6 9.5c1.5-1 3-1 4.5 0" stroke="#c9bfa8" fill="none"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M2 11l3-5h9l-3 5z" fill="#6f7680"/><path d="M2 11h9v2.5H2z" fill="#4c525a"/><path d="M11 11l3-5v2.5l-3 5z" fill="#5b6169"/><path d="M5.5 7h6" stroke="#a7aeb7" stroke-width=".8"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M1.5 6.5h13v6h-13z" fill="#a8452e"/><path d="M1.5 6.5l2-2.5h13l-2 2.5z" fill="#c8664a"/><path d="M14.5 6.5l2-2.5v6l-2 2.5z" fill="#86331f"/><path d="M1.5 9.5h13M6 6.5v3M10 9.5v3" stroke="#e2b7a2" stroke-width=".6"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M2 10c0-3.6 2.7-6 6-6s6 2.4 6 6v1.5H2z" fill="#d9a25a"/><path d="M5 6.5l1 1.5M8 5.5v2M11 6.5l-1 1.5" stroke="#9c6a2e" stroke-width="1" stroke-linecap="round"/><path d="M2 11.5h12v1.5H2z" fill="#b07c3c"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M5 2l3 1.5L11 2l3.5 3-2 2.2-1-.7V14h-7V6.5l-1 .7-2-2.2z" fill="#4f7aa8"/><path d="M6 2.5c.5 1.3 1.2 2 2 2s1.5-.7 2-2" stroke="#2f5379" fill="none"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M3.5 4h8v10h-8z" fill="#d79b2a"/><path d="M3 3c0-1.4 1.5-2 4.5-2S12 1.6 12 3v1.5H3z" fill="#f4ecd8"/><path d="M11.5 6h1.8c.9 0 1.2.6 1.2 1.3v3.4c0 .7-.4 1.3-1.2 1.3h-1.8" stroke="#b07a1d" stroke-width="1.2" fill="none"/></svg>',
 ];
 const resIcon = r => RES_ICON[r] || `<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="#6d6455"/><text x="8" y="11" text-anchor="middle" font-size="8" fill="#efe6d1" font-family="sans-serif">${RES_NAMES[r][0].toUpperCase()}</text></svg>`;
 
@@ -400,8 +432,10 @@ function drawMinimap() {
   mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a"], dot = Math.max(1.5, s);
-  for (let kd = 0; kd < 5; kd++) {
+  // Then iron ore, clay and sheep hills (5, water, has no dots).
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0"], dot = Math.max(1.5, s);
+  for (let kd = 0; kd < RES_DOT.length; kd++) {
+    if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
     for (let i = 0; i < resCount; i++) if (resBuf[i * 5 + 2] === kd) mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, dot, dot);
   }
@@ -484,6 +518,10 @@ function renderTopBar() {
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
   topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${freeP}<small>/ ${all}</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
   topBar.era.textContent = `${ERA_NAMES[eraIndex()]} era`;
+  const nextEra = eraIndex() + 1;
+  topBar.era.title = nextEra <= W.era_progress(2)
+    ? `Tech tree (K). ${HOUSE_NAMES[nextEra]}s: ${W.era_progress(0)} of ${W.era_progress(1)} for the ${ERA_NAMES[nextEra]} era.`
+    : "Tech tree (K)";
   const ew = W.enemy_wonder();
   topBar.wonder.hidden = ew < 0;
   if (ew >= 0) topBar.wonder.textContent = `Rival Wonder ${Math.floor(ew * 100)}%`;
@@ -600,8 +638,8 @@ const PERSON_ICON = '<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fi
 function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
-  let freeSig = ""; for (let r = 0; r < 7; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 50}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}`;
+  let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");
@@ -664,11 +702,13 @@ function singleInfo(panel, i) {
     if (owner === ME || observe) {
       html += `<div class="statline">Has ${have.length ? icons(have) : "nothing yet"}</div>`;
       html += wants.length ? `<div class="statline">Wants ${icons(wants)} <span class="muted">(any ${wants.length > 1 ? `${house_room(k, goods)} of these` : "one"})</span></div>` : `<div class="statline">Has every good a ${NAMES[k]} can use.</div>`;
+      if (owner === ME) html += houseTierLine(k, goods, E(i, F.residents), E(i, F.beds));
     }
   } else if (slotsOf(k, 1).length) {
-    const need = stat(k, 7);
-    html += `<div class="statline">Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span>${need ? ` · workers <b>${E(i, F.residents)}</b> of ${need}` : ""}</div>`;
-    if (owner === ME && (E(i, F.flags) & 64)) html += `<div class="statline bad">Paused: it makes nothing and hires nobody. Press Resume, or send workers here with a right-click.</div>`;
+    const need = stat(k, 7), takes = slotsOf(k, 2);
+    html += `<div class="statline">${takes.length ? `Takes <span class="cost inline">${slotsHtml(takes, false)}</span>, makes` : "Makes"} <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span>${need ? ` · workers <b>${E(i, F.residents)}</b> of ${need}` : ""}</div>`;
+    if (owner === ME && (E(i, F.flags) & 256)) html += `<div class="statline bad">Short of ${takes.map(([r]) => RES_NAMES[r]).join(" and ")}: it makes nothing until enough is free.</div>`;
+    else if (owner === ME && (E(i, F.flags) & 64)) html += `<div class="statline bad">Paused: it makes nothing and hires nobody. Press Resume, or send workers here with a right-click.</div>`;
     else if (E(i, F.flags) & 32) html += `<div class="statline bad">Waiting for workers: when someone is free at the campfire, they come.</div>`;
   } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
     html += `<div class="statline">Waiting for a recruit from the campfire.</div>`;
@@ -721,13 +761,14 @@ function renderCommands(sel) {
     if (slotsOf(k, 1).length) h += `<p>Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span></p>`;
     const dep = W.kind_deposit(k);
     if (dep >= 0) h += `<p>Build it next to ${DEP_NAMES[dep]}.</p>`;
+    if (W.kind_era(k) > W.era()) h += `<p class="short">Needs the ${ERA_NAMES[W.kind_era(k)]} era: ${W.era_progress(1)} ${HOUSE_NAMES[W.kind_era(k)].toLowerCase()}s (you have ${W.era_progress(0)}).</p>`;
     const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
     if (needs.length) h += `<p>Needs ${needs.map(q => `<span class="${W.has_built(q) ? "" : "short"}">${NAMES[q]}</span>`).join(" and ")}.</p>`;
     return h;
   };
 
   if (kinds.has(K.Worker) || kinds.has(K.Capitol)) {
-    for (const [k, key] of BUILD_MENU) {
+    for (const [k, key] of buildMenu()) {
       const fn = () => startPlacing(k);
       const locked = isBld(k) && !W.unlocked(k);
       add(cmdButton(`Build ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), locked, tip: unitTip(k) }), key, fn);
@@ -738,7 +779,7 @@ function renderCommands(sel) {
   for (const k of trainable) {
     const key = TRAIN_KEYS[[...trainable].indexOf(k)];
     const fn = () => doTrain(k);
-    add(cmdButton(`Train ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), tip: unitTip(k) + `<p>Right-click the map to set a rally point.</p>` }), key, fn);
+    add(cmdButton(`Train ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), locked: W.kind_era(k) > W.era(), tip: unitTip(k) + `<p>Right-click the map to set a rally point.</p>` }), key, fn);
   }
   const hasUnits = mine.some(i => !isBld(E(i, F.kind)));
   // Producers: pause (their workers go to the campfire) or resume.
@@ -751,6 +792,7 @@ function renderCommands(sel) {
       ? "<h4>Resume</h4><p>Hire workers again: free workers from the campfire come.</p>"
       : "<h4>Pause</h4><p>Its workers go back to the campfire. It keeps its slots but makes nothing.</p>" }), "Z", fn);
   }
+  box.classList.toggle("dense", box.children.length > 16);
   const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
   if (doomed.length && !hasUnits) {
     const armed = demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000;
@@ -789,6 +831,16 @@ function houseWants(k, goods) {
     else if (W.is_house_good(r) && W.res_era(r) <= tier) could.push(r);
   }
   return { have, wants: have.length < max ? could : [] };
+}
+// What a house needs to grow a tier, or what makes it fall back.
+function houseTierLine(k, goods, residents, beds) {
+  const tier = stat(k, 10), n = popcount(goods), max = W.house_max_goods(tier);
+  if (k === K.Cottage) return n < 3 ? `<div class="statline bad">Fewer than 3 goods: it falls back to a hut.</div>` : "";
+  if (k !== K.Hut) return "";
+  const need = [];
+  if (residents < beds || beds === 0) need.push("every bed taken");
+  if (n < max) need.push(`all ${max} goods`);
+  return `<div class="statline muted">${need.length ? `Becomes a Cottage with ${need.join(" and ")}, if 1 wood and 1 stone are free.` : "Becomes a Cottage as soon as 1 wood and 1 stone are free."}</div>`;
 }
 function house_room(k, goods) { return W.house_max_goods(stat(k, 10)) - popcount(goods); }
 const popcount = v => { let n = 0; for (; v; v >>>= 1) n += v & 1; return n; };
@@ -1116,7 +1168,8 @@ window.addEventListener("keydown", e => {
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
   if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free at the campfire"); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
-  if (cmdKeys[k]) { cmdKeys[k](); e.preventDefault(); }
+  const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
+  if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
 });
 window.addEventListener("keyup", e => keys.delete(e.code));
 window.addEventListener("blur", () => { keys.clear(); mouse.inside = false; });
@@ -1149,7 +1202,8 @@ function scrollCamera(dt) {
 
 // ===========================================================================
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
-const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, WonderBegun: 13, Eliminated: 14 };
+const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, WonderBegun: 13, Eliminated: 14,
+  Upgraded: 15, Downgraded: 16, EraReached: 17 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1160,6 +1214,7 @@ function handleEvents() {
     // Watching: the sounds of the world, but none of the messages meant for a player.
     if (observe) {
       if (type === EV.Eliminated) toast(`${PNAME[d]} is out of the game.`);
+      else if (type === EV.EraReached) toast(`${PNAME[d >> 4]} has reached the ${ERA_NAMES[d & 15]} era.`);
       else if (type === EV.WonderBegun) toast(`${PNAME[d]} has begun a Wonder.`);
       if (type <= 4 || type >= 12) continue;
     }
@@ -1180,7 +1235,7 @@ function handleEvents() {
       case EV.Lost: toast(`Your ${NAMES[d]} was destroyed`, "bad"); break;
       case EV.Death: { const kind = d % 100;
         if (isBld(kind)) Sfx.at("crumble", x, y, 200);
-        else Sfx.at("death", x, y, 90, kind === K.Horseman);
+        else Sfx.at("death", x, y, 90, isMounted(kind));
         break; }
       case EV.Melee: Sfx.at("melee", x, y, 45, d); break;
       case EV.Shoot: Sfx.at("bow", x, y, 60, isBld(d)); break;
@@ -1193,6 +1248,25 @@ function handleEvents() {
       case EV.Eliminated:
         if (d !== ME) toast(`${PNAME[d]} has been eliminated.`, "good");
         break;
+      case EV.Upgraded: {
+        const era = W.era(), got = W.era_progress(0), need = W.era_progress(1);
+        toast(`A hut grew into a ${NAMES[d]}` + (era < W.era_progress(2) ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
+        Sfx.at("hammer", x, y, 90);
+        break; }
+      case EV.Downgraded: toast(`A cottage fell back to a ${NAMES[d]}: it lost one of its goods`, "bad"); break;
+      case EV.EraReached: {
+        const who = d >> 4, era = d & 15;
+        if (who === ME) {
+          const opened = BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k) && !knownUnlocked.has(k));
+          opened.forEach(k => knownUnlocked.add(k));
+          const units = Object.values(TRAINS).flat().filter(k => W.kind_era(k) === era);
+          toast(`The ${ERA_NAMES[era]} era! New: ${opened.concat(units).map(k => NAMES[k]).join(", ")}`, "good");
+          Sfx.ui("fanfare", true);
+          selKey = "";
+        } else {
+          toast(`${PNAME[who]} has reached the ${ERA_NAMES[era]} era.`, "bad");
+        }
+        break; }
       case EV.Short: {
         const p = producerOf(d);
         toast(`You hold more ${RES_NAMES[d]} than you make. Your newest units that need it are losing health` + (p != null ? `: build a ${NAMES[p]}.` : "."), "bad");

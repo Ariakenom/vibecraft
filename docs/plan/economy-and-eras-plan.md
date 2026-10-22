@@ -288,6 +288,46 @@ plays out, and Patrik has played it. Merge to `main`.
 
 **Goal:** the era engine, proven with one era of content.
 
+**Status: done and merged to `main`** (October 2026). What came out of it:
+- **Tiers:** a full hut with 3 goods becomes a cottage when its extra wood
+  and stone are free (one house a tick, nearest first); a cottage below 3
+  goods falls back, furthest first (`people.rs`, `house_tiers`). Houses can
+  reach one tier past the player's era.
+- **Eras:** `HOUSES_FOR_ERA` (10) houses past the era's tier raise it, with
+  `Ev::EraReached` (fanfare and toast; others are told too). Never lowered.
+  `Game::unlocked` checks the era; `Kind::requires` keeps the few real
+  dependencies (Weaver needs a Sheep Farm, Siege Workshop a Barracks).
+- **Goods are shared out evenly** (level by level, nearest first, keeping
+  goods a house already had, newest era's goods first for new ones).
+  Nearest-first in full made the closest cottages take a fourth food while
+  far huts never reached the three they need to grow. Beds are 2 per good
+  either way.
+- **Converters** take their inputs while they stand, crewed or not (a
+  paused bakery still holds its grain, as Patrik asked for paused
+  producers); earlier eras first, then oldest first, so the newest stops
+  first in a shortage. Flag 256 marks one short of inputs.
+- **Classes** (`Class`): counters go by class, so swordsmen beat knights as
+  spearmen beat horsemen. Trebuchets: 3x against buildings, 0.3x otherwise.
+- **Medieval content:** Swordsman, Crossbowman, Knight (iron), Trebuchet;
+  Cottage, Sheep Farm, Iron Mine, Brickworks, Bakery, Weaver, Brewery,
+  Siege Workshop; deposits Iron, Clay, Hills, near every base (plus one
+  neutral iron). Clusters turn water under them into land.
+- Models for all of them in `assets/models.py` (rebuilt with the `bpy`
+  module); trebuchets throw stones.
+- **AI:** grows houses toward full goods (builds the producer of the
+  scarcest good while houses lack goods, huts first until it has enough
+  houses), makes upgrade materials, feeds converters from spare goods,
+  trains the best unit its era allows, checks its workers can reach a spot
+  (and cancels foundations nobody can reach), releases idle producers when
+  fewer than 3 are free, and attacks with what it has when its town is
+  full and stuck.
+- Tests: tiers up and back, the era at exactly ten, era-locked commands,
+  converters (paused, shortage), class counters, and both Normal AIs
+  reaching the Medieval era in 45 minutes. Save `VERSION` 7, protocol 12.
+- **Not done:** two equal AIs no longer finish each other off within the
+  hour (they reach the Medieval era in 20 to 40 minutes, then raid each
+  other). See open question 5.
+
 - House upgrades (design, *House tiers and eras*): automatic when full, at
   max goods, with free upgrade materials. Cottage model.
 - `Player.era: u8`, raised when 10 houses reach a tier; never lowered.
@@ -340,3 +380,8 @@ markets and trade; deciding the Wonder's fate.
 3. Map size for 90-minute games: Phase 6 measurement.
 4. Does a building under construction hold all its slots from the start
    (current plan) or fill them as it rises?
+5. AI endgame: since people are units and houses grow tiers, two Normal
+   AIs plateau around 60 to 100 people and raid each other without either
+   winning. Options: siege in attack waves, a Medieval Wonder, waves sized
+   by the enemy's army rather than our people, or cheaper wood (lumber
+   camps with 1 worker).

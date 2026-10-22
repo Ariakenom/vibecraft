@@ -69,6 +69,9 @@ pub enum Ev {
     Short = 12,   // the player holds more than they make, and units suffer (data = resource)
     WonderBegun = 13, // someone laid a Wonder's foundation (data = owner)
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
+    Upgraded = 15,   // one of the player's houses grew a tier (data = new kind)
+    Downgraded = 16, // one of the player's houses fell back a tier (data = new kind)
+    EraReached = 17, // a player entered an era (data = player * 16 + era)
 }
 
 /// Why a command was refused. `code()` is the number JavaScript receives.
@@ -624,9 +627,16 @@ impl Game {
         self.ents.iter().any(|e| e.alive && e.owner == owner && e.kind == kind && e.built >= 1.0)
     }
 
-    /// Is every building `kind` requires in place?
+    /// Has `owner` reached `kind`'s era, with every building it requires in place?
     pub fn unlocked(&self, owner: u8, kind: Kind) -> bool {
-        kind.requires().iter().all(|&k| self.has_built(owner, k))
+        kind.era() <= self.players[owner as usize].era && kind.requires().iter().all(|&k| self.has_built(owner, k))
+    }
+
+    /// How many of `owner`'s finished houses are past their era's tier:
+    /// `HOUSES_FOR_ERA` of them take the player into the next era.
+    pub fn houses_past_era(&self, owner: u8) -> u32 {
+        let era = self.players[owner as usize].era;
+        self.ents.iter().filter(|e| e.alive && e.owner == owner && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| t > era)).count() as u32
     }
 
     /// Hand a player slot to the computer (or take it back). In multiplayer

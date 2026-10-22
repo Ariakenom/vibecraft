@@ -570,8 +570,21 @@ function resourceModels() {
     if (gold) for (const [x, y, z] of [[0.1, 0.35, 0.2], [-0.15, 0.2, 0.2], [0.25, 0.25, -0.05], [-0.05, 0.4, -0.15]]) r.add(ball(0.05, 0), "#f4d462", x, y, z);
     return r.build();
   };
+  // Medieval deposits (the Blender ones replace these when loaded).
+  const iron = new Model();
+  for (const [x, z, s] of [[0, 0, 0.3], [0.22, 0.12, 0.21], [-0.18, -0.14, 0.19]]) iron.add(new THREE.DodecahedronGeometry(s, 0), "#6e655c", x, s * 0.6, z);
+  for (const [x, y, z] of [[0.1, 0.33, 0.18], [-0.15, 0.2, 0.18], [0.25, 0.22, -0.05]]) iron.add(ball(0.05, 0), "#9a4a2c", x, y, z);
+  const clay = new Model();
+  clay.add(cyl(0.42, 0.38, 0.05, 10), "#8a5236", 0, 0.025, 0).add(cyl(0.3, 0.27, 0.03, 10), "#6e3e28", 0, 0.05, 0);
+  for (const [x, z] of [[0.2, 0.15], [-0.18, 0.2], [0.05, -0.22]]) clay.add(box(0.12, 0.08, 0.08), "#b9764a", x, 0.1, z);
+  const sheep = new Model();
+  for (const [x, z] of [[-0.12, -0.08], [0.18, 0.14]]) {
+    for (const [lx, lz] of [[0.08, 0.04], [0.08, -0.04], [-0.07, 0.04], [-0.07, -0.04]]) sheep.add(box(0.025, 0.1, 0.025), "#2a221c", x + lx, 0.05, z + lz);
+    sheep.add(ball(0.12, 1).scale(1.35, 0.85, 0.95), "#ece6d6", x, 0.16, z).add(ball(0.055, 1), "#2a221c", x + 0.16, 0.19, z);
+  }
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
-    deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]) };
+    deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]),
+    iron: iron.build(), clay: clay.build(), sheep: sheep.build() };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -592,7 +605,10 @@ let GLB_NAMES = null;
 function glbName(kind) {
   GLB_NAMES ??= { [K.Worker]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
     [K.Range]: "Range", [K.Stable]: "Stable", [K.Tower]: "Tower", [K.Farm]: "Farm", [K.Wonder]: "Wonder",
-    [K.LumberCamp]: "Sawmill", [K.Quarry]: "Mason", [K.HuntingLodge]: "Settlement" };
+    [K.LumberCamp]: "Sawmill", [K.Quarry]: "Mason", [K.HuntingLodge]: "Settlement",
+    [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
+    [K.Cottage]: "Cottage", [K.SheepFarm]: "SheepFarm", [K.IronMine]: "IronMine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
+    [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "SiegeWorkshop" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
@@ -767,6 +783,10 @@ function initRenderer() {
   R3.arrows = new THREE.InstancedMesh(ag, withFow(new THREE.MeshLambertMaterial({ color: "#e9dfc6" })), 256);
   R3.arrows.frustumCulled = false;
   scene.add(R3.arrows);
+  // Stones from trebuchets: the same flight, a boulder instead of an arrow.
+  R3.stones = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.13, 0), withFow(new THREE.MeshLambertMaterial({ color: "#7d766c" })), 64);
+  R3.stones.frustumCulled = false;
+  scene.add(R3.stones);
 
   // Rally flag
   const rm = new Model();
@@ -778,7 +798,7 @@ function initRenderer() {
 
   loadGlbModels();
   R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"]]) {
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"]]) {
     if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
   }
   buildSmoke();
@@ -907,7 +927,8 @@ function buildWorld() {
     m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m;
   };
   R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
-    horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false) };
+    horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false),
+    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -1400,7 +1421,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
   o.flinchV += (-o.flinch * 140 - o.flinchV * 11) * dt; o.flinch += o.flinchV * dt;
   const f = o.flinch;
   const T = t + o.seed;
-  const horse = kind === K.Horseman;
+  const horse = isMounted(kind);
   if (horse) {
     const ph = T * (walking ? 13 : 0);
     if (walking) {
@@ -1448,7 +1469,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.body.rotation.z += c > 0.55 && c < 0.75 ? -0.3 : 0.08;
       if (!walking) { B.legL.rotation.z = 0.25; B.legR.rotation.z = -0.15; }
       o.toolMesh.rotation.z = -Math.PI / 2;                     // the head points out of the fist
-    } else if (anim === 3 && kind === K.Spearman) {
+    } else if (anim === 3 && (kind === K.Spearman || kind === K.Swordsman)) {
       // Jab with the spear, leaning in, shield up.
       const jab = Math.max(0, Math.sin(T * 8));
       B.armR.rotation.z = 1.2 + jab * 0.4;
@@ -1456,6 +1477,12 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
       if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
       toolWorld = -1.45 - jab * 0.1;
+    } else if (anim === 3 && kind === K.Crossbowman) {
+      // Crossbow levelled at the target in both hands; a kick when it looses.
+      const kick = Math.max(0, Math.sin(T * 2.4) - 0.9) * 4;
+      B.armR.rotation.z = 1.3 + kick * 0.15; B.armL.rotation.z = 1.25; B.armL.rotation.x = -0.35;
+      B.body.rotation.z += -kick * 0.08;
+      toolWorld = 0;
     } else if (anim === 3 && kind === K.Archer) {
       // Bow arm out front, string hand drawn back to the chest, then loose.
       const draw = Math.min(1, ((T * 0.6) % 1) * 1.6);
@@ -1464,7 +1491,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.body.rotation.y = 0.35;
       toolWorld = 0;
     } else {
-      toolWorld = kind === K.Spearman ? -0.25 : kind === K.Archer ? 0 : null;
+      toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
       if (kind === K.Worker) o.toolMesh.rotation.z = -0.4;
     }
     if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
@@ -1606,17 +1633,21 @@ function updateResources() {
   for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
-  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [] };
+  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [] };
   for (const m of Object.values(R3.res)) m.count = 0;
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
-    // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game.
+    // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game,
+    // 6 iron ore, 7 clay, 8 sheep hills.
     let mesh, scale;
     if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
     else if (kind === 3) { mesh = "horse"; scale = 1; } // the size of a horseman's horse
     else if (kind === 4) { mesh = "deer"; scale = 1; }
+    else if (kind === 6) { mesh = "iron"; scale = 0.85 + 0.25 * h2; }
+    else if (kind === 7) { mesh = "clay"; scale = 0.85 + 0.25 * h2; }
+    else if (kind === 8) { mesh = "sheep"; scale = UNIT_SCALE; } // like the sheep farm's sheep
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;
@@ -1645,9 +1676,9 @@ function updateResources() {
 // are worked out here from how far along the way they are.
 const _e = new THREE.Euler();
 function updateArrows(alpha) {
-  const a = R3.arrows, S = PROJ_STRIDE;
-  a.count = Math.min(projCount, 256);
-  for (let i = 0; i < a.count; i++) {
+  const a = R3.arrows, st = R3.stones, S = PROJ_STRIDE;
+  let na = 0, ns = 0;
+  for (let i = 0; i < Math.min(projCount, 256); i++) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
     const tx = projBuf[b + 8], ty = projBuf[b + 9];
@@ -1657,7 +1688,8 @@ function updateArrows(alpha) {
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
-    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : 0.62;
+    const stone = shooter === K.Trebuchet;
+    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : stone ? 1.2 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
     const toH = atBuilding ? 0.9 : 0.55;
@@ -1665,7 +1697,7 @@ function updateArrows(alpha) {
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = Math.min(1.2, total * 0.12);
+    const arc = stone ? total * 0.3 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
@@ -1673,9 +1705,12 @@ function updateArrows(alpha) {
     _q.setFromEuler(_e.set(0, -Math.atan2(dy, dx), pitch, "YZX"));
     _s.setScalar(1);
     _m4.compose(_p, _q, _s);
-    a.setMatrixAt(i, _m4);
+    if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
+    else a.setMatrixAt(na++, _m4);
   }
+  a.count = na; st.count = ns;
   a.instanceMatrix.needsUpdate = true;
+  st.instanceMatrix.needsUpdate = true;
 }
 
 function updateRally() {
@@ -1891,13 +1926,14 @@ function setSmokeEmitters(list) {
 // Where smoke comes out, relative to the building's centre.
 function updateSmoke() {
   // Chimneys, the smoke hole of a hut someone lives in, the Capitol's campfire.
-  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: CAMPFIRE };
+  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: CAMPFIRE,
+    [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55] };
   if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
   const list = [];
   for (const o of R3.objs.values()) {
     if (!isBld(o.kind) || o.body.scale.y < 1 || list.length >= SMOKE_MAX) continue;
     const ch = CHIMNEYS[o.kind], p = o.root.position;
-    if (ch && (o.kind !== K.Hut || o.residents > 0)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
+    if (ch && ((o.kind !== K.Hut && o.kind !== K.Cottage) || o.residents > 0)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
     if (o.lastHp < 0.5 && o.kind !== K.Farm && list.length < SMOKE_MAX) list.push([p.x - 0.2, p.y + o.height * 0.6, p.z + 0.1, 2]);
   }
   setSmokeEmitters(list);
@@ -2095,7 +2131,7 @@ function icon(k, owner, px) {
   if (mdl.tool) {
     const t = new THREE.Mesh(mdl.tool, mat);
     t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
-    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Worker ? -0.4 : 0) : -(mdl.toolTilt || 0);
+    t.rotation.z = mdl.rig ? (k === K.Spearman || k === K.Swordsman ? -0.25 : k === K.Worker ? -0.4 : 0) : -(mdl.toolTilt || 0);
     g.add(t);
   }
   g.rotation.y = isBld(k) ? -0.6 : -0.9;

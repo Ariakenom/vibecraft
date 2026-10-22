@@ -454,7 +454,8 @@ versions don't play together.
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
-  `docs/plan/economy-and-eras-plan.md`); so far the game is the Ancient era.
+  `docs/plan/economy-and-eras-plan.md`); so far there are two: Ancient and
+  Medieval.
 - **Resources are slots.** Nothing is gathered or stockpiled:
   producers make slots (a lumber camp by a forest makes 4 wood), and
   everything you have holds some while it exists, giving them back when
@@ -467,6 +468,14 @@ versions don't play together.
   by themselves to build foundations, work producers and become soldiers.
   A producer works only while its workers stand at it, so raids that kill
   them hurt. Move its workers away to pause it.
+- **Eras.** A full hut with three foods becomes a cottage by itself, if a
+  wood and a stone are free. Ten cottages bring the Medieval era: iron
+  mines, brickworks, sheep farms and the converters (a bakery turns grain
+  into bread, a weaver wool into clothes, a brewery grain into beer), which
+  hold their inputs while they stand; swordsmen, crossbowmen, knights and
+  trebuchets. Counters go by class: spears and swords beat riders, riders
+  beat bows and crossbows, they beat foot soldiers; trebuchets smash
+  buildings.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
@@ -479,8 +488,10 @@ versions don't play together.
   middle-drag rotates and tilts.
 - **Build:** Q hut, E farm, R lumber camp, T quarry, Y fishing hut,
   U hunting lodge, I orchard, O pasture, F barracks, G range, C stable,
-  V tower, B wonder. Del (twice) demolishes the selected buildings.
-- **Train:** Q.
+  V tower, B wonder. Medieval: J sheep farm, Shift+J weaver, L iron mine,
+  N brickworks, Shift+E bakery, Shift+N brewery, Shift+F siege workshop.
+  Del (twice) demolishes the selected buildings.
+- **Train:** Q, E for the second unit a building trains.
 - **Other keys:**
   - Z attack-move, X stop
   - H home, `.` free workers (at the campfire)

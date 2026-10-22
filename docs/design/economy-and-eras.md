@@ -124,6 +124,11 @@ so on. Each good has an era.
   so you can skip the ones you can't get.
 - A house holds **1 slot of each good it uses**, whatever its size. So a
   farm making 4 grain feeds 4 houses.
+- **Goods are shared out evenly:** every house gets a first good, then a
+  second, and so on, nearest the Capitol first. A house keeps goods it
+  already had before taking new ones, and takes the newest era's goods
+  first (a cottage takes bread before grain, leaving grain to huts). In a
+  shortage the furthest houses lose their last good first.
 - Capacity = 2 × goods used. A hut with 3 goods holds 6 people.
 
 | Tier | House | Max goods | Max residents | Goods that unlock in this era |
@@ -141,6 +146,8 @@ so on. Each good has an era.
   goods, and you have free slots for the upgrade's materials (a cottage
   holds more wood and stone than a hut). Upgrading is automatic; a
   per-house toggle to hold it back is a nice-to-have.
+- A house **falls back** a tier when it gets fewer goods than the lower
+  tier's maximum (a cottage below 3), and gives the extra materials back.
 - When **10 houses** reach a tier, the player enters that era: a badge,
   a fanfare, and that era's buildings and units unlock. The era is kept
   even if houses later drop back.
@@ -174,7 +181,9 @@ needs no save data of its own beyond house residents:
    then by entity id) each take their crew if enough residents are left.
 3. Supply from crewed extractors.
 4. Use by buildings, foundations, units and queued units (always counted).
-5. Converters, in the same order, take inputs if free and add outputs.
+5. Converters, earlier eras first, then oldest first, take their inputs if
+   free (while they stand, crewed or not: a paused converter still holds
+   them) and add their outputs if crewed.
 6. Units over a strategic limit are marked unsupplied, newest first
    (they lose health until it fits again).
 7. Houses, nearest the Capitol first (ties by id), take goods up to their

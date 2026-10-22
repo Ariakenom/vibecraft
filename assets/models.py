@@ -870,6 +870,375 @@ def horseman():
 
 
 # --- Build, bake and export --------------------------------------------------------------------
+# --- Medieval ---------------------------------------------------------------------------
+BRICK, BRICK2, CLAY = "#a8452e", "#c8664a", "#b9764a"
+WOOL = "#ece6d6"
+
+def kite_shield(m, x, y, z, col=TEAM, trim=IRON):
+    """A kite shield on the left arm: round top, pointed bottom, a cross on it."""
+    m.box(0.03, 0.2, 0.17, col, x, y + 0.03, z, vary=0)
+    m.cyl(0.085, 0.085, 0.03, col, x, y + 0.13, z, seg=12, rz=math.pi / 2, vary=0)
+    m.cyl(0.085, 0.0, 0.16, col, x, y - 0.14, z, seg=4, rz=math.pi, ry=math.pi / 4, vary=0)
+    m.box(0.035, 0.3, 0.03, trim, x + 0.005, y, z, vary=0)
+    m.box(0.035, 0.03, 0.16, trim, x + 0.005, y + 0.06, z, vary=0)
+
+def great_helm(m, y, x=0.0, plume=TEAM):
+    """A flat-topped iron helm with an eye slit, closed over the face."""
+    m.cyl(0.112, 0.112, 0.15, IRON, x, y, 0, seg=12, vary=0)
+    m.cyl(0.112, 0.095, 0.025, "#8b929b", x, y + 0.087, 0, seg=12, vary=0)
+    m.box(0.02, 0.018, 0.15, "#1a1410", x + 0.108, y + 0.015, 0, vary=0)  # eye slit
+    m.box(0.02, 0.07, 0.012, "#1a1410", x + 0.108, y - 0.035, 0, vary=0)   # breathing holes
+    if plume:
+        m.ball(0.05, plume, x - 0.01, y + 0.13, 0, sub=1, sy=1.3, sx=0.8, vary=0)
+
+def swordsman():
+    m = Model("Swordsman")
+    tabs_person(m, TEAM, belt="#3a2c20", legs_col="#5b5f66", sleeves="#7d848c")  # mail sleeves and leggings
+    m.part("body")
+    sphere(m, 0.125, IRON, 0.02, 0.36, 0, sx=0.95, sy=0.8, sz=1.07)  # breastplate
+    m.box(0.02, 0.2, 0.05, TEAM_DARK, 0.135, 0.34, 0, vary=0)        # tabard stripe
+    m.part("head", smooth=False)
+    great_helm(m, 0.58)
+    m.part("armL", smooth=False)
+    kite_shield(m, 0.05, 0.3, -0.19)
+    t = Model("Swordsman.tool")  # an arming sword, point up out of the fist
+    t.box(0.022, 0.034, 0.022, "#3a2a1c", 0, 0.0, 0, vary=0)        # grip
+    t.ball(0.02, GOLD, 0, -0.03, 0, sub=0, vary=0)                    # pommel
+    t.box(0.025, 0.02, 0.13, GOLD, 0, 0.03, 0, vary=0)               # crossguard
+    t.box(0.012, 0.36, 0.04, "#d8dde3", 0, 0.22, 0, vary=0)          # blade
+    t.cyl(0.02, 0.0, 0.05, "#d8dde3", 0, 0.425, 0, seg=4, vary=0)    # point
+    return dict(body=m, tool=t, tool_at=(0.0, 0.29, 0.13), tool_bone="armR", pivots=HUMAN_PIVOTS)
+
+def crossbowman():
+    m = Model("Crossbowman")
+    tabs_person(m, "#b9a27a", belt=TEAM, legs_col="#4a3a28", sleeves="#a38e68")  # quilted jacket
+    m.part("body")
+    for i in range(4):
+        m.cyl(0.13 - abs(i - 1.5) * 0.012, 0.13 - abs(i - 1.5) * 0.012, 0.012, "#8f7a56", 0, 0.27 + i * 0.05, 0, seg=12, vary=0)  # quilting
+    m.cyl(0.11, 0.12, 0.04, TEAM, 0, 0.45, 0, seg=12, vary=0)       # collar
+    m.box(0.07, 0.16, 0.08, DARKWOOD, -0.13, 0.36, 0.06, rz=0.2, vary=0)  # bolt case
+    m.part("head", smooth=False)
+    dome(m, 0.112, IRON, 0.585)                                       # kettle hat
+    m.cyl(0.18, 0.17, 0.02, IRON, 0, 0.6, 0, seg=14, vary=0)         # its wide brim
+    t = Model("Crossbowman.tool")  # the crossbow, held level, pointing forward
+    t.box(0.34, 0.035, 0.035, WOOD, 0.1, 0.0, 0, vary=0)             # stock
+    t.box(0.025, 0.025, 0.36, "#5b4a3a", 0.25, 0.01, 0, vary=0)      # the bow (prod)
+    t.cyl(0.003, 0.003, 0.32, CLOTH, 0.19, 0.01, 0, seg=3, rx=math.pi / 2, vary=0)  # string
+    t.box(0.03, 0.06, 0.02, "#3a2a1c", -0.03, -0.04, 0, vary=0)      # trigger
+    t.box(0.04, 0.04, 0.012, IRON, 0.28, 0.0, 0, vary=0)             # stirrup
+    return dict(body=m, tool=t, tool_at=(0.02, 0.32, 0.13), tool_bone="armR", pivots=HUMAN_PIVOTS)
+
+def knight():
+    """The horseman's horse (same size), covered in a team caparison, with an armoured rider."""
+    m = Model("Knight")
+    HORSE, HDARK, HAIR = "#5e4636", "#43302a", "#1e1610"
+    m.smooth = True
+    m.part("hips")
+    sphere(m, 0.17, HORSE, 0, 0.44, 0, sx=1.7, sy=0.9, sz=0.85)
+    for leg, (x, z) in (("legFL", (0.17, -0.07)), ("legFR", (0.17, 0.07)), ("legBL", (-0.17, -0.07)), ("legBR", (-0.17, 0.07))):
+        m.part(leg)
+        sausage(m, 0.045, 0.27, HORSE, x, 0.36, z)
+        m.cyl(0.05, 0.055, 0.05, HAIR, x, 0.045, z, seg=8, vary=0)
+    m.part("neck")
+    sausage(m, 0.075, 0.2, HORSE, 0.22, 0.5, 0, rz=math.pi - 0.6)
+    sphere(m, 0.085, HORSE, 0.42, 0.75, 0, sx=1.5, sy=0.85, sz=0.85, rz=-0.35)
+    sphere(m, 0.05, HDARK, 0.53, 0.71, 0, sx=1.1, sy=0.9, sz=1.3)
+    m.smooth = False
+    sphere(m, 0.088, IRON, 0.43, 0.77, 0, sx=1.35, sy=0.7, sz=0.9, rz=-0.35)  # chanfron
+    for z in (-0.04, 0.04):
+        m.cyl(0.02, 0.0, 0.08, HORSE, 0.36, 0.86, z, seg=5, vary=0)
+    m.box(0.3, 0.06, 0.035, HAIR, 0.3, 0.7, 0, rz=-0.95, vary=0)
+    m.box(0.12, 0.2, 0.17, TEAM, 0.27, 0.56, 0, rz=-0.95, vary=0)  # crinet cloth on the neck
+    m.part("tail")
+    m.cyl(0.04, 0.015, 0.26, HAIR, -0.33, 0.4, 0, seg=6, rz=0.5, vary=0)
+    m.part("hips")
+    # The caparison: a team cloth draped over the horse to the knees.
+    m.cyl(0.2, 0.25, 0.24, TEAM, 0, 0.42, 0, seg=14, vary=0.0)
+    m.box(0.62, 0.22, 0.34, TEAM, 0, 0.42, 0, vary=0)
+    m.box(0.64, 0.035, 0.36, GOLD, 0, 0.31, 0, vary=0)
+    for x in (-0.18, 0.18):
+        m.box(0.04, 0.12, 0.37, TEAM_DARK, x, 0.42, 0, vary=0)
+    m.box(0.22, 0.05, 0.27, "#5a3a24", 0, 0.58, 0, vary=0)  # saddle
+    m.smooth = True
+    for z in (-0.12, 0.12):
+        sausage(m, 0.036, 0.13, "#7d848c", 0.04, 0.6, z, rx=(0.25 if z > 0 else -0.25))
+        sphere(m, 0.042, "#5b5f66", 0.06, 0.46, z * 1.25, sx=1.3, sy=0.7)
+    m.part("body")
+    sphere(m, 0.11, TEAM, -0.02, 0.69, 0, sx=0.95, sy=1.15, sz=1.05)
+    sphere(m, 0.105, IRON, 0.0, 0.71, 0, sx=0.95, sy=0.8, sz=1.07)
+    for side, z in (("armL", -0.11), ("armR", 0.11)):
+        m.part(side)
+        sausage(m, 0.032, 0.11, "#7d848c", -0.02, 0.76, z)
+        sphere(m, 0.036, "#5b5f66", -0.02, 0.64, z)
+    m.part("armL", smooth=False)
+    kite_shield(m, 0.0, 0.7, -0.17)
+    m.part("head", smooth=False)
+    great_helm(m, 0.89, x=-0.02)
+    t = Model("Knight.tool")  # a heavier lance, couched like the horseman's
+    t.cyl(0.02, 0.016, 0.95, "#c9b07a", 0.27, 0.04, 0, seg=6, rz=-1.35, vary=0)
+    t.cyl(0.05, 0.02, 0.08, IRON, -0.12, -0.04, 0, seg=8, rz=-1.35, vary=0)  # vamplate
+    t.cyl(0.032, 0.0, 0.13, IRON, 0.73, 0.14, 0, seg=4, rz=-1.35, vary=0)
+    t.flag(0.12, 0.07, TEAM, 0.58, 0.18, 0.0)
+    return dict(body=m, tool=t, tool_at=(-0.02, 0.64, 0.11), tool_bone="armR", pivots=HORSE_PIVOTS)
+
+def trebuchet():
+    """A siege engine on wheels. The throwing arm is its tool (it swings when
+    it attacks); no skeleton: the whole engine just rolls."""
+    m = Model("Trebuchet")
+    for z in (-0.17, 0.17):
+        m.box(0.7, 0.05, 0.05, WOOD, 0, 0.1, z, vary=0.04)                 # base beams
+        for x in (-0.24, 0.24):
+            m.cyl(0.075, 0.075, 0.035, DARKWOOD, x, 0.075, z * 1.18, seg=10, rx=math.pi / 2, vary=0)  # wheels
+            m.cyl(0.02, 0.02, 0.04, IRON, x, 0.075, z * 1.28, seg=6, rx=math.pi / 2, vary=0)
+        for sx in (-1, 1):
+            m.box(0.04, 0.5, 0.04, WOOD, sx * 0.11, 0.33, z, rz=sx * 0.35, vary=0.04)  # A-frame legs
+    m.box(0.05, 0.05, 0.42, DARKWOOD, 0, 0.55, 0, vary=0)                 # the axle the arm swings on
+    for x in (-0.3, 0.3):
+        m.box(0.05, 0.05, 0.4, WOOD, x, 0.1, 0, vary=0.04)                 # cross beams
+    m.box(0.16, 0.05, 0.3, "#8c6238", -0.24, 0.14, 0, vary=0.04)           # a platform
+    m.ball(0.05, STONE2, -0.25, 0.2, 0.06, sub=1, vary=0.05)              # ammunition
+    m.ball(0.045, STONE2, -0.2, 0.2, -0.05, sub=1, vary=0.05)
+    m.box(0.03, 0.18, 0.03, DARKWOOD, 0.33, 0.2, 0.17, vary=0)
+    m.flag(0.14, 0.09, TEAM, 0.4, 0.25, 0.17)
+    t = Model("Trebuchet.tool")  # the arm: long end back and up, counterweight down at the front
+    t.box(0.04, 0.7, 0.04, "#8c6238", 0, 0.2, 0, rz=0.9, vary=0)
+    t.box(0.13, 0.13, 0.13, "#5a5148", 0.11, -0.11, 0, vary=0.05)          # counterweight box
+    t.box(0.14, 0.03, 0.14, DARKWOOD, 0.11, -0.04, 0, vary=0)
+    t.cyl(0.004, 0.004, 0.2, CLOTH, -0.3, 0.32, 0, seg=3, vary=0)           # the sling
+    t.ball(0.04, "#5a5148", -0.3, 0.22, 0, sub=1, vary=0.05)
+    return dict(body=m, tool=t, tool_at=(0.0, 0.55, 0.0), tool_bone="body", pivots={})
+
+def cottage():
+    """A hut grown up: a timber-framed cottage with a thatched roof and a chimney."""
+    m = Model("Cottage")
+    foundation(m, 2)
+    timber_hall(m, 1.15, 0.55, 0.9, PLASTER, THATCH, "#b08d48", rows=5, windows=2, roof_h=0.55)
+    m.box(0.15, 0.55, 0.15, STONE2, -0.38, 0.95, -0.2, vary=0.06)  # chimney: smoke comes out at the top
+    m.box(0.19, 0.05, 0.19, STONE, -0.38, 1.24, -0.2, vary=0)
+    # a garden with a fence, a bench and a water butt
+    fence(m, -0.85, 0.78, 0.85, 0.78, 8, h=0.2)
+    for i in range(4):
+        m.ball(0.05, "#5c8c34" if i % 2 else "#6f9e3a", -0.6 + i * 0.13, 0.08, 0.66, sub=0)
+    m.ball(0.035, "#d8573e", -0.47, 0.13, 0.66, sub=0)
+    barrel(m, 0.72, 0.5, r=0.08, h=0.18)
+    m.box(0.3, 0.04, 0.1, WOOD, 0.35, 0.16, 0.55, vary=0)
+    for x in (0.23, 0.47):
+        m.box(0.04, 0.14, 0.08, DARKWOOD, x, 0.08, 0.55, vary=0)
+    m.box(0.24, 0.2, 0.18, "#8a6438", -0.72, 0.1, -0.55, vary=0.05)  # woodpile
+    m.pole_flag(0.8, -0.6, 1.0)
+    return m
+
+def sheep(m, x, z, a=0.0, s=1.0):
+    """A woolly sheep facing +x turned by a: a fluffy body, a dark face and legs."""
+    c, sn = math.cos(a), math.sin(a)
+    def at(px, pz):
+        return x + (px * c - pz * sn) * s, z + (px * sn + pz * c) * s
+    for px, pz in ((0.08, 0.04), (0.08, -0.04), (-0.07, 0.04), (-0.07, -0.04)):
+        lx, lz = at(px, pz)
+        m.box(0.025 * s, 0.1 * s, 0.025 * s, "#2a221c", lx, 0.05 * s, lz, vary=0)
+    bx, bz = at(0, 0)
+    m.ball(0.12 * s, WOOL, bx, 0.16 * s, bz, sub=1, sx=1.35, sy=0.85, sz=0.95, jitter=0.12, ry=a, vary=0.04)
+    hx, hz = at(0.16, 0)
+    m.ball(0.055 * s, "#2a221c", hx, 0.19 * s, hz, sub=1, sx=1.3, sy=0.9, sz=0.85, ry=a, vary=0)
+    ex, ez = at(0.13, 0)
+    m.ball(0.05 * s, WOOL, ex, 0.24 * s, ez, sub=0, vary=0.04)
+
+def sheep_farm():
+    m = Model("SheepFarm")
+    m.box(2.9, 0.06, 2.9, "#7a9a44", 0, 0.03, 0, vary=0.03)
+    for x0, z0, x1, z1 in ((-1.4, -1.4, 1.4, -1.4), (-1.4, 1.4, 1.4, 1.4), (-1.4, -1.4, -1.4, 1.4), (1.4, -1.4, 1.4, 0.4)):
+        fence(m, x0, z0, x1, z1, 8, h=0.3)
+    # the shepherd's shed, with fleeces drying and bales of wool
+    m.box(0.9, 0.5, 0.6, "#a08058", -0.8, 0.3, -0.8, vary=0.03)
+    m.roof(0.9, 0.6, 0.3, THATCH, -0.8, 0.55, -0.8, rows=3, row_col="#b08d48")
+    door(m, -0.8, -0.49, w=0.2, h=0.34, y=0.05)
+    for i in range(3):
+        m.box(0.2, 0.16, 0.16, WOOL, -0.15 + i * 0.22, 0.14, -1.05, vary=0.05)
+        m.box(0.21, 0.02, 0.17, "#b8a77a", -0.15 + i * 0.22, 0.14, -1.05, vary=0)
+    m.box(0.04, 0.4, 0.04, DARKWOOD, 0.5, 0.2, -1.1, vary=0)
+    m.box(0.04, 0.4, 0.04, DARKWOOD, 0.9, 0.2, -1.1, vary=0)
+    m.box(0.44, 0.03, 0.03, DARKWOOD, 0.7, 0.38, -1.1, vary=0)
+    m.box(0.16, 0.18, 0.02, WOOL, 0.62, 0.27, -1.1, vary=0)
+    m.box(0.14, 0.16, 0.02, "#d9cfb5", 0.8, 0.28, -1.1, vary=0)
+    # The game draws units and grazing animals 1.5 times their size: so are these sheep.
+    for x, z, a in ((0.25, 0.3, 0.4), (0.85, 0.75, 2.5), (-0.55, 0.75, -0.6), (0.7, -0.3, 1.2)):
+        sheep(m, x, z, a, s=1.5)
+    m.box(0.5, 0.12, 0.18, WOOD, -0.6, 0.12, 0.1, vary=0)  # a trough
+    m.box(0.44, 0.02, 0.13, "#4f87a0", -0.6, 0.18, 0.1, vary=0)
+    m.pole_flag(1.25, -1.25, 1.0)
+    return m
+
+def iron_mine():
+    m = Model("IronMine")
+    foundation(m, 2, col="#7a7064")
+    # a rocky knoll with a timbered adit cut into it
+    for x, z, r in ((-0.35, -0.3, 0.55), (0.25, -0.45, 0.45), (-0.65, 0.2, 0.32), (0.55, 0.05, 0.3)):
+        m.rock(r, "#857b6e", x, 0.02, z, flat=0.75, vary=0.06)
+    for x, y, z in ((-0.5, 0.45, -0.1), (0.1, 0.5, -0.5), (0.45, 0.25, 0.1), (-0.2, 0.62, -0.35)):
+        m.ball(0.05, "#8a4a32", x, y, z, sub=0, jitter=0.2, vary=0.1)  # rusty ore
+    m.box(0.42, 0.42, 0.25, "#151210", -0.05, 0.27, 0.12, vary=0)       # the dark entrance
+    for sx in (-1, 1):
+        m.box(0.07, 0.5, 0.07, WOOD, -0.05 + sx * 0.24, 0.3, 0.27, vary=0.04)
+    m.box(0.6, 0.08, 0.09, WOOD, -0.05, 0.57, 0.27, vary=0.04)
+    # rails out to a cart full of ore, and the heap it tips onto
+    for sz in (-1, 1):
+        m.box(0.03, 0.025, 0.7, "#5a5148", -0.05 + sz * 0.09, 0.08, 0.6, vary=0)
+    for i in range(5):
+        m.box(0.26, 0.02, 0.05, DARKWOOD, -0.05, 0.07, 0.3 + i * 0.15, vary=0)
+    m.box(0.28, 0.16, 0.22, "#5a4a3a", -0.05, 0.2, 0.75, taper=1.15, vary=0.04)
+    for x, z in ((-0.13, 0.75), (0.03, 0.75), (-0.05, 0.7)):
+        m.ball(0.06, "#6e3e2c", x, 0.29, z, sub=0, jitter=0.2, vary=0.1)
+    for x, z in ((-0.14, 0.66), (0.04, 0.66), (-0.14, 0.84), (0.04, 0.84)):
+        m.cyl(0.035, 0.035, 0.02, "#2e2a26", x, 0.11, z + (0.0), seg=8, rz=math.pi / 2, vary=0)
+    for x, z, r in ((0.6, 0.55, 0.16), (0.72, 0.4, 0.12), (0.5, 0.7, 0.1)):
+        m.rock(r, "#7a4632", x, 0.05, z, flat=0.6, vary=0.1)
+    m.box(0.18, 0.3, 0.05, DARKWOOD, -0.7, 0.2, 0.62, vary=0)  # pick and shovel leaning on a post
+    m.pole_flag(0.75, -0.75, 1.1)
+    return m
+
+def brickworks():
+    m = Model("Brickworks")
+    foundation(m, 2)
+    # a domed kiln with a tall chimney, glowing at the firing hole
+    m.cyl(0.42, 0.42, 0.45, BRICK, -0.25, 0.3, -0.2, seg=14, vary=0.05)
+    sphere(m, 0.42, BRICK2, -0.25, 0.52, -0.2, sy=0.75, vary=0.05)
+    for y in (0.15, 0.32, 0.49):
+        m.cyl(0.425, 0.425, 0.02, "#7a3020", -0.25, y, -0.2, seg=14, vary=0)
+    m.box(0.16, 0.14, 0.06, "#ff7a2a", -0.25, 0.17, 0.21, vary=0)
+    m.box(0.2, 0.18, 0.04, "#3a1a10", -0.25, 0.18, 0.2, vary=0)
+    m.box(0.16, 0.9, 0.16, BRICK, 0.15, 0.75, -0.55, vary=0.05)  # chimney: smoke comes out at the top
+    m.box(0.2, 0.05, 0.2, "#7a3020", 0.15, 1.22, -0.55, vary=0)
+    # stacks of fired bricks, and green ones drying under a little roof
+    for k in range(3):
+        for j in range(3):
+            m.box(0.2, 0.06, 0.1, BRICK if (j + k) % 2 else BRICK2, 0.55, 0.11 + k * 0.065, 0.2 + j * 0.11, vary=0.06)
+    for i in range(2):
+        for j in range(3):
+            m.box(0.12, 0.05, 0.07, CLAY, 0.35 + j * 0.15, 0.13 + i * 0.12, 0.75, vary=0.06)
+    for sx in (-1, 1):
+        m.box(0.04, 0.45, 0.04, WOOD, 0.5 + sx * 0.28, 0.25, 0.75, vary=0)
+    m.box(0.7, 0.04, 0.3, THATCH, 0.5, 0.48, 0.75, rx=0.15, vary=0.05)
+    m.box(0.36, 0.1, 0.3, "#8a5a3a", -0.6, 0.11, 0.6, vary=0.05)  # a clay pit's barrow load
+    m.pole_flag(-0.8, -0.7, 1.0)
+    return m
+
+def bakery():
+    m = Model("Bakery")
+    foundation(m, 2)
+    timber_hall(m, 0.95, 0.58, 1.0, PLASTER, TILE, "#7e3a26", rows=4, windows=1, roof_h=0.42, gable_front=True)
+    # the bread oven: a domed hump on the side, with a chimney
+    m.cyl(0.3, 0.3, 0.2, STONE2, 0.65, 0.16, -0.2, seg=12, vary=0.04)
+    sphere(m, 0.3, "#c9a27a", 0.65, 0.26, -0.2, sy=0.8, vary=0.04)
+    m.box(0.14, 0.1, 0.04, "#ff8a3a", 0.65, 0.2, 0.09, vary=0)
+    m.box(0.13, 0.6, 0.13, STONE2, 0.65, 0.55, -0.42, vary=0.06)  # chimney: smoke comes out at the top
+    m.box(0.17, 0.05, 0.17, STONE, 0.65, 0.86, -0.42, vary=0)
+    # a table of loaves out front, and sacks of flour
+    m.box(0.4, 0.04, 0.2, WOOD, -0.55, 0.3, 0.68, vary=0)
+    for sx in (-1, 1):
+        m.box(0.04, 0.26, 0.04, DARKWOOD, -0.55 + sx * 0.17, 0.15, 0.68, vary=0)
+    for i in range(4):
+        m.ball(0.045, "#d9a25a", -0.68 + i * 0.09, 0.35, 0.68, sub=1, sx=1.4, sy=0.7, vary=0.06)
+    sack(m, 0.62, 0.62); sack(m, 0.48, 0.66, s=0.9); sack(m, 0.56, 0.55, y=0.09, s=0.85)
+    m.box(0.22, 0.2, 0.03, TEAM, 0, 0.82, 0.53, vary=0)  # a sign over the door
+    m.ball(0.05, "#d9a25a", 0, 0.82, 0.55, sub=1, sx=1.4, sy=0.7, vary=0)
+    m.pole_flag(-0.8, -0.6, 1.0)
+    return m
+
+def weaver():
+    m = Model("Weaver")
+    foundation(m, 2)
+    timber_hall(m, 0.95, 0.58, 0.95, "#cdbb98", "#6f7a5a", "#5d6649", rows=4, windows=1, roof_h=0.42, gable_front=True)
+    # a loom out front with cloth on it, in the team colour
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            m.box(0.035, 0.42, 0.035, WOOD, 0.55 + sx * 0.2, 0.21, 0.6 + sz * 0.13, vary=0)
+    m.box(0.44, 0.035, 0.035, DARKWOOD, 0.55, 0.42, 0.47, vary=0)
+    m.box(0.44, 0.035, 0.035, DARKWOOD, 0.55, 0.25, 0.73, vary=0)
+    m.box(0.36, 0.015, 0.26, TEAM, 0.55, 0.33, 0.6, rx=0.55, vary=0)
+    for i in range(6):
+        m.box(0.004, 0.2, 0.004, CLOTH, 0.4 + i * 0.06, 0.34, 0.54, rx=0.55, vary=0)
+    # bolts of cloth and bales of wool
+    for i, col in enumerate((TEAM_DARK, "#4f7aa8", "#a8452e")):
+        m.cyl(0.06, 0.06, 0.32, col, -0.6, 0.08 + i * 0.12, 0.62, seg=8, rx=math.pi / 2, vary=0)
+    for x, z in ((0.65, -0.55), (0.65, -0.3)):
+        m.box(0.2, 0.18, 0.2, WOOL, x, 0.15, z, bevel=0.02, vary=0.04)
+    m.pole_flag(-0.8, -0.6, 1.0)
+    return m
+
+def brewery():
+    m = Model("Brewery")
+    foundation(m, 2)
+    timber_hall(m, 1.0, 0.6, 0.95, "#b8a07a", TILE, "#7e3a26", rows=4, windows=1, roof_h=0.42, gable_front=True)
+    # a copper kettle under a lean-to, and casks of beer
+    m.cyl(0.2, 0.17, 0.26, "#b06a3a", 0.6, 0.2, -0.35, seg=12, vary=0.03)
+    sphere(m, 0.17, "#c47a46", 0.6, 0.33, -0.35, sy=0.6, vary=0.03)
+    m.cyl(0.03, 0.03, 0.28, "#b06a3a", 0.6, 0.55, -0.35, seg=6, vary=0)
+    for sx in (-1, 1):
+        m.box(0.04, 0.6, 0.04, WOOD, 0.6 + sx * 0.25, 0.3, -0.05, vary=0)
+    m.box(0.62, 0.035, 0.6, "#6b4d2d", 0.6, 0.62, -0.35, rx=-0.12, vary=0.05)
+    for x, z in ((-0.55, 0.62), (-0.35, 0.68), (-0.45, 0.5)):
+        barrel(m, x, z, r=0.09, h=0.2)
+    m.cyl(0.09, 0.09, 0.2, "#8a5f35", 0.55, 0.13, 0.62, seg=8, rx=math.pi / 2, vary=0.04)  # a cask on its side
+    m.cyl(0.095, 0.095, 0.02, IRON, 0.55, 0.13, 0.55, seg=8, rx=math.pi / 2, vary=0)
+    m.box(0.22, 0.2, 0.03, TEAM, 0, 0.84, 0.51, vary=0)  # a sign: a tankard
+    m.box(0.07, 0.09, 0.03, GOLD, 0, 0.83, 0.53, vary=0)
+    m.pole_flag(-0.8, -0.6, 1.0)
+    return m
+
+def siege_workshop():
+    m = Model("SiegeWorkshop")
+    foundation(m, 3)
+    # a big open-sided shed of heavy timbers
+    for x in (-1.1, 0.0, 1.1):
+        for z in (-0.9, 0.9):
+            m.box(0.12, 1.0, 0.12, WOOD, x, 0.55, z, vary=0.04)
+    for z in (-0.9, 0.9):
+        m.box(2.36, 0.1, 0.12, DARKWOOD, 0, 1.05, z, vary=0.03)
+    m.roof(2.3, 1.85, 0.55, "#6b4d2d", 0, 1.1, 0, rows=5, row_col="#5c4126")
+    m.box(2.2, 0.03, 1.7, "#8c6a46", 0, 0.08, 0, vary=0.05)  # plank floor
+    # a trebuchet being built inside: its frame up, the arm on trestles
+    for z in (-0.25, 0.25):
+        m.box(1.1, 0.07, 0.07, WOOD, -0.2, 0.15, z, vary=0.04)
+        for sx in (-1, 1):
+            m.box(0.06, 0.75, 0.06, WOOD, -0.2 + sx * 0.17, 0.48, z, rz=sx * 0.35, vary=0.04)
+    m.box(0.07, 0.07, 0.6, DARKWOOD, -0.2, 0.82, 0, vary=0)
+    for x in (0.55, 0.95):
+        for sx in (-1, 1):
+            m.box(0.04, 0.3, 0.04, WOOD, x + sx * 0.1, 0.22, 0.45, rz=sx * 0.3, vary=0)
+    m.box(1.0, 0.07, 0.07, "#8c6238", 0.75, 0.39, 0.45, vary=0.04)
+    for i in range(3):
+        m.cyl(0.07, 0.07, 1.1, "#8c6238", 0.4 + i * 0.16, 0.16, -0.6, seg=7, rz=math.pi / 2, vary=0.05)
+    m.cyl(0.14, 0.14, 0.05, DARKWOOD, 1.25, 0.18, 0.4, seg=12, rx=math.pi / 2, vary=0)  # a spare wheel
+    m.pole_flag(-1.35, 1.2, 1.3)
+    return m
+
+def iron_ore():
+    """Iron ore: dark stone streaked with rust."""
+    m = Model("IronOre")
+    for x, z, r in [(0, 0, 0.3), (0.24, 0.14, 0.21), (-0.2, -0.13, 0.19), (0.06, -0.24, 0.13)]:
+        m.rock(r, "#6e655c", x, 0, z, vary=0.06)
+    for x, y, z in [(-0.27, 0.05, 0.12), (0.3, 0.06, -0.1), (0.12, 0.2, 0.15), (-0.05, 0.3, -0.05)]:
+        m.ball(0.05, "#9a4a2c", x, y, z, sub=0, jitter=0.25, vary=0.1)
+    return m
+
+def clay_pit():
+    """A clay pit: a hollow of wet, reddish clay with a few cut lumps."""
+    m = Model("ClayPit")
+    m.cyl(0.42, 0.38, 0.05, "#8a5236", 0, 0.025, 0, seg=10, vary=0.04)
+    m.cyl(0.3, 0.27, 0.03, "#6e3e28", 0, 0.05, 0, seg=10, vary=0.04)
+    for x, z, s in [(0.2, 0.15, 0.09), (-0.18, 0.2, 0.07), (0.05, -0.22, 0.08)]:
+        m.box(s * 1.4, s, s, CLAY, x, 0.06 + s / 2, z, ry=random.random(), bevel=0.01, vary=0.06)
+    return m
+
+def sheep_herd():
+    """Sheep grazing on a hillside: a deposit tile of the sheep hills."""
+    m = Model("Sheep")
+    m.smooth = True
+    sheep(m, -0.12, -0.08, 0.5, s=1.0)
+    sheep(m, 0.18, 0.14, 2.7, s=0.9)
+    return m
+
+
 def clear_scene():
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob, do_unlink=True)
@@ -1005,9 +1374,10 @@ def main():
 
     spacing = 7.0
     groups = {
-        "buildings": [capitol, barracks, archery_range, stable, tower, settlement, farm, granary, sawmill, mason, smithy, market, temple, wonder],
-        "resources": [pine, oak, bush, stone, gold],
-        "units": [citizen, spearman, archer, horseman],
+        "buildings": [capitol, barracks, archery_range, stable, tower, settlement, farm, granary, sawmill, mason, smithy, market, temple, wonder,
+                      cottage, sheep_farm, iron_mine, brickworks, bakery, weaver, brewery, siege_workshop],
+        "resources": [pine, oak, bush, stone, gold, iron_ore, clay_pit, sheep_herd],
+        "units": [citizen, spearman, archer, horseman, swordsman, crossbowman, knight, trebuchet],
     }
     ao_dist = {"buildings": 0.5, "resources": 0.2, "units": 0.1}
     all_objs, pivots_all = [], []

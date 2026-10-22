@@ -27,7 +27,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 4: explored ground, eras, the AI's scout (economy Phase 3).
 /// 5: arrows remember where they were loosed from.
 /// 6: people are units (workers, the campfire, recruits); no residents.
-const VERSION: u32 = 6;
+/// 7: the Medieval era (new kinds, deposits for iron, clay and sheep).
+const VERSION: u32 = 7;
 
 // ---------------------------------------------------------------------------
 // Writer

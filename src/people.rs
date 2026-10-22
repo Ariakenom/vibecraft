@@ -106,8 +106,8 @@ impl Game {
     /// 3. Use: every building, foundation, unit and queued unit.
     /// 4. Converters take their inputs, in id order, if they're free.
     /// 5. Units over a shortage are unsupplied (`supply_units`).
-    /// 6. Houses, nearest the Capitol first, take one slot of each good they
-    ///    can use from what's left, keeping goods they already had first.
+    /// 6. Houses take one slot of each good they can use from what's left,
+    ///    shared out evenly, nearest the Capitol first (`house_goods`).
     /// 7. If there are more people than beds, some leave.
     pub(crate) fn resolve(&mut self) {
         self.resolve_with(true);
@@ -177,26 +177,36 @@ impl Game {
                 }
             }
         }
-        // 4. Converters, in id order: each borrows its inputs if they're
-        //    free and adds its outputs. One that can't stops (`fed` false),
-        //    and anything downstream may stop with it.
-        for e in self.ents.iter_mut().filter(|e| e.alive) {
+        // 4. Converters, earlier eras first, then oldest first: each built
+        //    one borrows its inputs if they're free (crewed or not: a
+        //    paused bakery still holds its grain), and adds its outputs if
+        //    its crew is there too. One whose inputs aren't free stops
+        //    (`fed` false), and anything downstream may stop with it.
+        let mut conv: Vec<(u8, usize)> = (0..self.ents.len())
+            .filter(|&i| self.ents[i].alive && self.ents[i].built >= 1.0 && !self.ents[i].kind.stats().consumes.is_empty())
+            .map(|i| (self.ents[i].kind.era(), i))
+            .collect();
+        conv.sort();
+        for e in self.ents.iter_mut() {
+            e.fed = false;
+        }
+        for (_, i) in conv {
+            let e = &mut self.ents[i];
             let st = e.kind.stats();
-            if st.consumes.is_empty() {
-                continue;
-            }
             let o = e.owner as usize;
             let pct = self.players[o].supply_pct as u32;
             let has = |r: Res| (supply[o][r.idx()] * pct / 100) as i64 - used[o][r.idx()] as i64;
-            e.fed = e.crewed && st.consumes.iter().all(|&(r, k)| has(r) >= k as i64);
+            e.fed = st.consumes.iter().all(|&(r, k)| has(r) >= k as i64);
             if e.fed {
                 for &(r, k) in st.consumes {
                     used[o][r.idx()] += k as u32;
                 }
-                for &(r, k) in st.produces {
-                    // Outputs are counted before the handicap like any supply,
-                    // so add them so that the handicap leaves them whole.
-                    supply[o][r.idx()] += (k as u32 * 100).div_ceil(pct.max(1));
+                if e.crewed {
+                    for &(r, k) in st.produces {
+                        // Outputs are counted before the handicap like any
+                        // supply, so add them so the handicap leaves them whole.
+                        supply[o][r.idx()] += (k as u32 * 100).div_ceil(pct.max(1));
+                    }
                 }
             }
         }
@@ -213,13 +223,88 @@ impl Game {
         }
         // 5.
         self.supply_units(settle);
-        // 6–7, player by player.
+        // 6–7, player by player, then house tiers and eras.
         for owner in self.player_ids() {
             self.house_goods(owner, settle);
             if settle {
                 self.leave(owner);
             }
             self.fill_houses(owner);
+            if settle {
+                self.raise_era(owner);
+                self.house_tiers(owner);
+            }
+        }
+    }
+
+    /// One house a tick may change tier. A house **upgrades** when every
+    /// bed is taken, it uses as many goods as its tier allows, and the
+    /// bigger house's extra materials are free (a cottage holds more wood
+    /// and stone than a hut); nearest the Capitol first. A house that no
+    /// longer gets the goods its old tier needed **downgrades**, giving the
+    /// extra materials back; furthest first. Houses can reach one tier past
+    /// the player's era: that's how the next era is reached.
+    fn house_tiers(&mut self, owner: u8) {
+        let houses = self.houses_by_distance(owner);
+        for &i in houses.iter().rev() {
+            let e = &self.ents[i];
+            let Some(lower) = e.kind.downgrade() else { continue };
+            if e.built < 1.0 || e.goods.count_ones() >= house_max_goods(lower.house_tier().unwrap_or(0)) as u32 {
+                continue;
+            }
+            self.change_house(i, lower);
+            return;
+        }
+        let era = self.players[owner as usize].era;
+        for &i in &houses {
+            let e = &self.ents[i];
+            let (Some(tier), Some(next)) = (e.kind.house_tier(), e.kind.upgrade()) else { continue };
+            if e.built < 1.0 || next.house_tier().unwrap_or(0) > era + 1 || e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
+                continue;
+            }
+            let p = &self.players[owner as usize];
+            let affordable = next.stats().cost.iter().all(|&(r, k)| {
+                let had = e.kind.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, k)| k);
+                p.free(r) >= k as i32 - had as i32
+            });
+            if affordable {
+                self.change_house(i, next);
+                return;
+            }
+        }
+    }
+
+    /// Turn house `i` into `kind`: it holds the new kind's slots instead of
+    /// the old one's, and keeps its share of health.
+    fn change_house(&mut self, i: usize, kind: Kind) {
+        let e = &mut self.ents[i];
+        let (old, new) = (e.kind.stats(), kind.stats());
+        let up = kind.house_tier() > e.kind.house_tier();
+        e.hp = (e.hp / old.hp * new.hp).min(new.hp);
+        e.kind = kind;
+        let (owner, x, y) = (e.owner, e.x, e.y);
+        let p = &mut self.players[owner as usize];
+        for &(r, k) in old.cost {
+            p.used[r.idx()] -= k;
+        }
+        for &(r, k) in new.cost {
+            p.used[r.idx()] += k;
+        }
+        if owner == self.local {
+            self.push_event(if up { Ev::Upgraded } else { Ev::Downgraded }, x, y, kind as u32 as f32);
+        }
+    }
+
+    /// A player enters the next era when `HOUSES_FOR_ERA` of their houses
+    /// have reached its tier. Eras are never lost.
+    fn raise_era(&mut self, owner: u8) {
+        let era = self.players[owner as usize].era;
+        if era >= LAST_ERA {
+            return;
+        }
+        if self.houses_past_era(owner) >= HOUSES_FOR_ERA {
+            self.players[owner as usize].era = era + 1;
+            self.push_event(Ev::EraReached, 0.0, 0.0, (owner as u32 * 16 + era as u32 + 1) as f32);
         }
     }
 
@@ -248,17 +333,30 @@ impl Game {
             let mut left: [i32; N_RES] = std::array::from_fn(|r| p.free(Res::ALL[r]).max(0));
             let wanted = |r: Res, tier: u8| r.is_house_good() && r.era() <= tier;
             let mut goods = vec![0u32; houses.len()];
-            // First every house keeps what it had, nearest first, so a
-            // shortage empties the furthest houses rather than shuffling.
-            for keep in [true, false] {
-                for (h, &i) in houses.iter().enumerate() {
-                    let e = &self.ents[i];
-                    let Some(tier) = e.kind.house_tier().filter(|_| e.built >= 1.0) else { continue };
-                    for r in Res::ALL {
-                        let had = e.goods & (1 << r.idx()) != 0;
-                        if had == keep && goods[h] & (1 << r.idx()) == 0 && goods[h].count_ones() < house_max_goods(tier) as u32 && wanted(r, tier) && left[r.idx()] > 0 {
-                            goods[h] |= 1 << r.idx();
-                            left[r.idx()] -= 1;
+            // Level by level: every house gets a first good, then a second,
+            // and so on, nearest first, so goods are shared out evenly and
+            // a shortage takes the furthest houses' last goods first. At
+            // each level a house keeps a good it already had before it takes
+            // a new one, so supply that doesn't change shuffles nothing.
+            let top = houses.iter().filter_map(|&i| self.ents[i].kind.house_tier()).map(house_max_goods).max().unwrap_or(0) as u32;
+            for level in 1..=top {
+                for keep in [true, false] {
+                    for (h, &i) in houses.iter().enumerate() {
+                        let e = &self.ents[i];
+                        let Some(tier) = e.kind.house_tier().filter(|_| e.built >= 1.0) else { continue };
+                        let most = level.min(house_max_goods(tier) as u32);
+                        // New goods: the latest era's first, leaving older
+                        // goods to houses that can't use the new ones.
+                        let order: [Res; N_RES] = if keep { Res::ALL } else { std::array::from_fn(|k| Res::ALL[N_RES - 1 - k]) };
+                        for r in order {
+                            if goods[h].count_ones() >= most {
+                                break;
+                            }
+                            let had = e.goods & (1 << r.idx()) != 0;
+                            if had == keep && goods[h] & (1 << r.idx()) == 0 && wanted(r, tier) && left[r.idx()] > 0 {
+                                goods[h] |= 1 << r.idx();
+                                left[r.idx()] -= 1;
+                            }
                         }
                     }
                 }
