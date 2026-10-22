@@ -3,8 +3,12 @@
 
 use crate::defs::Dep;
 
-pub const MAP_W: i32 = 80;
-pub const MAP_H: i32 = 80;
+pub const MAP_W: i32 = 120;
+pub const MAP_H: i32 = 120;
+/// How far apart a base's deposits are, against the first maps (80 tiles).
+const SPREAD: f32 = 1.5;
+/// Tiles of sea along every edge of the map.
+const COAST: i32 = 3;
 
 pub const GRASS: u8 = 0;
 pub const WATER: u8 = 1;
@@ -167,13 +171,13 @@ impl Sym {
 /// and one base centre tile per player.
 pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>) {
     let players = players.clamp(2, 4);
-    let (w, h) = if players <= 2 { (MAP_W, MAP_H) } else { (96, 96) };
+    let (w, h) = if players <= 2 { (MAP_W, MAP_H) } else { (144, 144) };
     let n = (w * h) as usize;
     let syms: &[Sym] = if players <= 2 { &[Sym::Id, Sym::Rot180] } else { &[Sym::Id, Sym::Rot90, Sym::Rot180, Sym::Rot270] };
     let images = |x: i32, y: i32| syms.iter().map(move |s| s.apply(x, y, w, h));
     // Base 1 sits in the bottom-left; the others are its turned images.
     // With 3 players, one of the four corners is simply left empty.
-    let b1 = (13 + (w - MAP_W) / 12, h - 14 - (h - MAP_H) / 12);
+    let b1 = (21 + (w - MAP_W) / 12, h - 22 - (h - MAP_H) / 12);
     let base_order: &[Sym] = if players <= 2 { &[Sym::Id, Sym::Rot180] } else { &[Sym::Id, Sym::Rot180, Sym::Rot90, Sym::Rot270] };
     let bases: Vec<(i32, i32)> = base_order.iter().take(players).map(|s| s.apply(b1.0, b1.1, w, h)).collect();
     let all_bases: Vec<(f32, f32)> = images(b1.0, b1.1).map(|(x, y)| (x as f32 + 0.5, y as f32 + 0.5)).collect();
@@ -197,13 +201,21 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             // so nobody spawns in a lake and the map is always connected.
             for &b in &all_bases {
                 let d = dist(p, b);
-                if d < 14.0 {
-                    ht = ht.max(0.46 + (14.0 - d) / 14.0 * 0.1);
+                let r = 14.0 * SPREAD;
+                if d < r {
+                    ht = ht.max(0.46 + (r - d) / r * 0.1);
                 }
             }
             let road = all_bases.iter().map(|&b| dist_to_segment(p, b, centre)).fold(f32::MAX, f32::min);
             if road < 5.0 {
                 ht = ht.max(0.42);
+            }
+            // The sea all round: a few tiles of water along every edge,
+            // shelving up to the land (a little ragged).
+            let edge = x.min(y).min(w - 1 - x).min(h - 1 - y);
+            if edge < COAST + 3 {
+                let wobble = hash(cx, cy, seed ^ 0x5EA) * 0.03;
+                ht = ht.min(0.24 + 0.035 * edge as f32 + wobble);
             }
             terrain[i] = if ht < 0.34 {
                 WATER
@@ -218,7 +230,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
 
             // Forests from a second noise layer.
             let f = fbm(cx as f32 / 7.0 + 40.0, cy as f32 / 7.0 + 40.0, seed ^ 0xBEEF);
-            let near_base = all_bases.iter().any(|&b| dist(p, b) < 9.5);
+            let near_base = all_bases.iter().any(|&b| dist(p, b) < 11.0);
             if (terrain[i] == GRASS || terrain[i] == HILL) && f > 0.6 && hash(cx, cy, seed ^ 7) < 0.82 && !near_base && road > 2.5 {
                 feat[i] = Feat::Tree;
             }
@@ -301,14 +313,15 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     };
     for (dx, dy, f, r) in clusters {
-        place(b1.0 + dx, b1.1 + dy, f, r);
+        let s = |v: i32| (v as f32 * SPREAD).round() as i32;
+        place(b1.0 + s(dx), b1.1 + s(dy), f, r);
     }
     for (x, y, f, r) in neutral {
-        place(x * w / MAP_W, y * h / MAP_H, f, r);
+        place(x * w / 80, y * h / 80, f, r);
     }
     // A pond by every base, so every start has fish: houses need three
     // different foods to grow, and the others are few.
-    let pond = (b1.0 - 4, b1.1 + 11);
+    let pond = (b1.0 - 5, b1.1 + 12);
     for dy in -2..=2 {
         for dx in -2..=2 {
             let (x, y) = (pond.0 + dx, pond.1 + dy);

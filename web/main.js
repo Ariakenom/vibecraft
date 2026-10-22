@@ -44,7 +44,7 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.RocketArtillery]: "Rocket Artillery", [K.Jet]: "Jet", [K.TowerBlock]: "Tower Block", [K.UraniumMine]: "Uranium Mine",
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo" };
 const DESC = {
-  [K.Worker]: "Works at producers, builds (and is used up doing it), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
+  [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, it becomes a Cottage by itself if 1 more wood and 1 stone are free.",
   [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut. Full, with 5 goods, it becomes a Townhouse (from the Medieval era) if 1 more stone and 2 brick are free.",
   [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Below 5 goods it falls back to a cottage. Full, with 7 goods, it becomes a Tenement (from the Gunpowder era) if 1 more brick and 1 steel are free.",
@@ -139,7 +139,7 @@ const NAME_KEY = "vibecraft.name";
 const cleanName = s => typeof s === "string" ? s.replace(/[\u0000-\u001f\u007f<>&"'`]/g, "").replace(/\s+/g, " ").trim().slice(0, 16) : "";
 // Until you pick one, you're a famous name from history (kept, like a picked one).
 const RANDOM_NAMES = ["Hannibal", "Boudica", "Cleopatra", "Ashoka", "Leonidas", "Hypatia", "Saladin", "Tomyris", "Charlemagne", "Theodora", "Ramesses", "Sargon", "Hammurabi", "Pericles", "Zenobia", "Attila", "Alaric", "Cnut", "Harald", "Birger Jarl", "Gustav Vasa", "Kristina", "Isabella", "Pachacuti", "Mansa Musa", "Sundiata", "Nzinga", "Wu Zetian", "Akbar", "Suleiman", "Babur", "Cyrus", "Darius", "Nefertiti", "Trajan", "Hatshepsut", "Ragnar", "Eleanor", "Justinian", "Tamar", "Carthage", "Babylon", "Uruk", "Thebes", "Knossos", "Byzantium", "Samarkand", "Timbuktu", "Cuzco", "Tenochtitlan", "Kyoto", "Luoyang", "Uppsala", "Birka", "Visby", "Novgorod", "Venice", "Cordoba", "Aachen", "Antioch", "Petra", "Palmyra", "Persepolis", "Nineveh", "Angkor", "Axum", "Great Zimbabwe", "Ur", "Sparta", "Corinth", "Syracuse", "Alexandria", "Memphis", "Kish", "Mycenae", "Pataliputra"];
-const randomName = () => RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
+const randomName = (not = "") => { const l = RANDOM_NAMES.filter(n => n !== not); return l[Math.floor(Math.random() * l.length)]; };
 let myName = "";
 try { myName = cleanName(localStorage.getItem(NAME_KEY) || ""); } catch { /* storage blocked */ }
 if (!myName) { myName = randomName(); try { localStorage.setItem(NAME_KEY, myName); } catch { /* storage blocked */ } }
@@ -175,7 +175,7 @@ function buildMenu() {
   const ks = BUILD_ORDER.filter(k => W.kind_era(k) === buildPage);
   return ks.map((k, n) => [k, PAGE_KEYS[n] || ""]);
 }
-const TRAIN_KEYS = "QERTY";
+const TRAIN_KEYS = "QERTYUIOFGCVBJLN"; // enough for every unit when several kinds of building are selected
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet] };
@@ -509,7 +509,7 @@ function drawOverlay() {
     const k = E(i, F.kind), flags = E(i, F.flags);
     const sel = flags & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(k), short = flags & 16, paused = flags & 64, idleP = (flags & 32) && !paused;
     // Your houses show the first good they still want, in a bubble.
-    const want = bld && E(i, F.owner) === ME && !(flags & 2) && stat(k, 10) >= 0 ? houseWants(k, W.house_goods(E(i, F.id))).wants[0] : undefined;
+    const want = bld && E(i, F.owner) === ME && !(flags & 2) && stat(k, 10) >= 0 ? nextWant(k, W.house_goods(E(i, F.id))) : undefined;
     if (!sel && !short && !idleP && !paused && want === undefined && (f >= 1 || bld)) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
@@ -601,7 +601,7 @@ function setupTopBar(shown = []) {
     c.onmouseenter = c.onfocus = () => { resTipFor = r; renderResTip(); };
     c.onmouseleave = c.onblur = () => { resTipFor = -1; $("restip").hidden = true; };
     c.onclick = () => { resTipFor = resTipFor === r ? -1 : r; renderResTip(); }; // tap on phones
-    bar.append(c); chips.push(c);
+    chips.push(c);
   }
   const pop = document.createElement("span"); pop.className = "chip pop"; pop.tabIndex = 0;
   pop.onmouseenter = pop.onfocus = () => { resTipFor = PEOPLE_TIP; renderResTip(); };
@@ -609,7 +609,7 @@ function setupTopBar(shown = []) {
   pop.onclick = () => { resTipFor = resTipFor === PEOPLE_TIP ? -1 : PEOPLE_TIP; renderResTip(); };
   const era = document.createElement("button"); era.className = "era"; era.title = "Tech tree (K)";
   era.onclick = toggleTech;
-  bar.append(pop, era);
+  bar.append(pop, ...chips, era); // people first, on the left
   topBar = { chips, pop, era, key: shown.join(",") };
 }
 let topBar = null, resTipFor = -1;
@@ -766,7 +766,7 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");
@@ -843,6 +843,14 @@ function singleInfo(panel, i) {
       : st === 2 ? `<div class="statline">A nuke is armed: Launch (Z), then click a target.</div>` : `<div class="statline">Empty: Arm a nuke (Z).</div>`;
   } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
     html += `<div class="statline">Waiting for a recruit from the campfire.</div>`;
+  }
+  if (k === K.Capitol && owner === ME && !(E(i, F.flags) & 2)) {
+    // Newcomers: how soon the next one turns up, and the cap (beds).
+    const all = W.people(4), beds = W.people(1), next = W.next_arrival();
+    html += `<div class="statline">People <b>${all}</b> of ${beds} beds</div>`;
+    html += next >= 0
+      ? `<div class="statline">Next newcomer at the campfire · ${Math.floor(next * 100)}%</div><div class="bar prog"><i style="width:${next * 100}%"></i></div>`
+      : `<div class="statline bad">Every bed is taken: nobody new comes. Build huts, and give them food.</div>`;
   }
   info.innerHTML = html;
   if (isBld(k) && (owner === ME || observe) && W.queue_len(id) > 0) {
@@ -962,7 +970,7 @@ function renderCommands(sel) {
     };
     add(cmdButton(armed ? "Really demolish?" : "Demolish", "Del", fn, { glyph: armed ? "!" : "⌧", tip: "<h4>Demolish</h4><p>Tear it down. Its slots and workers come free; anyone in a house or a training queue is lost. Press twice.</p>" }), "Delete", fn);
   }
-  if (mine.some(i => E(i, F.kind) >= 1 && E(i, F.kind) <= 3)) {
+  if (hasUnits) { // every unit, workers too
     const fn = () => setAmode(true);
     add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
   }
@@ -990,6 +998,12 @@ function houseWants(k, goods) {
     else if (W.is_house_good(r) && W.res_era(r) <= tier) could.push(r);
   }
   return { have, wants: have.length < max ? could : [] };
+}
+// The good a house will get next: one it wants that's left over, if any,
+// else the first it wants (undefined when it has all it can use).
+function nextWant(k, goods) {
+  const { wants } = houseWants(k, goods);
+  return wants.find(r => free(r) - W.housed(r) > 0) ?? wants[0];
 }
 // What a house needs to grow a tier, or what makes it fall back.
 function houseTierLine(k, goods, residents, beds) {
@@ -1841,7 +1855,7 @@ function notePeerNames(peers) {
   for (const p of peers) { const pr = p.presence || {}; if (okToken(pr.token)) peerNames.set(pr.token, cleanName(pr.name)); }
 }
 function setMyName(v) {
-  myName = cleanName(v) || randomName();
+  myName = cleanName(v) || randomName(myName); // an empty box: a new random one
   try { localStorage.setItem(NAME_KEY, myName); } catch { /* storage blocked */ }
   if (room && !guestOf && !watcher) publishLobby(); else if (room) room.presence({ name: myName });
   renderLobby();
@@ -2649,7 +2663,11 @@ $("inviteLink").onfocus = e => e.target.select();
 const joinTyped = () => { const c = codeIn($("joinLink").value); if (c) joinLobby(c); else mpStatus("That doesn't look like an invite link.", true); };
 $("joinBtn").onclick = joinTyped;
 $("nameInput").value = myName;
-$("nameInput").onchange = e => { setMyName(e.target.value); e.target.value = myName; };
+// Commit on Enter or leaving the box ("change" doesn't fire a second time
+// for an empty box once the page has filled in a new random name).
+const commitName = () => { const el = $("nameInput"); if (el.value !== myName) setMyName(el.value); el.value = myName; };
+$("nameInput").addEventListener("blur", commitName);
+$("nameInput").addEventListener("keydown", e => { if (e.key === "Enter") commitName(); });
 $("joinLink").addEventListener("keydown", e => { if (e.key === "Enter") joinTyped(); });
 $("relayUrl").addEventListener("change", () => { Net.relayUrl = $("relayUrl").value.trim(); openOwnLobby(); });
 // Opening an invite link in a tab that already has the game open.

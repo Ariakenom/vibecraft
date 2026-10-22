@@ -104,6 +104,10 @@ pub extern "C" fn render() -> u32 {
             if e.unsupplied && e.owner == g.local {
                 flags |= 16;
             }
+            // A building placed but not begun: no builder has got there yet (512).
+            if e.is_building() && e.built <= 0.0 && e.builders_in == 0 {
+                flags |= 512;
+            }
             let progress = if e.built < 1.0 { e.built } else { e.progress };
             let order = match e.order {
                 Order::Idle => 0,
@@ -628,6 +632,19 @@ pub extern "C" fn player_people(p: u32, which: u32) -> u32 {
             4 => pl.people,
             _ => pl.arrive_timer.ceil().max(0.0) as u32,
         })
+    })
+}
+/// How far along the next newcomer is (0..1), for the local player; -1 when
+/// every bed is taken (nobody comes).
+#[unsafe(no_mangle)]
+pub extern "C" fn next_arrival() -> f32 {
+    game(|g| {
+        let p = &g.players[g.local as usize];
+        if p.people >= p.beds {
+            return -1.0;
+        }
+        let every = defs::growth_interval(p.beds);
+        (1.0 - p.arrive_timer / every).clamp(0.0, 1.0)
     })
 }
 /// Slots of resource `r` the local player's houses hold.

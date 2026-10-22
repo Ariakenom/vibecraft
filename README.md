@@ -549,8 +549,17 @@ versions don't play together.
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
   and its supply (80%, 100%, 130%).
-- **Maps:** two players get an 80×80 map with 180° symmetry; three or four
-  get 96×96 with four-way symmetry, so every start is the same, just turned.
+- **Maps:** two players get a 120×120 map with 180° symmetry; three or four
+  get 144×144 with four-way symmetry, so every start is the same, just turned.
+  The sea runs along every edge (fishing huts can stand on the coast), and a
+  base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
+  The Capitol sees 16 tiles, enough for its own start.
+- **Builders** walk to a foundation and build it while they stand there; it
+  shows up only once the first of them gets there (until then its owner sees
+  a mark on the ground). When it's done they become its crew, as many as it
+  needs, and the rest go back to the campfire. A lumber camp takes one
+  worker. The Capitol shows how soon the next newcomer comes, and the cap
+  (beds).
 
 **Controls.**
 - **Camera:** WASD, arrows or the edges of the browser window move it; the wheel zooms;
@@ -561,9 +570,11 @@ versions don't play together.
   hut, U hunting lodge, I orchard, O pasture, F barracks, G range, C
   stable, V tower. Del (twice) demolishes the selected buildings.
 - **Missile silo:** Z arms a nuke, then Z again and a click launches it.
-- **Train:** Q, E, R, T for the units a building trains, oldest first.
+- **Train:** Q, E, R, T, … for the units the selected buildings train,
+  oldest first (with several kinds of building selected, every unit still
+  gets a key).
 - **Other keys:**
-  - Z attack-move, X stop
+  - Z attack-move (every unit, workers too), X stop
   - H home, `.` free workers (at the campfire)
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, 1–9 recall it

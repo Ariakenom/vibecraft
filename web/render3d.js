@@ -29,7 +29,7 @@ const R3 = {
 };
 
 // --- Fog of war -------------------------------------------------------------
-// One 80×80 texture, sampled in every material's fragment shader to darken
+// One texture, a texel per tile,, sampled in every material's fragment shader to darken
 // what you can't see. three.js lets us patch its built-in shaders with
 // `onBeforeCompile`, so we keep normal lighting and shadows for free.
 const fowUniforms = { uFow: { value: null }, uMapSize: { value: null } };
@@ -863,6 +863,7 @@ function computeHeights() {
   // Keep water below the surface and the shore just above it.
   for (let i = 0; i < h.length; i++) h[i] = wet[i] ? Math.min(h[i], -0.4) : Math.max(h[i], 0.02);
   R3.heights = h;
+  R3.wet = wet;
 }
 
 // Slope (0 flat .. ~1 steep) at a map position, from the corner heights.
@@ -1169,12 +1170,15 @@ function placeTufts() {
 function flattenUnder(cx, cy, s) {
   const h = R3.heights, cw = MW + 1;
   const x0 = Math.round(cx - s / 2), y0 = Math.round(cy - s / 2);
+  // Corners at the water's edge stay where they are: a fishing hut by a
+  // pond mustn't fill it in.
+  const wet = R3.wet;
   let sum = 0, n = 0;
-  for (let y = y0; y <= y0 + s; y++) for (let x = x0; x <= x0 + s; x++) { sum += h[y * cw + x]; n++; }
-  const base = Math.max(0.02, sum / n);
+  for (let y = y0; y <= y0 + s; y++) for (let x = x0; x <= x0 + s; x++) if (!wet || !wet[y * cw + x]) { sum += h[y * cw + x]; n++; }
+  const base = Math.max(0.02, n ? sum / n : 0.02);
   const pos = R3.terrain.geometry.attributes.position;
   const set = (x, y, v) => {
-    if (x < 0 || y < 0 || x > MW || y > MH) return;
+    if (x < 0 || y < 0 || x > MW || y > MH || (wet && wet[y * cw + x])) return;
     h[y * cw + x] = v;
     pos.setY(y * cw + x, v); // PlaneGeometry vertices are laid out row by row, like `h`
   };
@@ -1554,6 +1558,16 @@ function render3d(alpha, now, dt) {
     o.residents = E(i, F.residents);
     if (isBld(kind)) {
       const building = flags & 2;
+      // Placed, but no builder there yet: only its owner sees where it will go.
+      const planned = !!(flags & 512);
+      o.body.visible = !planned;
+      if (planned && !o.plan && E(i, F.owner) === ME) {
+        const s = stat(kind, 6);
+        o.plan = new THREE.Mesh(new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: PCOL[ME], transparent: true, opacity: 0.28, depthWrite: false }));
+        o.plan.position.y = 0.05; o.plan.renderOrder = 2;
+        o.root.add(o.plan);
+      }
+      if (o.plan) o.plan.visible = planned;
       o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
       o.body.material = (flags & 8) ? hitMat : entMat;
       setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
