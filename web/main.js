@@ -137,8 +137,12 @@ const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
 // computer's, or someone who didn't pick a name) goes by its colour.
 const NAME_KEY = "vibecraft.name";
 const cleanName = s => typeof s === "string" ? s.replace(/[\u0000-\u001f\u007f<>&"'`]/g, "").replace(/\s+/g, " ").trim().slice(0, 16) : "";
+// Until you pick one, you're a famous name from history (kept, like a picked one).
+const RANDOM_NAMES = ["Hannibal", "Boudica", "Cleopatra", "Ashoka", "Leonidas", "Hypatia", "Saladin", "Tomyris", "Charlemagne", "Theodora", "Ramesses", "Sargon", "Hammurabi", "Pericles", "Zenobia", "Attila", "Alaric", "Cnut", "Harald", "Birger Jarl", "Gustav Vasa", "Kristina", "Isabella", "Pachacuti", "Mansa Musa", "Sundiata", "Nzinga", "Wu Zetian", "Akbar", "Suleiman", "Babur", "Cyrus", "Darius", "Nefertiti", "Trajan", "Hatshepsut", "Ragnar", "Eleanor", "Justinian", "Tamar", "Carthage", "Babylon", "Uruk", "Thebes", "Knossos", "Byzantium", "Samarkand", "Timbuktu", "Cuzco", "Tenochtitlan", "Kyoto", "Luoyang", "Uppsala", "Birka", "Visby", "Novgorod", "Venice", "Cordoba", "Aachen", "Antioch", "Petra", "Palmyra", "Persepolis", "Nineveh", "Angkor", "Axum", "Great Zimbabwe", "Ur", "Sparta", "Corinth", "Syracuse", "Alexandria", "Memphis", "Kish", "Mycenae", "Pataliputra"];
+const randomName = () => RANDOM_NAMES[Math.floor(Math.random() * RANDOM_NAMES.length)];
 let myName = "";
 try { myName = cleanName(localStorage.getItem(NAME_KEY) || ""); } catch { /* storage blocked */ }
+if (!myName) { myName = randomName(); try { localStorage.setItem(NAME_KEY, myName); } catch { /* storage blocked */ } }
 const pnames = {};
 const pn = p => pnames[p] || PNAME[p];                                        // in tables and labels
 const pnc = p => pnames[p] ? `${pnames[p]} (${PNAME[p]})` : PNAME[p] || "";   // in sentences: who, and which colour
@@ -1066,6 +1070,7 @@ const mpHooks = {
     const now = new Map(selection().map(i => [E(i, F.id), E(i, F.kind)]));
     return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
   },
+  pace(rate) { paceChanged(rate); },
   system(cmd) {
     const who = Rec.meta && Rec.meta.who;
     if (cmd[0] === 7) { toast(`${pnc(cmd[1]) || "A player"} left. The computer takes over their people.`); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
@@ -1335,7 +1340,7 @@ window.addEventListener("keydown", e => {
   }
   if ((e.ctrlKey || e.metaKey) && k === "s") { e.preventDefault(); if (!mp) saveGame(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (k === "p") { if (!mp) togglePause(); return; }
+  if (k === "p") { togglePause(); return; }
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
@@ -1574,8 +1579,11 @@ function stepMultiplayer(now) {
   if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
-  h.hidden = !(stalledSince && now - stalledSince > 700);
-  if (!h.hidden) h.textContent = ME === 1 ? "Waiting for the other players…" : "Waiting for the host…";
+  const pausedNow = mp.pace() === 0;
+  h.hidden = !(pausedNow || stalledSince && now - stalledSince > 700);
+  if (!h.hidden) h.textContent = pausedNow ? (mp.server ? "Paused for everyone. Press P to resume." : `Paused by ${pnames[1] || "the host"}.`)
+    : ME === 1 ? "Waiting for the other players…" : "Waiting for the host…";
+  lagCheck(now);
   if (!mp.server && now - mp.lastHeard > 15000) endMultiplayer("Lost contact with the host.");
   if (mp && mp.server) for (const s of mp.server.silent(20000)) dropPlayer(s);
   if (mp && mp.server) {
@@ -1692,7 +1700,7 @@ function enterWorld(local = 0) {
   paused = false; $("pauseBtn").setAttribute("aria-pressed", "false"); $("pauseBtn").textContent = "Pause";
   knownUnlocked = new Set(BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k)));
   acc = 0; selKey = ""; titleSpin = false; topBar = null; $("techScreen").hidden = true;
-  // No pausing or speeding up a game other people are playing too.
+  // Online, only the host pauses or changes the speed (syncPaceUi).
   $("pauseBtn").hidden = !!local; $("speedBtn").hidden = !!local; $("restartBtn").hidden = !!local;
   $("quitBtn").textContent = local ? "Leave game" : "New game";
   if (local || speed > 2) { speed = 1; $("speedBtn").textContent = "1×"; }
@@ -1764,7 +1772,14 @@ function showEndStats(opts = {}) {
 }
 
 function togglePause() {
-  if (mp || watcher) return;
+  if (watcher) return;
+  if (mp) { // multiplayer: the host pauses for everyone
+    if (!mp.server) { toast("Only the host can pause the game."); return; }
+    paused = !paused;
+    mp.server.setRate(paused ? 0 : speed);
+    syncPaceUi();
+    return;
+  }
   paused = !paused;
   $("pauseBtn").setAttribute("aria-pressed", String(paused));
   $("pauseBtn").textContent = paused ? "Resume" : "Pause";
@@ -1817,7 +1832,7 @@ function notePeerNames(peers) {
   for (const p of peers) { const pr = p.presence || {}; if (okToken(pr.token)) peerNames.set(pr.token, cleanName(pr.name)); }
 }
 function setMyName(v) {
-  myName = cleanName(v);
+  myName = cleanName(v) || randomName();
   try { localStorage.setItem(NAME_KEY, myName); } catch { /* storage blocked */ }
   if (room && !guestOf && !watcher) publishLobby(); else if (room) room.presence({ name: myName });
   renderLobby();
@@ -2101,7 +2116,9 @@ function startMultiplayer(me, d, seq) {
   mp = seq;
   lastPump = 0;
   // Building the map can take a few seconds: the host's clock starts now.
-  if (mp.server) mp.server.t0 = performance.now();
+  if (mp.server) mp.server.setClock(0);
+  paused = false; speed = 1;
+  syncPaceUi();
   Trace.start({ role: me === 1 ? "host" : "guest", me, players: n, transport: room && room.kind === "socket" ? "relay" : "claude.ai room", relay: room && room.kind === "socket" ? Net.relayUrl : undefined });
   $("netBtn").hidden = false;
   // Building the map can take a few seconds on a slow computer: only start
@@ -2160,19 +2177,22 @@ function becomeServer() {
   client.live = k; client.final = client.got = k - 1;
   const server = new Server(room, [], client, endMultiplayer);
   server.final = k - 1;
-  server.t0 = performance.now() - k * NET.TICK_MS;
+  server.setClock(k);
+  if (!NET.SPEEDS.includes(speed)) speed = 1;
+  server.rate = speed; // carry on at the speed it was going
   server.gameId = Rec.id; server.seenPlaying = new Set();
   client.server = server;
   W.mp_save(); // the confirmed copy: the game as it is now
   mp = client;
   lastPump = 0; stalledSince = 0;
   Rec.meta.mp = true;
-  speed = 1; $("speedBtn").textContent = "1×";
-  $("pauseBtn").hidden = $("speedBtn").hidden = $("restartBtn").hidden = true;
+  paused = false;
+  $("restartBtn").hidden = true;
   Trace.start({ role: "host", me: ME, players: W.n_players(), transport: room.kind === "socket" ? "relay" : "claude.ai room", relay: room.kind === "socket" ? Net.relayUrl : undefined, from: "single player" });
   $("netBtn").hidden = false;
   mp.lastHeard = performance.now();
   lastWasMultiplayer = true;
+  syncPaceUi();
   publishLobby();
 }
 
@@ -2220,6 +2240,8 @@ function takeSeat(w) {
   groups = {}; placing = null; amode = false; updateCursor();
   knownUnlocked = new Set(BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k)));
   $("quitBtn").textContent = "Leave game";
+  paused = false; speed = 1;
+  syncPaceUi();
   for (const id of ["endScreen", "menuScreen", "watchWait", "netWait"]) $(id).hidden = true;
   refreshHud();
   const i = findOwn(K.Capitol);
@@ -2305,8 +2327,59 @@ function finishMultiplayer() {
   clearInterval(startTimer);
   if (mp) { Trace.event("end", {}); W.mp_end(); }
   mp = null;
+  paused = false; speed = 1; lastPace = 1; slowFor.clear();
+  $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
+  $("speedBtn").textContent = "1×"; $("speedBtn").disabled = false;
   $("netBtn").hidden = true; $("netTrace").hidden = true;
   $("netWait").hidden = true;
+}
+
+// ---- Pause and speed in multiplayer ----
+// The host has the buttons (and P); everyone else sees what the host set.
+function syncPaceUi() {
+  if (!mp) return;
+  const host = !!mp.server, rate = mp.pace();
+  $("pauseBtn").hidden = !host;
+  $("pauseBtn").setAttribute("aria-pressed", String(host && paused));
+  $("pauseBtn").textContent = host && paused ? "Resume" : "Pause";
+  $("pauseBtn").title = "Pause the game for everyone (P)";
+  // Guests: the speed shows, when it isn't the usual one.
+  $("speedBtn").hidden = !host && (rate === 1 || rate === 0);
+  $("speedBtn").disabled = !host;
+  $("speedBtn").textContent = `${host ? speed : rate}×`;
+  $("speedBtn").title = host ? "Game speed, for everyone" : "Game speed, set by the host";
+}
+// A guest: the host paused, resumed, or changed the speed.
+let lastPace = 1;
+function paceChanged(rate) {
+  const was = lastPace; lastPace = rate;
+  const host = pnames[1] || "The host";
+  if (rate === 0) toast(`${host} paused the game.`);
+  else if (was === 0) toast(`${host} resumed the game${rate !== 1 ? ` at ${rate}×` : ""}.`);
+  else toast(`${host} set the speed to ${rate}×.`);
+  syncPaceUi();
+}
+
+// Once a second: say so when a computer can't keep up with the clock, or a
+// connection struggles. Nobody waits for them: the game goes on for the
+// others, and they catch up when they can.
+let lagCheckAt = 0;
+const slowFor = new Map(); // what -> seconds it has been so
+function lagCheck(now) {
+  if (now - lagCheckAt < 1000) return;
+  lagCheckAt = now;
+  const rate = mp.pace();
+  const atSpeed = rate > 1 ? ` at ${rate}×` : "";
+  const count = (key, bad) => { const n = bad ? (slowFor.get(key) || 0) + 1 : 0; slowFor.set(key, n); return n; };
+  if (count("me", mp.behind() > NET.BEHIND) === 3) toast(`Your computer can't keep up${atSpeed}. The others play on; you catch up when it can.`, "bad");
+  if (!mp.server) return;
+  for (const s of mp.server.active) {
+    if (mp.server.joining.has(s)) continue;
+    if (count("cpu" + s, (mp.server.lag.get(s) || 0) > NET.BEHIND) === 3)
+      toast(`${pnc(s)}'s computer can't keep up${atSpeed}. The game goes on for everyone else.${rate > 1 ? " A slower speed would help them." : ""}`, "bad");
+    if (count("net" + s, now - mp.server.heard.get(s) > 3000) === 1)
+      toast(`${pnc(s)}'s connection is struggling. The game goes on without waiting for them.`, "bad");
+  }
 }
 
 // ===========================================================================
@@ -2492,6 +2565,13 @@ $("toMenuBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
 // Watching the rest of a single-player game, it can go faster.
 $("speedBtn").onclick = () => {
+  if (mp) { // the host sets everyone's speed
+    if (!mp.server) return;
+    speed = NET.SPEEDS[(NET.SPEEDS.indexOf(speed) + 1) % NET.SPEEDS.length];
+    if (!paused) mp.server.setRate(speed);
+    syncPaceUi();
+    return;
+  }
   const steps = observe ? [1, 2, 4, 8] : [1, 1.5, 2];
   speed = steps[(steps.indexOf(speed) + 1) % steps.length];
   $("speedBtn").textContent = `${speed}×`;
@@ -2534,7 +2614,7 @@ $("loadFile").onchange = async e => {
     if (d && d.kind === "replay") await Replay.open(d); else await loadSave(d);
   } catch { toast("That file isn't a VibeCraft save or replay.", "bad"); }
 };
-$("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused) togglePause(); };
+$("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused && !mp) togglePause(); };
 $("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers); Rec.real = true; };
 $("quitBtn").onclick = toMenu;
 // Copy the invite link. Some app views refuse the clipboard: then select it

@@ -44,7 +44,7 @@ async function give(host, slot) {
   await spec.waitForFunction(() => mp && ME === 2 && !watcher && !observe, null, { timeout: 20000 });
   check(true, "the spectator now plays Red");
   await host.waitForFunction(() => mp && mp.server && mp.server.active.has(2) && !mp.server.joining.size, null, { timeout: 10000 });
-  check(await host.evaluate(() => W.is_ai(2) === 0 && !!mp.server && $("pauseBtn").hidden), "the host's game is a multiplayer one now, Red a person's");
+  check(await host.evaluate(() => W.is_ai(2) === 0 && !!mp.server && !$("pauseBtn").hidden && mp.pace() === 1), "the host's game is a multiplayer one now, Red a person's (the host can still pause it)");
   check(await spec.evaluate(() => W.is_ai(2) === 0 && W.is_ai(1) === 0), "...on the new player's copy too");
   for (let i = 0; i < 3; i++) { await orders(host); await orders(spec); await sleep(700); }
   await same([host, spec], "single player turned multiplayer");

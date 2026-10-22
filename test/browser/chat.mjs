@@ -7,13 +7,16 @@ await host.waitForFunction(() => roomCode && room);
 const code = await host.evaluate(() => roomCode);
 check(await host.evaluate(() => $("lobbyChat").hidden), "alone in the lobby: no chat box");
 const guest = await open(b, "#" + code);
+// Nobody picked a name: everyone has a random one from history.
+const gname = await guest.evaluate(() => myName);
+check(await host.evaluate(() => RANDOM_NAMES.includes(myName)) && await guest.evaluate(() => RANDOM_NAMES.includes(myName)), `no name picked: a random one (${gname})`);
 await host.waitForSelector("#lobbyChat:not([hidden])", { timeout: 15000 });
 await guest.waitForSelector("#lobbyChat:not([hidden])", { timeout: 15000 });
 check(true, "a friend arrives: both get the chat box");
 await guest.fill("#lobbyChatInput", "hi, ready when you are");
 await guest.press("#lobbyChatInput", "Enter");
 await host.waitForFunction(() => /ready when you are/.test($("lobbyChatLog").textContent), null, { timeout: 5000 });
-check(await host.evaluate(() => /^Green: hi, ready/.test($("lobbyChatLog").textContent)), "lobby: the host sees \"Green: hi, ready when you are\"");
+check(await host.evaluate(n => $("lobbyChatLog").textContent.startsWith(n + ": hi, ready"), gname), `lobby: the host sees "${gname}: hi, ready when you are"`);
 check(await guest.evaluate(() => $("lobbyChatInput").value === "" && /hi, ready/.test($("lobbyChatLog").textContent)), "the sender sees their own line, and the box is cleared");
 
 await host.evaluate(() => beginGame());
@@ -26,17 +29,18 @@ await guest.keyboard.type("q <b>bold</b> & attack");
 await guest.keyboard.press("Enter");
 check(await guest.evaluate(() => placing === null && !Chat.open), "typing \"q\" didn't start a farm; Enter sent and closed");
 await host.waitForFunction(() => /attack/.test($("chatLog").textContent), null, { timeout: 5000 });
-check(await host.evaluate(() => $("chatLog").textContent.includes("Green: q <b>bold</b> & attack") && !$("chatLog").querySelector("p > b + b, p b b")), "the host sees it, as plain text");
+check(await host.evaluate(n => $("chatLog").textContent.includes(n + ": q <b>bold</b> & attack") && !$("chatLog").querySelector("p > b + b, p b b"), gname), "the host sees it, as plain text");
 // A spectator joins and says something; both players see it.
 const w = await open(b, "#watch-" + code);
 await w.waitForFunction(() => watcher && watcher.loaded, null, { timeout: 20000 });
+const wname = await w.evaluate(() => myName);
 await w.waitForSelector("#chatBtn:not([hidden])");
 await w.click("#chatBtn");
 await w.keyboard.type("nice start");
 await w.keyboard.press("Enter");
 for (const [pg, n] of [[host, "host"], [guest, "guest"]]) {
-  await pg.waitForFunction(() => /Spectator: nice start/.test($("chatLog").textContent), null, { timeout: 5000 });
-  check(true, `${n} sees "Spectator: nice start"`);
+  await pg.waitForFunction(m => $("chatLog").textContent.includes(m + ": nice start"), wname, { timeout: 5000 });
+  check(true, `${n} sees "${wname}: nice start"`);
 }
 // Escape closes without sending.
 await host.keyboard.press("Enter");

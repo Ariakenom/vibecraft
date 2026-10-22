@@ -253,6 +253,19 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
 - **A guest's clock** is the host's tick count plus half the round trip,
   taken from the most hopeful recent message and adjusted gently. The host
   measures how far off each guest's clock is (shown in the trace).
+- **Pause and speed.** The host can pause (P) and set the speed (1×, 1.5×,
+  2×) for everyone. The simulation doesn't change: only how many ticks come
+  a second. The server's clock runs at `rate` (0 while paused), the frames
+  carry it, and guests' clocks follow it (a new rate restarts their
+  estimate). Orders given while paused go in once it runs again. The
+  window, counted in ticks, grows with the speed.
+- **Slow computers and connections.** Nobody waits for them. Each guest
+  says how many ticks it lags behind the clock (`lag`); after 3 s of more
+  than 20 the host is told that player's computer can't keep up (and the
+  player too), and after 3 s of silence that their connection is
+  struggling. A lagging computer's commands arrive late and move to later
+  ticks, but don't lengthen the window, and its slow round trips don't
+  count towards it: the others keep playing as before.
 - **Running ahead.** The live copy may run at most 3 s ahead of the
   confirmed copy. If confirmations stop, the game waits.
 - **The end.** The game is over when the confirmed copy says so, not the
@@ -292,11 +305,11 @@ Two topics carry the game itself. Every message carries
 `v: NET.PROTOCOL`.
 
 - `cmd`, guest to host: `{from, token, cmds: [[seq, stamp, cmd], …], ack,
-  sum, echo, gt, est}`. `cmds` lists unconfirmed commands, `ack` is the
+  sum, echo, gt, est, lag}`. `cmds` lists unconfirmed commands, `ack` is the
   newest tick held, `sum` is a recent confirmed checksum, and `echo`, `gt`
   and `est` are for ping and clock.
 - `frame`, host to everyone: `{upTo, ticks: [[tick, bundle], …], early,
-  now, w, acks, sum, ge, ce, late, end}`. Every tick up to `upTo` is final,
+  now, rate, w, acks, sum, ge, ce, late, end}`. Every tick up to `upTo` is final,
   and ticks not listed had no commands. `early` holds commands not yet
   bundled.
 - `watch`, `feed` and `seat`: spectators (see Watching).
@@ -387,7 +400,8 @@ Spectator messages, both carrying `v` and the watcher's `token`:
 
 ## Names
 
-Everyone can pick a name in the lobby ("Your name"). It's kept in the
+Everyone can pick a name in the lobby ("Your name"); until then they get a
+random one from history (Hannibal, Uppsala, Timbuktu…). It's kept in the
 browser (`vibecraft.name`), at most 16 characters, without markup
 characters. It travels in each page's presence (`name`); the host's start
 message carries the game's names (`names`, slot to name), and during a game
@@ -550,6 +564,6 @@ versions don't play together.
   - H home, `.` free workers (at the campfire)
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, 1–9 recall it
-  - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
+  - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, copy a watch link for spectators, and
     (the host) give a computer's seat to a spectator

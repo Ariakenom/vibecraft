@@ -36,11 +36,13 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 19,   // 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 20,   // 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
-  MAX_AHEAD: 60,  // the live copy may run at most 3 s ahead of the confirmed one
+  MAX_AHEAD: 60,  // the live copy may run at most 3 s ahead of the confirmed one (ticks, at 1x)
+  SPEEDS: [1, 1.5, 2], // what the host can set
+  BEHIND: 20,     // ticks a computer may lag behind the clock before it counts as not keeping up
   SUM_EVERY: 20,  // compare checksums every 20 ticks (1 s)
 };
 
@@ -236,7 +238,10 @@ class Server {
     this.t = transport;
     this.local = local;
     this.onEnd = onEnd;
-    this.t0 = performance.now();          // tick 0; set again once the map is built
+    // The clock: tick `c0` at `r0` (performance.now()), running at `rate`
+    // ticks per tick-length of real time (0 while paused). Set by the host.
+    this.c0 = 0; this.r0 = performance.now(); this.rate = 1;
+    this.lag = new Map();                 // slot -> how many ticks behind the clock they say they are
     this.window = NET.WINDOW;
     this.lowSince = 0;                    // since when the window could have been smaller
     this.final = -1;                      // newest tick bundled
@@ -259,7 +264,20 @@ class Server {
     transport.on("cmd", d => this.receive(d));
   }
   // Now, in ticks (with a fraction): the one clock everybody follows.
-  now() { return (performance.now() - this.t0) / NET.TICK_MS; }
+  now() { return this.c0 + (performance.now() - this.r0) * this.rate / NET.TICK_MS; }
+  // The clock reads `tick` now (at the start, once the map is built).
+  setClock(tick) { this.c0 = tick; this.r0 = performance.now(); }
+  // Pause (0) or change the speed. Only the host does; the frames tell
+  // everyone (`rate`), and their clocks follow. The game itself runs the
+  // same either way: only how many ticks come per second changes.
+  setRate(r) {
+    if (r === this.rate) return;
+    this.c0 = this.now(); this.r0 = performance.now();
+    Trace.event("rate", { from: this.rate, to: r });
+    this.rate = r;
+    this.updateWindow();
+    this.send();
+  }
   // A command, from the host's own client or from a guest.
   submit(p, seq, stamp, cmd) {
     if (seq <= (this.lastSeq.get(p) || 0)) return; // seen it already
@@ -279,7 +297,11 @@ class Server {
       this.inbox = wait;
       // A fixed order inside a tick: by player, then in the order they gave them.
       due.sort((a, b) => a[1] - b[1] || a[2] - b[2]);
-      for (const e of due) if (e[0] < k && e[1] !== 0) {
+      for (const e of due) if (e[0] < k && e[1] !== 0 && e[1] !== this.local.me && (this.lag.get(e[1]) || 0) > NET.BEHIND) {
+        // Late because their computer lags behind the clock, not because of
+        // the network: a longer window wouldn't help, so the others keep theirs.
+        this.late[e[1]] = (this.late[e[1]] || 0) + 1;
+      } else if (e[0] < k && e[1] !== 0) {
         // Too late for its own tick: it goes into this one instead. Give the
         // next ones more time.
         this.late[e[1]] = (this.late[e[1]] || 0) + 1;
@@ -303,8 +325,11 @@ class Server {
   // one tick at a time, so a ping right on a boundary doesn't make it flap.
   updateWindow() {
     let need = 0;
-    for (const s of this.active) { const r = this.rtt.get(s); if (r) need = Math.max(need, r.srtt / 2 + 2 * r.dev + 25); }
-    const w = Math.max(NET.MIN_WINDOW, Math.min(NET.MAX_WINDOW, Math.ceil(need / NET.TICK_MS)));
+    // (Not counting a computer that lags behind the clock: its round trips
+    // are slow from its own work, and it would only make everyone wait longer.)
+    for (const s of this.active) { const r = this.rtt.get(s); if (r && (this.lag.get(s) || 0) <= 3) need = Math.max(need, r.srtt / 2 + 2 * r.dev + 25); }
+    // In ticks, which come faster at a higher speed.
+    const w = Math.max(NET.MIN_WINDOW, Math.min(NET.MAX_WINDOW, Math.ceil(need * Math.max(1, this.rate) / NET.TICK_MS)));
     const now = performance.now();
     if (w > this.window) this.grow(w, `ping needs ${Math.round(need)} ms`);
     else if (w === this.window) this.lowSince = 0;
@@ -348,7 +373,9 @@ class Server {
     return offer;
   }
   // Seats handed out but not taken up within `ms`: the computer keeps them.
-  stale(ms) { return [...this.joining.values()].filter(j => performance.now() - j.at > ms).map(j => j.slot); }
+  stale(ms) {
+    if (this.rate === 0) for (const j of this.joining.values()) j.at = performance.now(); // paused: T isn't coming yet
+    return [...this.joining.values()].filter(j => performance.now() - j.at > ms).map(j => j.slot); }
   send(end) {
     let min = this.final;
     for (const s of this.active) min = Math.min(min, this.ack.get(s));
@@ -379,7 +406,7 @@ class Server {
     const acks = {};
     for (const [s, q] of this.lastSeq) if (s !== this.local.me) acks[s] = q;
     // `upTo`: every tick up to here is final; those not listed had no commands.
-    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
+    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, rate: this.rate, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
     Trace.msgOut(this.t.emit("frame", msg));
     this.lastSend = now;
   }
@@ -391,6 +418,7 @@ class Server {
     this.started.add(s);
     Trace.msgIn(Trace.inBytes);
     if (typeof d.gt === "number") this.guestClock.set(s, [d.gt, now]);
+    if (typeof d.lag === "number") this.lag.set(s, d.lag);
     for (const e of Array.isArray(d.cmds) ? d.cmds : []) {
       if (!Array.isArray(e) || typeof e[0] !== "number" || typeof e[1] !== "number") continue;
       const cmd = cleanCmd(e[2]);
@@ -433,9 +461,9 @@ class Server {
     const guests = {};
     for (const s of this.tokens.keys()) {
       const r = this.rtt.get(s), ce = this.clockErr.get(s);
-      guests[s] = { active: this.active.has(s), rtt: r ? Math.round(r.srtt) : null, dev: r ? Math.round(r.dev) : null, clockErr: ce === undefined ? null : Math.round(ce), behind: this.final - this.ack.get(s), heardAgo: Math.round(performance.now() - this.heard.get(s)), late: this.late[s] || 0 };
+      guests[s] = { active: this.active.has(s), lag: this.lag.get(s) ?? null, rtt: r ? Math.round(r.srtt) : null, dev: r ? Math.round(r.dev) : null, clockErr: ce === undefined ? null : Math.round(ce), behind: this.final - this.ack.get(s), heardAgo: Math.round(performance.now() - this.heard.get(s)), late: this.late[s] || 0 };
     }
-    return { window: this.window, inbox: this.inbox.length, guests };
+    return { window: this.window, rate: this.rate, inbox: this.inbox.length, guests };
   }
 }
 
@@ -475,7 +503,8 @@ class Client {
     this.dirty = null;                   // why the live copy needs correcting, or null
     this.finalState = 0;                 // the confirmed copy's W.state_of(me)
     this.window = NET.WINDOW;
-    this.offset = null;                  // guests: host clock minus ours, ms
+    this.offset = null;                  // guests: the host's tick at our time 0, as `rate` runs (ticks)
+    this.rate = 1;                       // guests: the host's clock rate (0 paused), from the frames
     this.offsets = [];
     this.clockErr = null;                // guests: how far off our clock is, as the host measures it
     this.rtt = null; this.rttDev = 0;
@@ -504,7 +533,7 @@ class Client {
   // Where "now" is, in ticks: the host's clock (guests: as best we know it).
   target() {
     if (this.server) return this.server.now();
-    return this.offset === null ? null : (performance.now() + this.offset) / NET.TICK_MS;
+    return this.offset === null ? null : this.offset + performance.now() * this.rate / NET.TICK_MS;
   }
   // How far between the previous live tick and the latest one to draw things.
   alpha() {
@@ -569,11 +598,18 @@ class Client {
     // The clock: the host's time when it sent this, plus half a round trip.
     // Messages held up on the way would make us think the host is behind, so
     // trust the most hopeful of the recent ones, and move there gently.
+    // At another speed (or paused) the clock runs at `rate`: a new rate
+    // starts the estimate afresh.
+    const rate = typeof d.rate === "number" && d.rate >= 0 && d.rate <= 4 ? d.rate : 1;
+    if (rate !== this.rate) {
+      this.rate = rate; this.offsets = []; this.offset = null;
+      if (this.hooks.pace) this.hooks.pace(rate);
+    }
     if (typeof d.now === "number") {
-      this.offsets.push(d.now * NET.TICK_MS + (this.rtt || 0) / 2 - now);
+      this.offsets.push(d.now + ((this.rtt || 0) / 2 - now) * rate / NET.TICK_MS);
       if (this.offsets.length > 40) this.offsets.shift();
       const best = Math.max(...this.offsets);
-      if (this.offset === null || Math.abs(best - this.offset) > 1000) this.offset = best;
+      if (this.offset === null || Math.abs(best - this.offset) > 20 * Math.max(1, rate)) this.offset = best;
       else this.offset += (best - this.offset) * 0.1;
     }
     if (typeof d.w === "number") this.window = d.w;
@@ -599,11 +635,16 @@ class Client {
     }
     const echo = this.echoT === null ? null : [this.echoT, Math.round(performance.now() - this.echoAt)];
     const est = this.target();
-    const msg = { v: NET.PROTOCOL, from: this.me, token: this.token, cmds, ack: this.got, sum: this.latestSum(), echo, gt: Math.round(performance.now()), est: est === null ? null : Math.round(est * 100) / 100 };
+    const lag = this.behind();
+    const msg = { v: NET.PROTOCOL, from: this.me, token: this.token, cmds, lag, ack: this.got, sum: this.latestSum(), echo, gt: Math.round(performance.now()), est: est === null ? null : Math.round(est * 100) / 100 };
     Trace.msgOut(this.t.emit("cmd", msg));
     this.lastSend = performance.now();
   }
 
+  // The clock's rate, for everyone (the host's own client reads its server).
+  pace() { return this.server ? this.server.rate : this.rate; }
+  // How many ticks this computer is behind the clock (a slow computer, at speed).
+  behind() { const t = this.target(); return t === null ? 0 : Math.max(0, Math.round(t - this.live)); }
   latestSum() {
     let best = null;
     for (const [k, v] of this.sums) if (!best || k > best[0]) best = [k, v];
@@ -627,7 +668,7 @@ class Client {
     let steps = 0, stalled = false;
     if (target === null) stalled = true; // a guest that hasn't heard the clock yet
     else while (this.live < target && steps < 8) {
-      if (this.live - this.final > NET.MAX_AHEAD) { stalled = true; break; }
+      if (this.live - this.final > NET.MAX_AHEAD * Math.max(1, this.pace())) { stalled = true; break; }
       this.stepLive();
       steps++;
     }
@@ -740,7 +781,7 @@ class Client {
     const s = this.stats;
     const late = s.seenLate.length ? Math.round(s.seenLate.reduce((a, b) => a + b, 0) / s.seenLate.length * NET.TICK_MS) : null;
     const out = {
-      role: this.server ? "host" : "guest", live: this.live, final: this.final, ahead: this.live - this.final, window: this.window,
+      role: this.server ? "host" : "guest", rate: this.pace(), behind: this.behind(), live: this.live, final: this.final, ahead: this.live - this.final, window: this.window,
       rtt: this.rtt === null ? null : Math.round(this.rtt), dev: Math.round(this.rttDev), pending: this.pending.length, foreign: this.foreign.size,
       clockErr: this.server ? 0 : this.clockErr,
       heardAgo: Math.round(performance.now() - this.lastHeard), friendsSeenAfter: late,
