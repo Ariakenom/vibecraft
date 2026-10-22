@@ -454,8 +454,8 @@ versions don't play together.
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
-  `docs/plan/economy-and-eras-plan.md`); so far there are two: Ancient and
-  Medieval.
+  `docs/plan/economy-and-eras-plan.md`); so far there are three: Ancient,
+  Medieval and Gunpowder.
 - **Resources are slots.** Nothing is gathered or stockpiled:
   producers make slots (a lumber camp by a forest makes 4 wood), and
   everything you have holds some while it exists, giving them back when
@@ -476,6 +476,9 @@ versions don't play together.
   trebuchets. Counters go by class: spears and swords beat riders, riders
   beat bows and crossbows, they beat foot soldiers; trebuchets smash
   buildings.
+  Ten townhouses (full cottages with five goods, grown with brick) bring
+  the Gunpowder era: saltpeter works and powder mills, carpenters,
+  printers and the circus; musketeers, dragoons and cannon.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
@@ -490,8 +493,10 @@ versions don't play together.
   U hunting lodge, I orchard, O pasture, F barracks, G range, C stable,
   V tower, B wonder. Medieval: J sheep farm, Shift+J weaver, L iron mine,
   N brickworks, Shift+E bakery, Shift+N brewery, Shift+F siege workshop.
+  Gunpowder: Shift+T saltpeter works, Shift+U powder mill, Shift+R
+  carpenter, Shift+Y printer, Shift+C circus.
   Del (twice) demolishes the selected buildings.
-- **Train:** Q, E for the second unit a building trains.
+- **Train:** Q, E, R for the first, second and third unit a building trains.
 - **Other keys:**
   - Z attack-move, X stop
   - H home, `.` free workers (at the campfire)

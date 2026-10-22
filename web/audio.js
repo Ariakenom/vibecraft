@@ -110,6 +110,16 @@ const Sfx = (() => {
     bow(v, p, tower) { const t = ac.currentTime;
       tone(sfxBus, "triangle", jit(tower ? 160 : 230), 150, v * 0.18, p, t, 0.001, 0.12);
       noise(sfxBus, "bandpass", 3500, 900, 2.5, v * 0.25, p, t + 0.01, 0.02, 0.16); },
+    // A musket: a sharp crack and a short rumble. A cannon: a deep boom
+    // that rolls on.
+    musket(v, p) { const t = ac.currentTime;
+      noise(sfxBus, "highpass", jit(1800), 900, 0.7, v * 0.7, p, t, 0.001, 0.08);
+      noise(sfxBus, "lowpass", jit(700), 150, 0.8, v * 0.5, p, t + 0.005, 0.003, 0.3);
+      tone(sfxBus, "sine", 140, 55, v * 0.35, p, t, 0.001, 0.12); },
+    cannon(v, p) { const t = ac.currentTime;
+      tone(sfxBus, "sine", 75, 32, v * 0.9, p, t, 0.002, 0.6);
+      noise(sfxBus, "lowpass", 500, 60, 0.7, v * 0.9, p, t, 0.004, 1.2);
+      noise(sfxBus, "bandpass", jit(1200), 400, 1, v * 0.4, p, t, 0.001, 0.12); },
     arrowHit(v, p, bld) { const t = ac.currentTime;
       if (bld) noise(sfxBus, "lowpass", 500, 300, 1, v * 0.35, p, t, 0.001, 0.06);
       else noise(sfxBus, "bandpass", 1800, 1200, 2, v * 0.25, p, t, 0.001, 0.04); },

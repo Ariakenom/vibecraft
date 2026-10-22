@@ -106,6 +106,8 @@ pub enum Dep {
     Iron = 6,
     Clay = 7,
     Hills = 8,
+    /// Gunpowder: saltpeter crusts, for nitrate.
+    Nitrate = 9,
 }
 
 impl Dep {
@@ -120,6 +122,7 @@ impl Dep {
             6 => Dep::Iron,
             7 => Dep::Clay,
             8 => Dep::Hills,
+            9 => Dep::Nitrate,
             _ => return None,
         })
     }
@@ -155,6 +158,9 @@ pub enum Kind {
     Crossbowman = 6,
     Knight = 7,
     Trebuchet = 8,
+    Musketeer = 9,
+    Dragoon = 10,
+    Cannon = 11,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -177,6 +183,12 @@ pub enum Kind {
     Weaver = 83,
     Brewery = 84,
     SiegeWorkshop = 85,
+    Townhouse = 86,
+    SaltpeterWorks = 87,
+    PowderMill = 88,
+    Carpenter = 89,
+    Printer = 90,
+    Circus = 91,
 }
 
 /// Kinds numbered from here on are buildings.
@@ -248,6 +260,11 @@ static CROSSBOWMAN: Stats = unit(70.0, 9.0, 6.0, 2.2, 2.0, 8.0, &[(Wood, 1), (Ir
 static KNIGHT: Stats = unit(190.0, 14.0, 0.4, 1.6, 3.3, 7.0, &[(Horses, 1), (Iron, 1)], 24.0);
 // Slow, long reach, poor against people, crushing against walls.
 static TREBUCHET: Stats = unit(150.0, 40.0, 9.0, 5.0, 1.0, 9.0, &[(Wood, 3)], 30.0);
+// Gunpowder: firearms. Musketeers are line infantry that shoot (bayonets
+// keep riders off); dragoons ride and shoot; cannon outrange trebuchets.
+static MUSKETEER: Stats = unit(130.0, 16.0, 4.5, 2.8, 2.0, 7.0, &[(Iron, 1), (Gunpowder, 1)], 20.0);
+static DRAGOON: Stats = unit(170.0, 13.0, 3.0, 2.2, 3.4, 8.0, &[(Horses, 1), (Gunpowder, 1)], 24.0);
+static CANNON: Stats = unit(180.0, 55.0, 10.0, 6.0, 1.1, 9.0, &[(Iron, 2), (Gunpowder, 1)], 32.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, so a
 // game can start: two kinds of food fill the two starting huts.
@@ -257,6 +274,7 @@ static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces
 // cottage's extra wood and stone are free (`Game::upgrade_houses`).
 static HUT: Stats = building(300.0, 4.0, &[(Wood, 1)], 12.0, 2);
 static COTTAGE: Stats = building(450.0, 4.0, &[(Wood, 2), (Stone, 1)], 12.0, 2);
+static TOWNHOUSE: Stats = building(650.0, 4.0, &[(Wood, 2), (Stone, 2), (Brick, 2)], 12.0, 2);
 static BARRACKS: Stats = building(800.0, 6.0, &[(Wood, 3)], 30.0, 3);
 static RANGE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 1)], 30.0, 3);
 static STABLE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 2)], 35.0, 3);
@@ -284,6 +302,14 @@ static WEAVER: Stats = converter(350.0, &[(Wood, 2)], &[(Wool, 2)], &[(Clothes, 
 static BREWERY: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Grain, 2)], &[(Beer, 2)], 1, 16.0);
 static SIEGE_WORKSHOP: Stats = building(800.0, 6.0, &[(Wood, 3), (Brick, 2)], 35.0, 3);
 
+// Gunpowder.
+static SALTPETER_WORKS: Stats = extractor(400.0, &[(Wood, 1), (Brick, 1)], &[(Nitrate, 3)], 2, Some(Dep::Nitrate), 18.0, 2);
+static POWDER_MILL: Stats = converter(450.0, &[(Wood, 2), (Brick, 1)], &[(Nitrate, 2), (Wood, 1)], &[(Gunpowder, 3)], 2, 20.0);
+static CARPENTER: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Wood, 2)], &[(Furniture, 2)], 1, 16.0);
+static PRINTER: Stats = converter(400.0, &[(Stone, 1), (Brick, 2)], &[(Wood, 2)], &[(Books, 2)], 1, 18.0);
+// The circus: costly, and it borrows horses, but four houses get a show.
+static CIRCUS: Stats = Stats { produces: &[(Circus, 4)], consumes: &[(Horses, 2)], workers: 3, ..building(900.0, 5.0, &[(Wood, 4), (Stone, 3), (Brick, 3)], 40.0, 3) };
+
 // The Wonder holds a great many slots while it stands, needs three builders
 // and takes four minutes to rise. No fish: not every map has water nearby.
 static WONDER: Stats = Stats { builders: 3, ..building(4000.0, 8.0, &[(Wood, 8), (Stone, 10), (Grain, 2), (Meat, 2), (Fruit, 2), (Horses, 2)], 240.0, 4) };
@@ -308,17 +334,17 @@ pub fn house_max_goods(tier: u8) -> u8 {
 /// A player enters the next era when this many of their houses have
 /// reached its tier (and keeps the era if they later drop back).
 pub const HOUSES_FOR_ERA: u32 = 10;
-/// The last era there is content for (0 Ancient, 1 Medieval).
-pub const LAST_ERA: u8 = 1;
+/// The last era there is content for (0 Ancient, 1 Medieval, 2 Gunpowder).
+pub const LAST_ERA: u8 = 2;
 
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 30] = {
+    pub const ALL: [Kind; 39] = {
         use Kind::*;
         [
-            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder, Cottage, SheepFarm, IronMine,
-            Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop,
+            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder,
+            Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus,
         ]
     };
 
@@ -361,6 +387,15 @@ impl Kind {
             Weaver => &WEAVER,
             Brewery => &BREWERY,
             SiegeWorkshop => &SIEGE_WORKSHOP,
+            Musketeer => &MUSKETEER,
+            Dragoon => &DRAGOON,
+            Cannon => &CANNON,
+            Townhouse => &TOWNHOUSE,
+            SaltpeterWorks => &SALTPETER_WORKS,
+            PowderMill => &POWDER_MILL,
+            Carpenter => &CARPENTER,
+            Printer => &PRINTER,
+            Circus => &CIRCUS,
         }
     }
 
@@ -377,6 +412,8 @@ impl Kind {
             Wonder => &[Range, Stable, Tower],
             Weaver => &[SheepFarm],
             SiegeWorkshop => &[Barracks],
+            PowderMill => &[SaltpeterWorks],
+            Circus => &[Pasture],
             _ => &[],
         }
     }
@@ -384,9 +421,12 @@ impl Kind {
     /// Every buildable building, in tech-tree order (used by the UI and AI).
     /// Cottages aren't built: huts become cottages.
     #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 20] = {
+    pub const BUILDABLE: [Kind; 25] = {
         use Kind::*;
-        [Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop]
+        [
+            Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
+            Carpenter, Printer, Circus,
+        ]
     };
 
     /// What fights it is: see `Class` and `damage_mult`.
@@ -394,10 +434,10 @@ impl Kind {
         use Kind::*;
         match self {
             Worker => Class::Civilian,
-            Spearman | Swordsman => Class::Line,
+            Spearman | Swordsman | Musketeer => Class::Line,
             Archer | Crossbowman => Class::Ranged,
-            Horseman | Knight => Class::Mounted,
-            Trebuchet => Class::Siege,
+            Horseman | Knight | Dragoon => Class::Mounted,
+            Trebuchet | Cannon => Class::Siege,
             _ => Class::Building,
         }
     }
@@ -406,6 +446,7 @@ impl Kind {
     pub fn upgrade(self) -> Option<Kind> {
         match self {
             Kind::Hut => Some(Kind::Cottage),
+            Kind::Cottage => Some(Kind::Townhouse),
             _ => None,
         }
     }
@@ -414,6 +455,7 @@ impl Kind {
     pub fn downgrade(self) -> Option<Kind> {
         match self {
             Kind::Cottage => Some(Kind::Hut),
+            Kind::Townhouse => Some(Kind::Cottage),
             _ => None,
         }
     }
@@ -432,6 +474,7 @@ impl Kind {
         use Kind::*;
         match self {
             Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
+            Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
             _ => 0,
         }
     }
@@ -441,6 +484,7 @@ impl Kind {
         match self {
             Kind::Hut => Some(0),
             Kind::Cottage => Some(1),
+            Kind::Townhouse => Some(2),
             _ => None,
         }
     }
@@ -453,10 +497,10 @@ impl Kind {
     /// Which units this building can train. A slice of a static array.
     pub fn trains(self) -> &'static [Kind] {
         match self {
-            Kind::Barracks => &[Kind::Spearman, Kind::Swordsman],
+            Kind::Barracks => &[Kind::Spearman, Kind::Swordsman, Kind::Musketeer],
             Kind::Range => &[Kind::Archer, Kind::Crossbowman],
-            Kind::Stable => &[Kind::Horseman, Kind::Knight],
-            Kind::SiegeWorkshop => &[Kind::Trebuchet],
+            Kind::Stable => &[Kind::Horseman, Kind::Knight, Kind::Dragoon],
+            Kind::SiegeWorkshop => &[Kind::Trebuchet, Kind::Cannon],
             _ => &[],
         }
     }
@@ -468,8 +512,9 @@ impl Kind {
 
     pub fn radius(self) -> f32 {
         match self {
-            Kind::Horseman | Kind::Knight => 0.42,
+            Kind::Horseman | Kind::Knight | Kind::Dragoon => 0.42,
             Kind::Trebuchet => 0.45,
+            Kind::Cannon => 0.4,
             Kind::Worker => 0.28,
             _ => 0.32,
         }

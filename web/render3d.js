@@ -584,7 +584,7 @@ function resourceModels() {
   }
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
     deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]),
-    iron: iron.build(), clay: clay.build(), sheep: sheep.build() };
+    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false) };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -608,7 +608,9 @@ function glbName(kind) {
     [K.LumberCamp]: "Sawmill", [K.Quarry]: "Mason", [K.HuntingLodge]: "Settlement",
     [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
     [K.Cottage]: "Cottage", [K.SheepFarm]: "SheepFarm", [K.IronMine]: "IronMine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
-    [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "SiegeWorkshop" };
+    [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "SiegeWorkshop",
+    [K.Musketeer]: "Musketeer", [K.Dragoon]: "Dragoon", [K.Cannon]: "Cannon", [K.Townhouse]: "Townhouse", [K.SaltpeterWorks]: "SaltpeterWorks",
+    [K.PowderMill]: "PowderMill", [K.Carpenter]: "Carpenter", [K.Printer]: "Printer", [K.Circus]: "Circus" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
@@ -787,6 +789,11 @@ function initRenderer() {
   R3.stones = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.13, 0), withFow(new THREE.MeshLambertMaterial({ color: "#7d766c" })), 64);
   R3.stones.frustumCulled = false;
   scene.add(R3.stones);
+  // Powder smoke: white puffs that swell, drift up and shrink away.
+  R3.puffMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial({ color: "#e8e6e0" })), 192);
+  R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
+  scene.add(R3.puffMesh);
+  R3.puffs = [];
 
   // Rally flag
   const rm = new Model();
@@ -798,7 +805,7 @@ function initRenderer() {
 
   loadGlbModels();
   R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"]]) {
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"]]) {
     if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
   }
   buildSmoke();
@@ -928,7 +935,7 @@ function buildWorld() {
   };
   R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
     horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false),
-    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false) };
+    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), nitrate: mk(R3.resGeo.nitrate, n, false) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -1477,7 +1484,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
       if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
       toolWorld = -1.45 - jab * 0.1;
-    } else if (anim === 3 && kind === K.Crossbowman) {
+    } else if (anim === 3 && (kind === K.Crossbowman || kind === K.Musketeer)) {
       // Crossbow levelled at the target in both hands; a kick when it looses.
       const kick = Math.max(0, Math.sin(T * 2.4) - 0.9) * 4;
       B.armR.rotation.z = 1.3 + kick * 0.15; B.armL.rotation.z = 1.25; B.armL.rotation.x = -0.35;
@@ -1491,7 +1498,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.body.rotation.y = 0.35;
       toolWorld = 0;
     } else {
-      toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
+      toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Musketeer ? 1.25 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
       if (kind === K.Worker) o.toolMesh.rotation.z = -0.4;
     }
     if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
@@ -1580,7 +1587,7 @@ function render3d(alpha, now, dt) {
     if (o.tool) {
       let swing = 0;
       if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
-      else if (anim === 3) swing = kind === K.Archer ? 0.35 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
+      else if (anim === 3) swing = kind === K.Archer ? 0.35 : kind === K.Cannon ? -Math.max(0, Math.sin(ph * 2.5) - 0.85) * 0.6 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
       o.tool.rotation.z = -swing - o.toolTilt;
     }
     const mat = (flags & 8) ? hitMat : entMat;
@@ -1617,11 +1624,38 @@ function render3d(alpha, now, dt) {
   updateMarkers(now);
   updateSmoke();
   updateCampfires(performance.now());
+  updatePuffs(performance.now());
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
   const g = performance.now();
   renderScene();
   R3.gpuMs = performance.now() - g;
+}
+
+// A shot from a firearm at (x, y): a puff of smoke there (see updatePuffs).
+function gunSmoke(x, y, kind) {
+  if (!R3.puffs) return;
+  if (R3.puffs.length >= 64) R3.puffs.shift();
+  R3.puffs.push({ x, y, t0: performance.now(), big: kind === K.Cannon, seed: Math.random() * 6.28 });
+}
+function updatePuffs(now) {
+  const m = R3.puffMesh;
+  if (!m) return;
+  R3.puffs = R3.puffs.filter(p => now - p.t0 < 1600);
+  let n = 0;
+  for (const p of R3.puffs) {
+    const age = (now - p.t0) / 1600, size = (p.big ? 0.42 : 0.2) * Math.sin(Math.min(1, age * 1.4) * Math.PI) ** 0.6;
+    for (let k = 0; k < 3 && n < 192; k++) {
+      const a = p.seed + k * 2.1, r = age * (p.big ? 0.6 : 0.3);
+      const x = p.x + Math.cos(a) * r, z = p.y + Math.sin(a) * r;
+      _p.set(x, groundAt(x, z) + (p.big ? 0.5 : 0.7) + age * 0.6 + k * 0.08, z);
+      _q.identity(); _s.setScalar(Math.max(0.001, size * (1 - k * 0.2)));
+      _m4.compose(_p, _q, _s);
+      m.setMatrixAt(n++, _m4);
+    }
+  }
+  m.count = n;
+  m.instanceMatrix.needsUpdate = true;
 }
 
 // Rebuild the resource instances when anything about them changed.
@@ -1633,13 +1667,13 @@ function updateResources() {
   for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
-  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [] };
+  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [] };
   for (const m of Object.values(R3.res)) m.count = 0;
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
     // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game,
-    // 6 iron ore, 7 clay, 8 sheep hills.
+    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter.
     let mesh, scale;
     if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
@@ -1648,6 +1682,7 @@ function updateResources() {
     else if (kind === 6) { mesh = "iron"; scale = 0.85 + 0.25 * h2; }
     else if (kind === 7) { mesh = "clay"; scale = 0.85 + 0.25 * h2; }
     else if (kind === 8) { mesh = "sheep"; scale = UNIT_SCALE; } // like the sheep farm's sheep
+    else if (kind === 9) { mesh = "nitrate"; scale = 0.8 + 0.3 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;
@@ -1688,8 +1723,9 @@ function updateArrows(alpha) {
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
-    const stone = shooter === K.Trebuchet;
-    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : stone ? 1.2 : 0.62;
+    const stone = shooter === K.Trebuchet || shooter === K.Cannon;
+    if (shooter === K.Musketeer || shooter === K.Dragoon) continue; // musket balls are too small to see
+    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon ? 0.45 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
     const toH = atBuilding ? 0.9 : 0.55;
@@ -1697,7 +1733,7 @@ function updateArrows(alpha) {
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = stone ? total * 0.3 : Math.min(1.2, total * 0.12);
+    const arc = shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon ? total * 0.08 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
@@ -1927,13 +1963,14 @@ function setSmokeEmitters(list) {
 function updateSmoke() {
   // Chimneys, the smoke hole of a hut someone lives in, the Capitol's campfire.
   const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: CAMPFIRE,
-    [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55] };
+    [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55],
+    [K.Townhouse]: [0.35, 1.75, -0.2], [K.PowderMill]: [-0.45, 1.1, -0.45] };
   if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
   const list = [];
   for (const o of R3.objs.values()) {
     if (!isBld(o.kind) || o.body.scale.y < 1 || list.length >= SMOKE_MAX) continue;
     const ch = CHIMNEYS[o.kind], p = o.root.position;
-    if (ch && ((o.kind !== K.Hut && o.kind !== K.Cottage) || o.residents > 0)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
+    if (ch && ((o.kind !== K.Hut && o.kind !== K.Cottage && o.kind !== K.Townhouse) || o.residents > 0)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
     if (o.lastHp < 0.5 && o.kind !== K.Farm && list.length < SMOKE_MAX) list.push([p.x - 0.2, p.y + o.height * 0.6, p.z + 0.1, 2]);
   }
   setSmokeEmitters(list);

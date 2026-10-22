@@ -28,14 +28,16 @@ Import `web/models.glb` into Blender (File > Import > glTF 2.0). Keep these
 conventions, which the game relies on:
 
 - **One object per model**, named as the game expects: `Capitol`,
-  `Barracks`, `Range`, `Stable`, `Tower`, `Settlement`, `Farm`, `Granary`,
-  `Sawmill`, `Mason`, `Smithy`, `Market`, `Temple`, `Wonder`, `Pine`,
+  `Barracks`, `Range`, `Stable`, `Tower`, `Settlement`, `Farm`,
+  `Sawmill`, `Mason`, `Wonder`, `Pine`,
   `Oak`, `Bush`, `Stone`, `Gold`, `Citizen`, `Spearman`, `Archer`,
   `Horseman`; Medieval: `Cottage`, `SheepFarm`, `IronMine`, `Brickworks`,
   `Bakery`, `Weaver`, `Brewery`, `SiegeWorkshop`, `IronOre`, `ClayPit`,
-  `Sheep`, `Swordsman`, `Crossbowman`, `Knight`, `Trebuchet`. (The
-  Trebuchet has no skeleton: no bone pivots, so the game rolls it whole
-  and swings its arm, the tool.) The object's own location doesn't matter.
+  `Sheep`, `Swordsman`, `Crossbowman`, `Knight`, `Trebuchet`; Gunpowder:
+  `Townhouse`, `SaltpeterWorks`, `PowderMill`, `Carpenter`, `Printer`,
+  `Circus`, `Saltpeter`, `Musketeer`, `Dragoon`, `Cannon`. (The Trebuchet
+  and the Cannon have no skeleton: no bone pivots, so the game rolls them
+  whole and moves their tool, the arm or the barrel.) The object's own location doesn't matter.
 - **Units** face +X with their feet at the ground. The weapon or tool is a
   child object named `<Unit>.tool`, with its origin in the hand that holds
   it (the right hand, or the left for the Archer's bow).

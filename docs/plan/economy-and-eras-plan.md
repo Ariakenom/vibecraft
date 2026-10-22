@@ -351,7 +351,31 @@ unsupplied units are the newest; class counters.
 
 ---
 
-## Phases 5–8: one era each
+## Phase 5: the Gunpowder era
+
+**Status: done and merged to `main`** (October 2026).
+- Townhouse (tier 2, 7 goods, 14 people): a full cottage with 5 goods grows
+  into one from the Medieval era, if 1 more stone and 2 brick are free.
+  Ten townhouses bring the Gunpowder era (`LAST_ERA` 2).
+- Nitrate (saltpeter deposits near every base) → Saltpeter Works; Powder
+  Mill (nitrate 2 + wood 1 → gunpowder 3); Carpenter (wood → furniture);
+  Printer (wood → books); Circus (holds 2 horses, 4 shows, 3 workers).
+- Musketeer (Line, shoots: iron + gunpowder), Dragoon (Mounted, shoots:
+  horses + gunpowder), Cannon (Siege, range 10: iron 2 + gunpowder).
+  Muskets crack and cannon boom (synthesized), with puffs of powder smoke;
+  cannon balls fly flat, musket balls aren't drawn.
+- Models in Blender; the unused Granary, Smithy, Market and Temple are no
+  longer exported. The build menu packs 9 columns once it has more than
+  22 buttons; the top bar squeezes when it shows many resources. Medieval
+  and later buildings show in the menu (locked) once the next tier's first
+  house stands.
+- Tests: cottage → townhouse only from the Medieval era; the gunpowder
+  chain stops without saltpeter. Save `VERSION` 8, protocol 13.
+- Normal AIs don't reach the Gunpowder era in 90 minutes (they plateau at
+  70 to 95 people in the Medieval era; see open question 5). Hard AIs end
+  games by conquest in under 30 minutes.
+
+## Phases 6–8: one era each
 
 Each phase is content on top of the Phase 4 engine: resources, deposits,
 buildings, units, models with fallbacks, sounds, AI plan entries and the
@@ -359,7 +383,6 @@ house goods for that tier.
 
 | Phase | Era | New systems beyond content |
 |---|---|---|
-| 5 | Gunpowder | Gunpowder chain; the Circus. Musket smoke and cannon sounds. |
 | 6 | Industrial | Steel, explosives, heating. Field guns borrow horses. Measure pathfinding on a bigger map and decide map size. |
 | 7 | Modern | Air units: a flying movement layer that ignores pathing and blocking, and which only some units can hit. Haber–Bosch plant. Oil. |
 | 8 | Atomic | Missile silo and the Nuke: a targeted area attack with a long launch visible to everyone, a flash, and a crater that stays on the map. Reactor. |

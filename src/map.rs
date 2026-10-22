@@ -132,6 +132,7 @@ enum Feat {
     Iron,
     Clay,
     Hills,
+    Nitrate,
 }
 
 /// A symmetry of the map: a way to turn it that lands it on itself.
@@ -222,7 +223,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // (dx, dy, feature, cluster radius)
     // The Medieval ones (iron, clay, sheep hills) sit a little further out,
     // clear of the road to the middle.
-    let clusters: [(i32, i32, Feat, f32); 8] = [
+    let clusters: [(i32, i32, Feat, f32); 9] = [
         (-8, -9, Feat::Tree, 3.4),
         (6, -6, Feat::Fertile, 1.6),
         (9, 4, Feat::Horses, 1.6),
@@ -231,6 +232,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         (-2, -14, Feat::Iron, 1.5),
         (14, 8, Feat::Clay, 1.5),
         (14, -2, Feat::Hills, 1.6),
+        (-10, -2, Feat::Nitrate, 1.4),
     ];
     // Neutral deposits out on the map, in 80×80 coordinates (scaled to fit).
     let neutral: [(i32, i32, Feat, f32); 6] = [
@@ -316,6 +318,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 Feat::Iron => Dep::Iron,
                 Feat::Clay => Dep::Clay,
                 Feat::Hills => Dep::Hills,
+                Feat::Nitrate => Dep::Nitrate,
             };
             dep_at[i] = deps.len() as i32;
             blocked[i] = true;

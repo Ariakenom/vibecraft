@@ -548,3 +548,67 @@ fn counters_go_by_class_across_eras() {
         assert_eq!(damage_mult(a, t), m, "{a:?} against {t:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5: the Gunpowder era
+
+#[test]
+fn a_full_cottage_with_five_goods_becomes_a_townhouse_from_the_medieval_era() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].supply_pct = 300; // plenty of wood and stone
+    for k in [Kind::HuntingLodge, Kind::Brickworks] {
+        build(&mut g, k);
+    }
+    let cottage = |g: &mut Game| {
+        let (x, y) = spot(g, Kind::Hut);
+        g.spawn_building(Kind::Cottage, 1, x, y, 1.0) as usize
+    };
+    let c = cottage(&mut g);
+    // Five goods: the Capitol's grain and fruit, meat, and two Medieval
+    // goods once there are bakeries and a weaver.
+    g.players[1].era = 1;
+    build(&mut g, Kind::Farm);
+    build(&mut g, Kind::Bakery);
+    build(&mut g, Kind::Farm);
+    build(&mut g, Kind::Brewery);
+    for _ in 0..30 {
+        g.spawn_worker(1, None);
+    }
+    run(&mut g, 2.0);
+    let _ = c;
+    let townhouses = |g: &Game| g.ents.iter().filter(|e| e.alive && e.kind == Kind::Townhouse).count();
+    assert!(townhouses(&g) >= 1, "{}", census(&g, 1));
+    // In the Ancient era it would have stayed a cottage.
+    let mut g2 = Game::new(5, 1, 2);
+    g2.players[1].supply_pct = 300;
+    build(&mut g2, Kind::HuntingLodge);
+    let c2 = cottage(&mut g2);
+    for _ in 0..30 {
+        g2.spawn_worker(1, None);
+    }
+    run(&mut g2, 2.0);
+    let _ = c2;
+    assert_eq!(townhouses(&g2), 0);
+}
+
+#[test]
+fn gunpowder_comes_from_nitrate_and_wood() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].era = 2;
+    g.players[1].supply_pct = 300;
+    build(&mut g, Kind::Brickworks); // the works and the mill are built with brick
+    let works = build(&mut g, Kind::SaltpeterWorks);
+    assert_eq!(g.players[1].supply[Res::Nitrate.idx()], 9, "3 nitrate, times 3");
+    let mill = build(&mut g, Kind::PowderMill);
+    assert!(g.ents[mill as usize].fed);
+    assert!(g.players[1].supply[Res::Gunpowder.idx()] >= 3);
+    // Musketeers and cannon need it.
+    build(&mut g, Kind::IronMine);
+    assert_eq!(g.short_of(1, Kind::Musketeer), None, "{}", census(&g, 1));
+    assert_eq!(g.short_of(1, Kind::Cannon), None);
+    // No saltpeter, no powder: the mill stops.
+    g.ents[works as usize].hp = 0.0;
+    run(&mut g, 0.2);
+    assert!(!g.ents[mill as usize].fed);
+    assert_eq!(g.players[1].supply[Res::Gunpowder.idx()], 0);
+}

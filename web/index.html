@@ -43,6 +43,12 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .res .chip:hover, .res .chip:focus-visible { background: #ffffff10; }
 .res .chip small { font-size: 12px; font-weight: 500; color: var(--muted); }
 .res .chip.over b { color: var(--bad); }
+.res.many { gap: 8px; }
+.res.many .chip { min-width: 0; gap: 3px; padding: 1px 2px; }
+.res.many .chip small { font-size: 11px; }
+.res.lots .chip small { display: none; }
+#top:has(.res.many) .brand { display: none; }
+#top:has(.res.many) #volume { display: none; }
 .res .era { background: transparent; border: 1px solid var(--line); border-radius: 3px; padding: 1px 9px; font: 400 14px var(--display); letter-spacing: .04em; color: var(--bronze); cursor: pointer; }
 .res .era:hover { border-color: var(--bronze); }
 .res .foe-wonder { color: var(--bad); font-weight: 700; }
@@ -111,6 +117,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 270px; }
 #cmd.dense { grid-template-columns: repeat(7, 40px); grid-auto-rows: 40px; gap: 4px; width: 304px; }
 #cmd.dense .cbtn canvas { width: 38px; height: 38px; }
+#cmd.denser { grid-template-columns: repeat(9, 34px); grid-auto-rows: 34px; gap: 3px; width: 330px; }
+#cmd.denser .cbtn canvas { width: 32px; height: 32px; }
+#cmd.denser .cbtn kbd { font-size: 10px; }
 .cbtn { position: relative; padding: 0; background: linear-gradient(#3a3023, #282017); border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
 .cbtn:hover { border-color: var(--bronze); }
 .cbtn.poor { opacity: .5; }

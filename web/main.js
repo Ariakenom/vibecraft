@@ -8,34 +8,44 @@ const PROJ_STRIDE = 10; // x, y, px, py, loosed from x, y, shooter kind, at a bu
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
-const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8,
+const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76, Hut: 77,
-  Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85 };
+  Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
+  Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91 };
 // Mounted units: a horse under them (sounds, drawing).
-const isMounted = k => k === K.Horseman || k === K.Knight;
+const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
+// Firearms: a bang and a puff of smoke instead of the twang of a bow.
+const isGun = k => k === K.Musketeer || k === K.Dragoon || k === K.Cannon;
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
   [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture", [K.Wonder]: "Wonder",
   [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
   [K.Cottage]: "Cottage", [K.SheepFarm]: "Sheep Farm", [K.IronMine]: "Iron Mine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
-  [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "Siege Workshop" };
+  [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "Siege Workshop",
+  [K.Musketeer]: "Musketeer", [K.Dragoon]: "Dragoon", [K.Cannon]: "Cannon",
+  [K.Townhouse]: "Townhouse", [K.SaltpeterWorks]: "Saltpeter Works", [K.PowderMill]: "Powder Mill", [K.Carpenter]: "Carpenter",
+  [K.Printer]: "Printer", [K.Circus]: "Circus" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and is used up doing it), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, it becomes a Cottage by itself if 1 more wood and 1 stone are free.",
-  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut.",
+  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut. Full, with 5 goods, it becomes a Townhouse (from the Medieval era) if 1 more stone and 2 brick are free.",
+  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Below 5 goods it falls back to a cottage.",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Swordsman]: "Armoured infantry. Like spearmen, deadly to riders, but tougher and harder-hitting. Costs iron.",
   [K.Crossbowman]: "Shoots further and harder than an archer. Strong against infantry, weak against riders. Costs iron.",
   [K.Knight]: "Heavy cavalry in iron. Runs down archers and crossbowmen.",
   [K.Trebuchet]: "A slow siege engine with a long reach. Smashes buildings; poor against people, so guard it.",
+  [K.Musketeer]: "Line infantry with muskets: shoots, and its bayonet keeps riders off. Costs iron and gunpowder.",
+  [K.Dragoon]: "Fast riders who shoot from the saddle. Run down archers and crossbowmen. Costs horses and gunpowder.",
+  [K.Cannon]: "Outranges every tower and trebuchet, and brings walls down. Slow, and poor against people.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
   [K.Capitol]: "Your seat of power. Lose it and you lose the game.",
-  [K.Barracks]: "Trains spearmen, and swordsmen from the Medieval era.",
+  [K.Barracks]: "Trains spearmen, swordsmen from the Medieval era and musketeers from the Gunpowder era.",
   [K.Range]: "Trains archers, and crossbowmen from the Medieval era.",
-  [K.Stable]: "Trains horsemen, and knights from the Medieval era.",
+  [K.Stable]: "Trains horsemen, knights from the Medieval era and dragoons from the Gunpowder era.",
   [K.Tower]: "Shoots at enemies in range.",
   [K.Farm]: "Grows grain anywhere on open ground.",
   [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing, so you can always get more wood.",
@@ -51,7 +61,12 @@ const DESC = {
   [K.Bakery]: "Bakes bread from grain. It holds its grain while it stands, working or not.",
   [K.Weaver]: "Weaves clothes from wool. It holds its wool while it stands, working or not.",
   [K.Brewery]: "Brews beer from grain. It holds its grain while it stands, working or not.",
-  [K.SiegeWorkshop]: "Builds trebuchets.",
+  [K.SiegeWorkshop]: "Builds trebuchets, and cannon from the Gunpowder era.",
+  [K.SaltpeterWorks]: "Scrapes nitrate from the saltpeter crusts next to it.",
+  [K.PowderMill]: "Grinds nitrate and wood into gunpowder, for muskets, dragoons and cannon.",
+  [K.Carpenter]: "Makes furniture from wood, for townhouses.",
+  [K.Printer]: "Prints books (on paper made from wood), for townhouses.",
+  [K.Circus]: "Puts on shows for four houses. Costly, and it holds two horses while it stands.",
 };
 // The six eras, and the house each brings. Which kinds and resources
 // belong to which era comes from Rust (kind_era, res_era); so do the
@@ -64,7 +79,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
@@ -75,13 +90,15 @@ const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
 // Medieval buildings show once the player has a cottage (`buildMenu`).
 const BUILD_MENU = [[K.Hut, "Q"], [K.Farm, "E"], [K.LumberCamp, "R"], [K.Quarry, "T"], [K.FishingHut, "Y"], [K.HuntingLodge, "U"], [K.Orchard, "I"],
   [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"], [K.Wonder, "B"],
-  [K.SheepFarm, "J"], [K.Weaver, "⇧J"], [K.IronMine, "L"], [K.Brickworks, "N"], [K.Bakery, "⇧E"], [K.Brewery, "⇧N"], [K.SiegeWorkshop, "⇧F"]];
+  [K.SheepFarm, "J"], [K.Weaver, "⇧J"], [K.IronMine, "L"], [K.Brickworks, "N"], [K.Bakery, "⇧E"], [K.Brewery, "⇧N"], [K.SiegeWorkshop, "⇧F"],
+  [K.SaltpeterWorks, "⇧T"], [K.PowderMill, "⇧U"], [K.Carpenter, "⇧R"], [K.Printer, "⇧Y"], [K.Circus, "⇧C"]];
 function buildMenu() {
-  const soon = W.era() >= 1 || W.era_progress(0) > 0;
+  const soon = W.era_progress(0) > 0;
   return BUILD_MENU.filter(([k]) => W.kind_era(k) <= W.era() || (soon && W.kind_era(k) === W.era() + 1));
 }
 const TRAIN_KEYS = "QERT";
-const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman], [K.Range]: [K.Archer, K.Crossbowman], [K.Stable]: [K.Horseman, K.Knight], [K.SiegeWorkshop]: [K.Trebuchet] };
+const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer], [K.Range]: [K.Archer, K.Crossbowman], [K.Stable]: [K.Horseman, K.Knight, K.Dragoon],
+  [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -99,6 +116,12 @@ const RES_ICON = [
   '<svg viewBox="0 0 16 16"><path d="M2 10c0-3.6 2.7-6 6-6s6 2.4 6 6v1.5H2z" fill="#d9a25a"/><path d="M5 6.5l1 1.5M8 5.5v2M11 6.5l-1 1.5" stroke="#9c6a2e" stroke-width="1" stroke-linecap="round"/><path d="M2 11.5h12v1.5H2z" fill="#b07c3c"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M5 2l3 1.5L11 2l3.5 3-2 2.2-1-.7V14h-7V6.5l-1 .7-2-2.2z" fill="#4f7aa8"/><path d="M6 2.5c.5 1.3 1.2 2 2 2s1.5-.7 2-2" stroke="#2f5379" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M3.5 4h8v10h-8z" fill="#d79b2a"/><path d="M3 3c0-1.4 1.5-2 4.5-2S12 1.6 12 3v1.5H3z" fill="#f4ecd8"/><path d="M11.5 6h1.8c.9 0 1.2.6 1.2 1.3v3.4c0 .7-.4 1.3-1.2 1.3h-1.8" stroke="#b07a1d" stroke-width="1.2" fill="none"/></svg>',
+  // nitrate, gunpowder, furniture, books, circus shows
+  '<svg viewBox="0 0 16 16"><path d="M1.5 13l2.5-5 3 2 2.5-5 3 4 2 4z" fill="#e8e4d6"/><path d="M4 8l3 2 2.5-5" stroke="#b9b2a0" fill="none"/><circle cx="11" cy="11" r="1" fill="#cfc8b6"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M4 3h8l1 2v8.5c0 .8-.7 1.5-1.5 1.5h-7C3.7 15 3 14.3 3 13.5V5z" fill="#3b3a37"/><path d="M5 1.5h6V3H5z" fill="#6b5a44"/><path d="M5.5 8h5v4h-5z" fill="#d8c8a4"/><path d="M7 9.5h2" stroke="#3b3a37"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M3 3h10v6H3z" fill="#9a6a3c"/><path d="M2 9h12v2.5H2z" fill="#7d5631"/><path d="M3 11.5h1.5V15H3zM11.5 11.5H13V15h-1.5z" fill="#5e3f22"/><path d="M4.5 4.5h7v3h-7z" fill="#b9854e"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M2 3.5c2-1 4-1 6 .5v10c-2-1.5-4-1.5-6-.5z" fill="#8a3a2a"/><path d="M14 3.5c-2-1-4-1-6 .5v10c2-1.5 4-1.5 6-.5z" fill="#a8452e"/><path d="M3 5c1.5-.6 3-.6 4.2.4M3 7c1.5-.6 3-.6 4.2.4" stroke="#e9d9b8" stroke-width=".6" fill="none"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M8 1l6.5 6H1.5z" fill="#c8453a"/><path d="M8 1l3 6H5z" fill="#efe6d1"/><path d="M2.5 7h11v7h-11z" fill="#e8d9b0"/><path d="M6.5 14v-4c0-1 .7-1.5 1.5-1.5s1.5.5 1.5 1.5v4z" fill="#3a2c20"/><path d="M8 1V0" stroke="#d2a33a"/></svg>',
 ];
 const resIcon = r => RES_ICON[r] || `<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="#6d6455"/><text x="8" y="11" text-anchor="middle" font-size="8" fill="#efe6d1" font-family="sans-serif">${RES_NAMES[r][0].toUpperCase()}</text></svg>`;
 
@@ -433,7 +456,7 @@ function drawMinimap() {
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
   // Then iron ore, clay and sheep hills (5, water, has no dots).
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0"], dot = Math.max(1.5, s);
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
@@ -465,6 +488,9 @@ function drawMinimap() {
 function setupTopBar(shown = []) {
   const bar = $("res");
   bar.replaceChildren();
+  // Later eras bring many resources: squeeze the chips so they stay on one line.
+  bar.classList.toggle("many", shown.length > 7);
+  bar.classList.toggle("lots", shown.length > 11);
   const chips = [];
   for (const r of shown) {
     const c = document.createElement("span");
@@ -616,19 +642,22 @@ function techCard(k) {
   const bld = isBld(k);
   // A unit is open when something that trains it is built.
   const trainers = Object.keys(TRAINS).map(Number).filter(b => TRAINS[b].includes(k));
-  const built = bld ? W.has_built(k) : false, open = bld ? W.unlocked(k) : trainers.some(b => W.has_built(b));
+  const built = bld ? W.has_built(k) : false, open = bld ? W.unlocked(k) : trainers.some(b => W.has_built(b)) && W.kind_era(k) <= W.era();
+  // Houses past the first grow from the one below; nobody builds them.
+  const grows = { [K.Cottage]: K.Hut, [K.Townhouse]: K.Cottage }[k];
   card.className = "tcard " + (built ? "built" : open ? "open" : "locked");
   card.append(iconEl(k, ME, 40));
   const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
   if (!bld) needs.push(...trainers);
-  const cost = slotsOf(k), makes = slotsOf(k, 1), dep = W.kind_deposit(k);
+  const cost = slotsOf(k), makes = slotsOf(k, 1), takes = slotsOf(k, 2), dep = W.kind_deposit(k);
   const info = document.createElement("div");
   info.innerHTML = `<b>${NAMES[k]}</b>` +
     `<span class="cost inline">${cost.length ? slotsHtml(cost, false) : '<span class="free">free</span>'}${bld ? "" : `<span title="a person">${PERSON_ICON}1</span>`}</span>` +
+    (takes.length ? `<span>Takes <span class="cost inline">${slotsHtml(takes, false)}</span></span>` : "") +
     (makes.length ? `<span>Makes <span class="cost inline">${slotsHtml(makes, false)}</span>${stat(k, 7) ? ` · ${stat(k, 7)} worker${stat(k, 7) === 1 ? "" : "s"}` : ""}</span>` : "") +
     (dep >= 0 ? `<span>Next to ${DEP_NAMES[dep]}</span>` : "") +
     (needs.length ? `<span class="needs">Needs ${needs.map(q => `<i class="${W.has_built(q) ? "ok" : ""}">${NAMES[q]}</i>`).join(" + ")}</span>` : "") +
-    `<span class="state">${bld ? (built ? "Built" : open ? "Ready to build" : "Locked") : (open ? "Can train" : "Locked")}</span>`;
+    `<span class="state">${grows != null ? (built ? "You have one" : `Grows from a ${NAMES[grows].toLowerCase()}`) : bld ? (built ? "Built" : open ? "Ready to build" : "Locked") : (open ? "Can train" : "Locked")}</span>`;
   info.title = DESC[k] || "";
   card.append(info);
   return card;
@@ -792,7 +821,8 @@ function renderCommands(sel) {
       ? "<h4>Resume</h4><p>Hire workers again: free workers from the campfire come.</p>"
       : "<h4>Pause</h4><p>Its workers go back to the campfire. It keeps its slots but makes nothing.</p>" }), "Z", fn);
   }
-  box.classList.toggle("dense", box.children.length > 16);
+  box.classList.toggle("dense", box.children.length > 16 && box.children.length <= 22);
+  box.classList.toggle("denser", box.children.length > 22);
   const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
   if (doomed.length && !hasUnits) {
     const armed = demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000;
@@ -835,12 +865,18 @@ function houseWants(k, goods) {
 // What a house needs to grow a tier, or what makes it fall back.
 function houseTierLine(k, goods, residents, beds) {
   const tier = stat(k, 10), n = popcount(goods), max = W.house_max_goods(tier);
-  if (k === K.Cottage) return n < 3 ? `<div class="statline bad">Fewer than 3 goods: it falls back to a hut.</div>` : "";
-  if (k !== K.Hut) return "";
+  // Each tier: what it falls back to below, and what it grows into.
+  const TIERS = { [K.Hut]: [null, 0, K.Cottage, "1 wood and 1 stone"], [K.Cottage]: [K.Hut, 3, K.Townhouse, "1 stone and 2 brick"], [K.Townhouse]: [K.Cottage, 5, null, ""] };
+  const t = TIERS[k];
+  if (!t) return "";
+  const [down, keep, up, mats] = t;
+  if (down != null && n < keep) return `<div class="statline bad">Fewer than ${keep} goods: it falls back to a ${NAMES[down].toLowerCase()}.</div>`;
+  if (up == null || W.era_progress(2) < tier + 1) return "";
+  if (W.era() + 1 < tier + 1) return `<div class="statline muted">Becomes a ${NAMES[up]} in the ${ERA_NAMES[tier]} era.</div>`;
   const need = [];
   if (residents < beds || beds === 0) need.push("every bed taken");
   if (n < max) need.push(`all ${max} goods`);
-  return `<div class="statline muted">${need.length ? `Becomes a Cottage with ${need.join(" and ")}, if 1 wood and 1 stone are free.` : "Becomes a Cottage as soon as 1 wood and 1 stone are free."}</div>`;
+  return `<div class="statline muted">${need.length ? `Becomes a ${NAMES[up]} with ${need.join(" and ")}, if ${mats} are free.` : `Becomes a ${NAMES[up]} as soon as ${mats} are free.`}</div>`;
 }
 function house_room(k, goods) { return W.house_max_goods(stat(k, 10)) - popcount(goods); }
 const popcount = v => { let n = 0; for (; v; v >>>= 1) n += v & 1; return n; };
@@ -1238,7 +1274,10 @@ function handleEvents() {
         else Sfx.at("death", x, y, 90, isMounted(kind));
         break; }
       case EV.Melee: Sfx.at("melee", x, y, 45, d); break;
-      case EV.Shoot: Sfx.at("bow", x, y, 60, isBld(d)); break;
+      case EV.Shoot:
+        if (isGun(d)) { Sfx.at(d === K.Cannon ? "cannon" : "musket", x, y, 40); gunSmoke(x, y, d); }
+        else Sfx.at("bow", x, y, 60, isBld(d));
+        break;
       case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;
       case EV.Hammer: Sfx.at("hammer", x, y, 90); break;
       case EV.WonderBegun:
@@ -1250,10 +1289,10 @@ function handleEvents() {
         break;
       case EV.Upgraded: {
         const era = W.era(), got = W.era_progress(0), need = W.era_progress(1);
-        toast(`A hut grew into a ${NAMES[d]}` + (era < W.era_progress(2) ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
+        toast(`A house grew into a ${NAMES[d]}` + (era < W.era_progress(2) ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
         Sfx.at("hammer", x, y, 90);
         break; }
-      case EV.Downgraded: toast(`A cottage fell back to a ${NAMES[d]}: it lost one of its goods`, "bad"); break;
+      case EV.Downgraded: toast(`A house fell back to a ${NAMES[d]}: it lost one of its goods`, "bad"); break;
       case EV.EraReached: {
         const who = d >> 4, era = d & 15;
         if (who === ME) {

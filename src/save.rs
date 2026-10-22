@@ -28,7 +28,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 5: arrows remember where they were loosed from.
 /// 6: people are units (workers, the campfire, recruits); no residents.
 /// 7: the Medieval era (new kinds, deposits for iron, clay and sheep).
-const VERSION: u32 = 7;
+/// 8: the Gunpowder era.
+const VERSION: u32 = 8;
 
 // ---------------------------------------------------------------------------
 // Writer

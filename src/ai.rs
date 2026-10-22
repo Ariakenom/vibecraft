@@ -70,7 +70,7 @@ const KEEP_FREE: u32 = 2;
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 28] = [
+const PLAN: [(Kind, u32); 34] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -100,6 +100,13 @@ const PLAN: [(Kind, u32); 28] = [
     (Kind::SiegeWorkshop, 1),
     (Kind::Bakery, 2),
     (Kind::Weaver, 2),
+    // Gunpowder: powder for the army, then furniture, books and the circus.
+    (Kind::SaltpeterWorks, 1),
+    (Kind::PowderMill, 1),
+    (Kind::Carpenter, 1),
+    (Kind::Printer, 1),
+    (Kind::Circus, 1),
+    (Kind::PowderMill, 2),
 ];
 
 /// A snapshot of what the AI owns, gathered once per think.
