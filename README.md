@@ -173,7 +173,7 @@ players, include it in `Game::checksum`.
     ./build.sh
     node test/wasm.mjs        # two copies stay identical; copy/restore; timings
     node test/relay.cjs       # the relay: allowed pages, limits, heartbeat, bad messages
-    test/browser/run.sh       # headless Chromium: replays, surrender, spectators (see the script for setup)
+    test/browser/run.sh       # headless Chromium: replays, surrender, spectators, seats changing hands (see the script for setup)
 
 To watch two computer players play, minute by minute:
 
@@ -261,6 +261,9 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
   Drift ends the game for everyone; it means a determinism bug.
 - **Someone leaving.** The host notices them gone from the room, or silent
   for 20 s, and puts "the computer takes over" (command 7) into a bundle.
+- **Seats changing hands.** In the menu during a game, the host can give a
+  seat the computer plays (from the start, or since its player left) to a
+  spectator (see Watching).
 - **Lost messages.** Every message repeats what the other side hasn't
   acknowledged, so losing some only delays things.
 
@@ -296,7 +299,7 @@ Two topics carry the game itself. Every message carries
   now, w, acks, sum, ge, ce, late, end}`. Every tick up to `upTo` is final,
   and ticks not listed had no commands. `early` holds commands not yet
   bundled.
-- `watch` and `feed`: spectators (see Watching).
+- `watch`, `feed` and `seat`: spectators (see Watching).
 - `chat`: `{id, token, name, slot, text}`, to everyone (see Chat).
 
 ### Lobby and transports
@@ -357,6 +360,19 @@ player's fog history is kept). The view is set with `set_view` in
   their game". Spectators follow the host into the next game, and keep a
   replay of what they watched. Players see "N watching" in the top bar.
   Spectating works over the relay, not claude.ai's room service.
+- **Taking a seat.** The host's menu lists the seats during a game, and a
+  seat the computer plays can be given to a spectator ("Spectator 3": the
+  host numbers them as they arrive, and each sees their number). The
+  server (`Server.claim`) picks a tick T a second ahead and puts "a person
+  takes over" (command 13, the opposite of 7) into that tick's bundle, so
+  every copy changes on the same tick. The spectator's copy stops right
+  after tick T (it is fed the confirmed bundles, so it is then exactly the
+  host's confirmed copy), becomes their confirmed copy, and goes on as a
+  guest's `Client` from tick T+1; the server keeps every bundle after T for
+  them. Their commands continue the seat's numbering (`seq0`). A
+  single-player game turns into a multiplayer one first, there and then,
+  with the host's page as the server. A seat not taken up within 30 s goes
+  back to the computer, and so does the seat of a new player who leaves.
 
 Spectator messages, both carrying `v` and the watcher's `token`:
 - `watch`, watcher to host, twice a second: `{game, have, snap, parts}`:
@@ -365,6 +381,9 @@ Spectator messages, both carrying `v` and the watcher's `token`:
 - `feed`, host to one watcher (`to`): `{game, snap: {id, T, i, n, z, data,
   meta}}` (a snapshot piece), or `{game, from, upTo, ticks, over}` (the
   commands of ticks `from` to `upTo - 1`), or `{game: null}` (no game on).
+  Each carries `n`, the watcher's number.
+- `seat`, host to everyone, every 0.5 s while seats are on their way:
+  `{game, gameId, host, offers: [{to, slot, T, seq0}, …]}`.
 
 ## Chat
 
@@ -520,4 +539,5 @@ versions don't play together.
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
-  - Enter: chat. Menu: surrender, copy a watch link for spectators
+  - Enter: chat. Menu: surrender, copy a watch link for spectators, and
+    (the host) give a computer's seat to a spectator

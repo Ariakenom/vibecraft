@@ -184,7 +184,7 @@ function startObserving(kind) {
   setView(0);
   $("scoreboard").hidden = false;
   $("obsBar").hidden = false;
-  $("obsLabel").textContent = kind === "out" ? "You're out of the game: watching" : kind === "watch" ? "Spectating" : "Replay";
+  $("obsLabel").textContent = kind === "out" ? "You're out of the game: watching" : kind === "watch" ? (watcher && watcher.n ? `Spectating (you're Spectator ${watcher.n})` : "Spectating") : "Replay";
   $("obsExit").textContent = kind === "replay" ? "Exit replay" : kind === "watch" ? "Stop watching" : "Leave game";
   // Pause and speed: in a replay they're on the bar; a live game can't be.
   $("pauseBtn").hidden = kind !== "out" || !!mp;
@@ -385,6 +385,7 @@ const Watchers = {
   snap: null,         // { id, game, T, z, parts: [text...], meta } for the current game
   making: false,
   tokens: WATCH.RATE, filled: 0,
+  count: 0,           // spectators numbered as they arrive ("Spectator 3"), so the host can tell them apart
 
   attach(r) {
     this.list.clear(); this.snap = null;
@@ -395,7 +396,7 @@ const Watchers = {
     let e = this.list.get(d.token);
     if (!e) {
       if (this.list.size >= WATCH.MAX) return;
-      e = { have: -1, game: null, parts: new Set(), snap: null, heard: 0, sent: 0 };
+      e = { have: -1, game: null, parts: new Set(), snap: null, heard: 0, sent: 0, n: ++this.count };
       this.list.set(d.token, e);
     }
     e.heard = performance.now();
@@ -404,6 +405,9 @@ const Watchers = {
     e.snap = typeof d.snap === "string" ? d.snap : null;
     e.parts = new Set(Array.isArray(d.parts) ? d.parts.filter(Number.isInteger) : []);
   },
+  // Spectators who have the game running, who could take a seat: [[token, n]].
+  ready() { return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0).map(([t, e]) => [t, e.n]); },
+  number(token) { const e = this.list.get(token); return e ? e.n : 0; },
   // Is there a game here to watch?
   serving() { return !!room && !guestOf && Rec.real && !!Rec.id; },
   spend() {
@@ -428,7 +432,7 @@ const Watchers = {
       else if (this.spend()) {
         e.sent = now;
         const { ticks, upTo } = Rec.range(e.have, Rec.ticks, WATCH.FEED_BYTES);
-        room.emit("feed", { v: NET.PROTOCOL, to: t, game: Rec.id, from: e.have, upTo, ticks, over: Rec.done });
+        room.emit("feed", { v: NET.PROTOCOL, to: t, game: Rec.id, from: e.have, upTo, ticks, over: Rec.done, n: e.n });
       }
     }
   },
@@ -489,7 +493,10 @@ class Watcher {
     this.loaded = false; this.k = 0; this.avail = 0; this.cmds = new Map();
     this.host = null; this.hostSeen = performance.now(); this.lastHeard = performance.now();
     this.ended = null;
+    this.n = 0;          // which spectator I am, as the host counts us
+    this.seat = null;    // { slot, T, seq0, gameId, host }: the host is handing me a seat
     r.on("feed", d => this.receive(d));
+    r.on("seat", d => this.offered(d));
     r.onPeers(p => this.peers(p));
     r.presence({ role: "watcher", v: NET.PROTOCOL, token: myToken });
     this.timer = setInterval(() => this.ask(), WATCH.ASK_MS);
@@ -502,6 +509,7 @@ class Watcher {
     this.status();
   }
   peers(peers) {
+    if (!this.room) return; // not watching any more (maybe playing now)
     Chat.setOthers(peers.length);
     const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token));
     if (host) { this.host = host; this.hostSeen = performance.now(); }
@@ -524,8 +532,9 @@ class Watcher {
       : "Joining as a spectator…";
   }
   receive(d) {
-    if (!d || d.v !== NET.PROTOCOL || d.to !== myToken) return;
+    if (!this.room || !d || d.v !== NET.PROTOCOL || d.to !== myToken) return;
     this.lastHeard = performance.now();
+    if (Number.isInteger(d.n) && d.n > 0 && d.n !== this.n) { this.n = d.n; if (observe && observe.kind === "watch") $("obsLabel").textContent = `Spectating (you're Spectator ${d.n})`; }
     if (d.game === null) { if (!this.loaded) this.status(); return; }
     if (typeof d.game !== "string") return;
     if (d.game !== this.game) {
@@ -545,6 +554,16 @@ class Watcher {
       for (const e of d.ticks) if (Array.isArray(e) && Number.isInteger(e[0]) && e[0] >= this.k && Array.isArray(e[1])) this.cmds.set(e[0], e[1]);
       this.avail = Math.max(this.avail, d.upTo);
     }
+  }
+  // The host is handing me a seat: run my copy up to the tick it changes
+  // hands on, then play from there (takeSeat, in main.js).
+  offered(d) {
+    if (!this.room || !this.loaded || this.seat || !d || d.v !== NET.PROTOCOL || d.game !== this.game || !Array.isArray(d.offers)) return;
+    const o = d.offers.find(o => o && o.to === myToken);
+    if (!o || !Number.isInteger(o.slot) || o.slot < 2 || o.slot > W.n_players() || !Number.isInteger(o.T) || !Number.isInteger(o.seq0) || typeof d.gameId !== "string" || !okToken(d.host)) return;
+    if (this.k > o.T + 1) return; // too late: we're past it (the host gives it back to the computer)
+    this.seat = { slot: o.slot, T: o.T, seq0: o.seq0, gameId: d.gameId, host: d.host };
+    toast(`The host is giving you ${PNAME[o.slot]}. Get ready…`, "good");
   }
   async load(s) {
     this.loading = true;
@@ -579,13 +598,16 @@ class Watcher {
     const dt = Math.min(1, (now - (this.lastPump || now)) / 1000);
     this.lastPump = now;
     if (!this.loaded) return 0;
-    const behind = this.avail - this.k;
+    // Being handed a seat: stop right after the tick it changes hands on.
+    const avail = this.seat ? Math.min(this.avail, this.seat.T + 1) : this.avail;
+    const behind = avail - this.k;
     // Keep a small buffer (a few ticks) so play is smooth; anything beyond
     // that is drained a little faster than real time.
     acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : behind > 5 ? 1.25 : 1);
     let steps = 0;
-    while (acc >= SIM_MS && this.k < this.avail && steps < 60) { this.step(); acc -= SIM_MS; steps++; }
-    if (this.k >= this.avail) acc = Math.min(acc, SIM_MS);
+    while (acc >= SIM_MS && this.k < avail && steps < 60) { this.step(); acc -= SIM_MS; steps++; }
+    if (this.k >= avail) acc = Math.min(acc, SIM_MS);
+    if (this.seat && this.k === this.seat.T + 1) takeSeat(this);
     return steps;
   }
   step() {

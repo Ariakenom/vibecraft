@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 17,   // 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 18,   // 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
@@ -253,6 +253,7 @@ class Server {
     this.guestClock = new Map();          // slot -> [their clock, when it came]: echoed so they can time the trip
     this.started = new Set();             // guests who have started the game
     for (const s of this.active) { this.lastSeq.set(s, 0); this.ack.set(s, -1); this.heard.set(s, performance.now()); }
+    this.joining = new Map();             // slot -> { token, T, seq0, at }: seats handed to spectators, not taken up yet
     this.late = {};                       // player -> commands that arrived after their tick was bundled
     this.lastSend = 0;
     transport.on("cmd", d => this.receive(d));
@@ -316,11 +317,38 @@ class Server {
   }
   // Someone left: from a tick from now, the computer plays their side.
   drop(slot) {
+    this.joining.delete(slot);
     if (!this.active.delete(slot)) return;
     Trace.event("drop", { slot });
     this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, 0, 0]]);
     this.updateWindow();
   }
+  // Hand a seat the computer is playing to a spectator (`token`). On tick T
+  // (a second from now) the seat goes back to a person for everyone; the
+  // spectator's copy of the game, fed by the recording, stops right after
+  // that tick and carries on as a player from there. Their commands
+  // continue the seat's numbering (`seq0`), so nobody mistakes them for old
+  // ones. Returns the offer, which the page passes on until they answer.
+  claim(slot, token) {
+    if (slot === this.local.me || this.active.has(slot) || this.joining.has(slot)) return null;
+    for (const j of this.joining.values()) if (j.token === token) return null;
+    const T = Math.ceil(this.now()) + 20;
+    const offer = { slot, token, T, seq0: this.lastSeq.get(slot) || 0, at: performance.now() };
+    this.joining.set(slot, offer);
+    this.tokens.set(slot, token);
+    this.active.add(slot);
+    this.started.add(slot);
+    this.lastSeq.set(slot, offer.seq0);
+    this.ack.set(slot, T);            // keep every bundle after T until they have it
+    this.heard.set(slot, performance.now());
+    this.rtt.delete(slot); this.clockErr.delete(slot); this.guestClock.delete(slot);
+    delete this.late[slot];
+    this.inbox.push([T, 0, 0, [13, slot, 0, 0]]);
+    Trace.event("claim", { slot, T });
+    return offer;
+  }
+  // Seats handed out but not taken up within `ms`: the computer keeps them.
+  stale(ms) { return [...this.joining.values()].filter(j => performance.now() - j.at > ms).map(j => j.slot); }
   send(end) {
     let min = this.final;
     for (const s of this.active) min = Math.min(min, this.ack.get(s));
@@ -359,13 +387,14 @@ class Server {
     if (!d || d.v !== NET.PROTOCOL || !this.active.has(d.from) || this.tokens.get(d.from) !== d.token) return;
     const s = d.from, now = performance.now();
     this.heard.set(s, now);
+    if (this.joining.delete(s)) Trace.event("joined", { slot: s });
     this.started.add(s);
     Trace.msgIn(Trace.inBytes);
     if (typeof d.gt === "number") this.guestClock.set(s, [d.gt, now]);
     for (const e of Array.isArray(d.cmds) ? d.cmds : []) {
       if (!Array.isArray(e) || typeof e[0] !== "number" || typeof e[1] !== "number") continue;
       const cmd = cleanCmd(e[2]);
-      if (cmd && cmd[0] !== 7) this.submit(s, e[0], Math.floor(e[1]), cmd);
+      if (cmd && cmd[0] !== 7 && cmd[0] !== 13) this.submit(s, e[0], Math.floor(e[1]), cmd);
     }
     if (typeof d.ack === "number") this.ack.set(s, Math.max(this.ack.get(s), d.ack));
     // The round trip: our clock when we sent, minus how long they held it.
@@ -398,7 +427,7 @@ class Server {
     }
   }
   // Guests we haven't heard from in a while (their tab closed, connection gone).
-  silent(ms) { return [...this.active].filter(s => performance.now() - this.heard.get(s) > ms); }
+  silent(ms) { return [...this.active].filter(s => !this.joining.has(s) && performance.now() - this.heard.get(s) > ms); }
   waitingForStart() { return [...this.active].some(s => !this.started.has(s)); }
   snapshot() {
     const guests = {};

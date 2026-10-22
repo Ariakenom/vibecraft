@@ -11,7 +11,7 @@ node serve.cjs ../../dist/vibecraft.html > /dev/null & SERVE=$!
 trap 'kill $RELAY $SERVE' EXIT
 sleep 1
 status=0
-for t in replay spectate-single spectate-online chat; do
+for t in replay spectate-single spectate-online chat take-seat; do
   echo "== $t"
   node $t.mjs || status=1
 done

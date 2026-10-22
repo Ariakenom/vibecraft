@@ -232,6 +232,7 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .seat .swatch { width: 14px; height: 14px; border-radius: 2px; flex: none; }
 .seat .who { font-weight: 700; flex: 1; }
 .seat .tag { color: var(--muted); font-size: 13px; }
+.game-seats { display: grid; gap: 8px; margin-top: 14px; }
 .lobby select, .lobby input { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px 8px; font: 500 15px var(--body); }
 .lobby .row { gap: 10px; }
 .invite { display: grid; gap: 6px; }
@@ -541,6 +542,10 @@ body.observing #hint { display: none; }
       <div class="row">
         <button class="ghost" id="watchLinkBtn" title="Anyone with this link can watch the game live, seeing the whole map">Copy watch link</button>
         <button class="ghost danger" id="surrenderBtn">Surrender</button>
+      </div>
+      <div id="gameSeats" class="game-seats" hidden>
+        <ol class="seats" id="gameSeatList" aria-label="Seats"></ol>
+        <p class="note" id="gameSeatNote"></p>
       </div>
     </div>
   </div>

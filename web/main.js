@@ -1024,7 +1024,7 @@ function issue(cmd) {
 // messages: multiplayer also uses this to replay commands.
 function applyCmd(owner, arr) {
   const [c, a, x, y] = arr, ids = arr.slice(4);
-  if (c === 7 && owner !== 0) return 0; // only the host's system messages may do that
+  if ((c === 7 || c === 13) && owner !== 0) return 0; // only the host's system messages may do that
   const p = W.scratch_ptr() >>> 2, buf = new Uint32Array(mem.buffer);
   ids.forEach((id, n) => { buf[p + n] = id; });
   return W.command(owner, c, ids.length, x, y, a);
@@ -1051,7 +1051,11 @@ const mpHooks = {
     const now = new Map(selection().map(i => [E(i, F.id), E(i, F.kind)]));
     return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
   },
-  system(cmd) { if (cmd[0] === 7) toast(`${PNAME[cmd[1]] || "A player"} left. The computer takes over their people.`); },
+  system(cmd) {
+    const who = Rec.meta && Rec.meta.who;
+    if (cmd[0] === 7) { toast(`${PNAME[cmd[1]] || "A player"} left. The computer takes over their people.`); if (who) who[cmd[1]] = "computer"; }
+    if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`A spectator takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
+  },
   // A tick's commands in their final order: what replays and spectators get.
   confirmed(k, bundle) { Rec.bundle(k, bundle); },
 };
@@ -1060,7 +1064,7 @@ function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
   if (!arr.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = arr[0] | 0;
-  if (c < 1 || c > 10) return null;
+  if (c < 1 || c > 13) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
 const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || isBld(E(i, F.kind)) === buildings)).map(i => E(i, F.id));
@@ -1470,6 +1474,11 @@ function loop(now) {
       if (steps === most) acc = 0;
       if (steps) handleEvents();
       if (!Rec.done) Rec.ticks = simTick;
+      // Handing a seat to a spectator: right after a tick, before any new command.
+      if (pendingSeat && steps) {
+        const p = pendingSeat; pendingSeat = null;
+        if (canGiveSeats() && !W.defeated(p.slot)) { becomeServer(); if (mp.server.claim(p.slot, p.token)) lastOffers = 0; }
+      }
     }
     const f1 = performance.now();
     readWorld();
@@ -1484,6 +1493,7 @@ function loop(now) {
     updateHoverCursor(now);
     if (frame % 4 === 0) drawMinimap();
     if (frame % 6 === 0) { renderTopBar(); renderSelection(false); renderScoreboard(false); }
+    if (frame % 30 === 0 && !$("menuScreen").hidden) renderGameSeats(false);
     syncObserverUi();
     if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
     // Is the game over? For a player, from their own point of view; for
@@ -1553,6 +1563,10 @@ function stepMultiplayer(now) {
   if (!h.hidden) h.textContent = ME === 1 ? "Waiting for the other players…" : "Waiting for the host…";
   if (!mp.server && now - mp.lastHeard > 15000) endMultiplayer("Lost contact with the host.");
   if (mp && mp.server) for (const s of mp.server.silent(20000)) dropPlayer(s);
+  if (mp && mp.server) {
+    for (const s of mp.server.stale(30000)) { dropPlayer(s); }
+    sendOffers(now);
+  }
 }
 
 // ---- where frames' time goes (for the trace) ----
@@ -1888,7 +1902,8 @@ function onHostPeers(peers) {
       else if (mp.server.seenPlaying.has(pr.token)) here.delete(pr.token); // was in the game, now back in the lobby
     }
   }
-  if (mp && mp.server) { for (const [slot, t] of mp.server.tokens) if (!here.has(t)) dropPlayer(slot); return; }
+  // (Seats being handed to spectators are skipped: they become guests in a moment.)
+  if (mp && mp.server) { for (const [slot, t] of mp.server.tokens) if (!here.has(t) && !mp.server.joining.has(slot)) dropPlayer(slot); return; }
   if (mp) return;
   let changed = false;
   seats.forEach((s, i) => { if (isFriend(s) && !here.has(s.slice(2))) { seats[i] = "open"; changed = true; } });
@@ -2065,6 +2080,164 @@ function startMultiplayer(me, d, seq) {
 function dropPlayer(slot) {
   if (!(mp && mp.server) || !mp.server.active.has(slot)) return;
   mp.server.drop(slot);
+}
+
+// ---- Seats changing hands mid-game ----
+// The host can hand a seat the computer plays to a spectator. Through the
+// server (net.js, Server.claim): on a tick a second ahead the seat goes back
+// to a person, for everyone at once; the spectator's copy stops right after
+// that tick and goes on as a player's (takeSeat). A single-player game
+// becomes a multiplayer one first, there and then (becomeServer).
+let pendingSeat = null;           // single player: { slot, token }, handed out after the next tick
+let lastOffers = 0, offersOut = false;
+
+function canGiveSeats() { return !!room && !guestOf && !watcher && running && !Replay.on && (!observe || observe.kind === "out") && Rec.real && !Rec.done; }
+
+function giveSeat(slot, token) {
+  if (!canGiveSeats() || slot === ME || W.defeated(slot)) return;
+  const n = Watchers.number(token);
+  if (!mp) {
+    pendingSeat = { slot, token };
+    if (paused) togglePause();
+    $("menuScreen").hidden = true;
+  } else if (!mp.server || !mp.server.claim(slot, token)) return;
+  else lastOffers = 0; // tell them now
+  toast(`Handing ${PNAME[slot]} to Spectator ${n}…`);
+  renderGameSeats(true);
+}
+
+// Single player, right after a tick: from here the game runs the
+// multiplayer way, with this page as the host.
+function becomeServer() {
+  const k = simTick;
+  const client = new Client(ME, null, myToken, mpHooks, endMultiplayer);
+  client.live = k; client.final = client.got = k - 1;
+  const server = new Server(room, [], client, endMultiplayer);
+  server.final = k - 1;
+  server.t0 = performance.now() - k * NET.TICK_MS;
+  server.gameId = Rec.id; server.seenPlaying = new Set();
+  client.server = server;
+  W.mp_save(); // the confirmed copy: the game as it is now
+  mp = client;
+  lastPump = 0; stalledSince = 0;
+  Rec.meta.mp = true;
+  speed = 1; $("speedBtn").textContent = "1×";
+  $("pauseBtn").hidden = $("speedBtn").hidden = $("restartBtn").hidden = true;
+  Trace.start({ role: "host", me: ME, players: W.n_players(), transport: room.kind === "socket" ? "relay" : "claude.ai room", relay: room.kind === "socket" ? Net.relayUrl : undefined, from: "single player" });
+  $("netBtn").hidden = false;
+  mp.lastHeard = performance.now();
+  lastWasMultiplayer = true;
+  publishLobby();
+}
+
+// The host: keep telling spectators about the seats on their way to them.
+function sendOffers(now) {
+  const j = mp.server.joining;
+  if (!room || (!j.size && !offersOut) || now - lastOffers < 500) return;
+  lastOffers = now; offersOut = j.size > 0;
+  room.emit("seat", { v: NET.PROTOCOL, game: Rec.id, gameId: mp.server.gameId, host: myToken,
+    offers: [...j.values()].map(o => ({ to: o.token, slot: o.slot, T: o.T, seq0: o.seq0 })) });
+}
+
+// A spectator whose copy has just run the tick the seat changed hands on:
+// play from here, as a guest of the host.
+function takeSeat(w) {
+  const { slot, T, seq0, gameId, host } = w.seat;
+  const code = w.code, hostPresence = w.host;
+  leaveWatching();
+  stopObserving();
+  ME = slot;
+  W.set_view(slot, 0);
+  W.clear_selection();
+  // Commands already confirmed, so late early-news of them isn't taken for new.
+  const done = new Map();
+  for (const list of Rec.cmds.values()) for (const e of list) if (e[0] > 0) done.set(e[0], Math.max(done.get(e[0]) || 0, e[1]));
+  guestOf = { code, host: hostPresence, lostAt: performance.now() };
+  played.add(gameId);
+  room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: gameId });
+  room.on("start", onStart);
+  room.onPeers(onGuestPeers);
+  const client = new Client(slot, room, myToken, mpHooks, endMultiplayer);
+  client.hostToken = host;
+  client.live = T + 1; client.final = client.got = T;
+  client.seq = seq0; client.doneSeq = done;
+  W.mp_save(); // the confirmed copy: exactly the host's after tick T
+  mp = client;
+  simTick = client.live; lastPump = 0; stalledSince = 0;
+  Rec.meta.me = slot;
+  Trace.start({ role: "guest", me: slot, players: W.n_players(), transport: room.kind === "socket" ? "relay" : "claude.ai room", from: "spectator", at: T });
+  $("netBtn").hidden = false;
+  mp.lastHeard = performance.now();
+  lastWasMultiplayer = true; lastPlayers = W.n_players();
+  outShown = false; surrendered = false;
+  groups = {}; placing = null; amode = false; updateCursor();
+  knownUnlocked = new Set(BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k)));
+  $("quitBtn").textContent = "Leave game";
+  for (const id of ["endScreen", "menuScreen", "watchWait", "netWait"]) $(id).hidden = true;
+  refreshHud();
+  const i = findOwn(K.Capitol);
+  cam.dist = 24; cam.pitch = 0.95; cam.yaw = 0;
+  if (i != null) centerOn(E(i, F.x), E(i, F.y));
+  renderSelection(true);
+  Sfx.ui("trained");
+  toast(`You are ${PNAME[slot]} now. Your turn to play!`, "good");
+}
+
+// The host's menu, during a game: who plays which seat, and handing a
+// computer's seat to a spectator.
+let seatsKey = "";
+function renderGameSeats(force) {
+  const box = $("gameSeats");
+  const show = canGiveSeats();
+  box.hidden = !show;
+  if (!show) return;
+  const n = W.n_players(), srv = mp && mp.server;
+  const specs = Watchers.ready().filter(([t]) => !(srv && [...srv.tokens].some(([s, tk]) => tk === t && srv.active.has(s))) && !(pendingSeat && pendingSeat.token === t));
+  const rows = [];
+  for (let p = 1; p <= n; p++) {
+    const joining = srv && srv.joining.get(p);
+    const state = p === ME ? "you" : W.defeated(p) ? "out"
+      : joining || (pendingSeat && pendingSeat.slot === p) ? "joining"
+      : srv && srv.active.has(p) || !W.is_ai(p) ? "friend" : "computer";
+    const to = joining ? Watchers.number(joining.token) : pendingSeat && pendingSeat.slot === p ? Watchers.number(pendingSeat.token) : 0;
+    rows.push([p, state, to]);
+  }
+  const key = JSON.stringify([rows, specs]);
+  if (!force && key === seatsKey) return;
+  seatsKey = key;
+  const ol = $("gameSeatList");
+  ol.replaceChildren();
+  for (const [p, state, to] of rows) {
+    const li = document.createElement("li");
+    li.className = "seat" + (state === "out" ? " closed" : "");
+    const sw = document.createElement("span");
+    sw.className = "swatch"; sw.style.background = PCOL[p];
+    const who = document.createElement("span");
+    who.className = "who"; who.style.color = PLIGHT[p];
+    who.textContent = PNAME[p];
+    li.append(sw, who);
+    if (state === "computer" && specs.length) {
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", `Who plays ${PNAME[p]}`);
+      for (const [v, label] of [["", "Computer"], ...specs.map(([t, k]) => [t, `Give to Spectator ${k}`])]) {
+        const o = document.createElement("option");
+        o.value = v; o.textContent = label;
+        sel.append(o);
+      }
+      sel.onchange = () => { if (sel.value) giveSeat(p, sel.value); };
+      li.append(sel);
+    } else {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = { you: "You", out: "Out", joining: `Handing to Spectator ${to}…`, friend: "Friend", computer: "Computer" }[state];
+      li.append(tag);
+    }
+    ol.append(li);
+  }
+  const anyComputer = rows.some(r => r[1] === "computer");
+  $("gameSeatNote").textContent = !anyComputer ? "Every seat has a player."
+    : specs.length ? "A spectator can take over a seat the computer plays, from where the game is now."
+    : "Spectators can take over a seat the computer plays. Send them the watch link.";
 }
 
 function endMultiplayer(reason) {
@@ -2286,6 +2459,7 @@ $("menuBtn").onclick = () => {
   delete $("surrenderBtn").dataset.sure; $("surrenderBtn").textContent = "Surrender";
   $("watchLinkBtn").hidden = !watchLink() || !!observe && observe.kind !== "out";
   $("quitBtn").textContent = watcher ? "Stop watching" : Replay.on ? "Exit replay" : mp ? "Leave game" : "New game";
+  renderGameSeats(true);
   $("menuScreen").hidden = false;
 };
 // Two clicks, so a slip doesn't end your game.

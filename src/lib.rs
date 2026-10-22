@@ -325,7 +325,9 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 /// scratch buffer first. `code`: 1 right-click, 2 attack-move, 3 stop,
 /// 4 train (`arg` = unit kind), 5 cancel training, 6 place a building
 /// (`arg` = kind, x/y = tile), 7 the computer takes over player `arg`
-/// (sent with owner 0 by the multiplayer host when someone leaves), 8
+/// (sent with owner 0 by the multiplayer host when someone leaves), 13 a
+/// person takes player `arg` back from the computer (also from the host,
+/// when it hands a seat to a spectator mid-game), 8
 /// surrender, 9 demolish the buildings in the scratch buffer, 10 pause
 /// (`arg` 0) or resume (1) the producers in it.
 /// Returns 0 or a `CmdError` code.
@@ -337,6 +339,14 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
     with(|w| {
         if code == 7 {
             w.game.set_ai(arg.min(4) as u8, true);
+            return 0;
+        }
+        if code == 13 {
+            let p = arg.min(4) as u8;
+            w.game.set_ai(p, false);
+            if let Some(pl) = w.game.players.get_mut(p as usize) {
+                pl.supply_pct = 100; // no difficulty handicap between people
+            }
             return 0;
         }
         if owner < 1 || owner > w.game.n_players as u32 {
@@ -427,6 +437,11 @@ pub extern "C" fn setup_multiplayer(local: u32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn set_ai(player: u32, on: u32) {
     game(|g| g.set_ai(player.min(4) as u8, on != 0))
+}
+/// 1 if the computer plays player `p`.
+#[unsafe(no_mangle)]
+pub extern "C" fn is_ai(p: u32) -> u32 {
+    game(|g| g.ais.get(p as usize).is_some_and(|a| a.on) as u32)
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn n_players() -> u32 {
@@ -930,6 +945,19 @@ mod tests {
         command(1, 8, 0, 0.0, 0.0, 0);
         tick();
         assert_eq!((state_of(1), state_of(2), winner_player()), (2, 1, 2));
+    }
+
+    /// The host hands a seat back and forth between the computer and a person.
+    #[test]
+    fn seats_change_hands() {
+        init(5, 2, 3);
+        let on = |p: usize| with(|w| w.game.ais[p].on);
+        assert!(on(2) && on(3));
+        command(0, 13, 0, 0.0, 0.0, 2);
+        assert!(!on(2) && on(3));
+        assert_eq!(with(|w| w.game.players[2].supply_pct), 100);
+        command(0, 7, 0, 0.0, 0.0, 2);
+        assert!(on(2));
     }
 
     /// Lifting the fog, or looking through another player's eyes, changes
