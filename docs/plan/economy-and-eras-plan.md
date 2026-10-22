@@ -395,7 +395,39 @@ unsupplied units are the newest; class counters.
   size is left as it is until real games say they need room.
 - Save `VERSION` 9, protocol 15.
 
-## Phases 7–8: one era each
+## Phase 7: the Modern era, and no more Wonder
+
+**Status: done and merged to `main`** (October 2026).
+- **The Wonder is gone** (Patrik, October 22): the kind (76 is left
+  unused), its win, the AI's plan for it, the WonderBegun event (13 is left
+  unused), the rival-Wonder chip, `by_wonder`, `enemy_wonder` and end
+  screens 3 and 4. Conquest is the only win. The airfield is now the big
+  job that needs three builders.
+- Apartment Block (tier 4, 11 goods, 22 people), from a full tenement with
+  9 goods and 1 more steel. Ten bring the Modern era (`LAST_ERA` 4).
+- Oil (an oil field near every base) → Oil Well; Bauxite → Bauxite Mine
+  (aluminum); Power Plant (coal 2 → electricity 4); Radio Factory (steel +
+  electricity → radios 3); Haber–Bosch Plant (coal + electricity 2 →
+  nitrate 3); Tank Works; Airfield (4×4).
+- **Converters resolve in passes** until nothing more can be fed, so a
+  chain works whatever order its buildings were built in.
+- **Air:** `Kind::is_air`, `hits_air`, `can_hit`. Aircraft use `Game::fly`
+  (straight, clamped to the map) instead of paths, skip `separate`, and
+  are drawn `AIR_ALT` (2.6 tiles) up with a spinning propeller. Targeting
+  skips what a unit can't hit; an order to attack it ends at once.
+- Infantry (Line, hits aircraft), Tank (Mounted: armour), Fighter (Air),
+  Bomber (Siege, flies). Blender models for all of it.
+- The build menu packs 11 columns past 36 buttons; Modern buildings have
+  no hotkeys but Shift+Z and Shift+X (out of letters: an era-paged menu
+  would fix that).
+- Tests: who can hit aircraft and straight flight; a converter chain in
+  either order; the AI test now uses seeds 1, 2 and 3 (its seeds are
+  chaotic: removing the Wonder from the plan changed 1234's game). Save
+  `VERSION` 10, protocol 16.
+
+## Phase 8: one era
+
+Content on top of the Phase 4 engine.
 
 Each phase is content on top of the Phase 4 engine: resources, deposits,
 buildings, units, models with fallbacks, sounds, AI plan entries and the
@@ -403,7 +435,6 @@ house goods for that tier.
 
 | Phase | Era | New systems beyond content |
 |---|---|---|
-| 7 | Modern | Air units: a flying movement layer that ignores pathing and blocking, and which only some units can hit. Haber–Bosch plant. Oil. |
 | 8 | Atomic | Missile silo and the Nuke: a targeted area attack with a long launch visible to everyone, a flash, and a crater that stays on the map. Reactor. |
 
 Balance pass after Phase 6, with timings from real games, aiming at about
@@ -412,7 +443,7 @@ Balance pass after Phase 6, with timings from real games, aiming at about
 ## Later
 
 Navy and water maps; visible workers and enlisting; kit upgrades; repair;
-markets and trade; deciding the Wonder's fate.
+markets and trade; an era-paged build menu (hotkeys ran out).
 
 ## Open questions to settle while building
 
@@ -424,7 +455,7 @@ markets and trade; deciding the Wonder's fate.
    (current plan) or fill them as it rises?
 5. AI endgame: since people are units and houses grow tiers, two Normal
    AIs plateau around 60 to 100 people and raid each other without either
-   winning. Options: siege in attack waves, a Medieval Wonder, waves sized
+   winning. Options: siege in attack waves, waves sized
    by the enemy's army rather than our people, or cheaper wood.
    Measured with `ai_stats` (12 maps, 45 minutes): 20 of 24 Normal AIs
    reach the Medieval era, about 70 people each, no game over. Tried and

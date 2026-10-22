@@ -27,7 +27,6 @@ pub struct Ai {
     pub wave_size: usize,
     /// Last place one of our things was hit, if any.
     pub alarm: Option<(f32, f32)>,
-    pub wonder_started: bool,
     /// The unit out exploring, if any, and which leg of its round it's on.
     /// `scout_leg` counts on past the last leg once the round is done.
     pub scout: Option<u32>,
@@ -43,7 +42,7 @@ impl Ai {
             1 => (420.0, 6),
             _ => (300.0, 8),
         };
-        Ai { on, timer: 1.0 + phase, difficulty, next_attack: first, wave_size: wave, alarm: None, wonder_started: false, scout: None, scout_leg: 0, last_grew: false }
+        Ai { on, timer: 1.0 + phase, difficulty, next_attack: first, wave_size: wave, alarm: None, scout: None, scout_leg: 0, last_grew: false }
     }
 }
 
@@ -53,14 +52,12 @@ struct Style {
     army_share: f32,
     /// Units a military building may have queued at once.
     queue: usize,
-    /// Build a Wonder?
-    wonder: bool,
 }
 
 const STYLES: [Style; 3] = [
-    Style { army_share: 0.2, queue: 1, wonder: false },
-    Style { army_share: 0.3, queue: 1, wonder: true },
-    Style { army_share: 0.4, queue: 2, wonder: true },
+    Style { army_share: 0.2, queue: 1 },
+    Style { army_share: 0.3, queue: 1 },
+    Style { army_share: 0.4, queue: 2 },
 ];
 
 /// Free residents the AI keeps at home: one to crew the next food producer
@@ -70,7 +67,7 @@ const KEEP_FREE: u32 = 2;
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 42] = [
+const PLAN: [(Kind, u32); 49] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -86,7 +83,6 @@ const PLAN: [(Kind, u32); 42] = [
     (Kind::FishingHut, 1),
     (Kind::HuntingLodge, 1),
     (Kind::Orchard, 1),
-    (Kind::Wonder, 1),
     (Kind::Range, 2),
     (Kind::Stable, 2),
     // Medieval: iron for the army, then the new house goods.
@@ -116,6 +112,15 @@ const PLAN: [(Kind, u32); 42] = [
     (Kind::Press, 1),
     (Kind::Factory, 1),
     (Kind::CoalMine, 2),
+    // Modern: power, oil and aluminum, radios, then tanks and aircraft.
+    (Kind::PowerPlant, 1),
+    (Kind::OilWell, 1),
+    (Kind::RadioFactory, 1),
+    (Kind::BauxiteMine, 1),
+    (Kind::TankWorks, 1),
+    (Kind::Airfield, 1),
+    (Kind::HaberBosch, 1),
+    (Kind::PowerPlant, 2),
 ];
 
 /// A snapshot of what the AI owns, gathered once per think.
@@ -171,7 +176,7 @@ impl Game {
             let _ = self.apply(me, Command::Demolish { ids: cut_off });
         }
         let style = &STYLES[self.ais[me as usize].difficulty.min(2) as usize];
-        let next = self.ai_economy(style, &mut c);
+        let next = self.ai_economy(&mut c);
         self.ai_army(style, next, &mut c);
         self.ai_scout(&mut c);
         self.ai_fight(&c);
@@ -237,7 +242,7 @@ impl Game {
     /// Beds and the build plan. Builders and crews come by themselves from
     /// the campfire (people.rs); the AI only makes sure enough are free.
     /// Returns the plan's next project, whose slots the army leaves free.
-    fn ai_economy(&mut self, style: &Style, c: &mut Census) -> Option<Kind> {
+    fn ai_economy(&mut self, c: &mut Census) -> Option<Kind> {
         let me = c.me;
         // Too few free to crew a new producer: tear down one that makes
         // what nobody uses, and its workers come free.
@@ -265,7 +270,7 @@ impl Game {
         // The plan: the first project that isn't impossible.
         let mut next = None;
         for (kind, n) in PLAN {
-            if c.have[kind as usize] >= n || !self.unlocked(me, kind) || (kind == Kind::Wonder && !style.wonder) {
+            if c.have[kind as usize] >= n || !self.unlocked(me, kind) {
                 continue;
             }
             let step = if acted { Step::Waiting } else { self.ai_project(kind, c, false) };
@@ -395,9 +400,6 @@ impl Game {
         }
         if !self.ai_place(what, c) {
             return Step::Blocked;
-        }
-        if what == Kind::Wonder {
-            self.ais[me as usize].wonder_started = true;
         }
         Step::Started
     }

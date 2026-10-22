@@ -266,7 +266,7 @@ function observerOver() {
   if (!observe || observe.over) return;
   observe.over = true;
   const w = W.winner_player();
-  const why = w ? `${PNAME[w]} won${W.by_wonder() ? " with a Wonder" : ""}.` : "The game is over.";
+  const why = w ? `${PNAME[w]} won.` : "The game is over.";
   if (observe.kind === "replay") { toast(why, "good"); return; }
   Rec.finish(why);
   $("endTitle").textContent = "Game over";

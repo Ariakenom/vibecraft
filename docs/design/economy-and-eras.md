@@ -274,8 +274,15 @@ Every unit also costs one resident. About 21 units in all.
 - **Atomic:** Uranium mine, Reactor, Car plant, TV plant, Missile silo.
 
 Settlement, Granary, Sawmill, Mason, Smithy, Market and Temple go away (drop
-sites and bonuses no longer exist). The Wonder stays for now, holding a large
-number of slots, and its fate is decided later.
+sites and bonuses no longer exist). The Wonder was removed (October 2026):
+the only way to win is conquest.
+
+**Air** (Modern): aircraft fly straight to where they're sent, over water
+and buildings, without bumping into anything, high above the ground. Only
+fighters, machine gunners, infantry, towers and the Capitol can hit them.
+Fighters are their own class (2x against aircraft, 0.5x on the ground);
+bombers are flying siege (3x against buildings) with a range of 1: they
+fly over their target and drop their bombs.
 
 ## Map
 

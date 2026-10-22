@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 15,   // 15: the Industrial era (14: ponds, wider fruit and game) (13: the Gunpowder era) (12: the Medieval era) (11: people are units, campfire) (10: the Phase 3 AI and crews) (9: people, demolish; 8: slots; 7: surrender)
+  PROTOCOL: 16,   // 16: the Modern era, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,

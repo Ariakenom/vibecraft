@@ -30,7 +30,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 7: the Medieval era (new kinds, deposits for iron, clay and sheep).
 /// 8: the Gunpowder era.
 /// 9: the Industrial era.
-const VERSION: u32 = 9;
+/// 10: the Modern era; the Wonder is gone.
+const VERSION: u32 = 10;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -298,7 +299,6 @@ impl Game {
             w.f32(a.next_attack);
             w.u32(a.wave_size as u32);
             w.opt_pt(a.alarm);
-            w.bool(a.wonder_started);
             w.bool(a.scout.is_some());
             w.u32(a.scout.unwrap_or(0));
             w.u8(a.scout_leg);
@@ -308,7 +308,6 @@ impl Game {
         w.f32(self.time);
         w.u8(self.state);
         w.u8(self.winner);
-        w.bool(self.by_wonder);
         let (fog_timer, alert_cooldown, idle_cursor) = self.save_timers();
         w.f32(fog_timer);
         w.f32(alert_cooldown);
@@ -445,7 +444,6 @@ impl Game {
             a.next_attack = r.f32()?;
             a.wave_size = r.u32()? as usize;
             a.alarm = r.opt_pt()?;
-            a.wonder_started = r.bool()?;
             let has_scout = r.bool()?;
             let scout = r.u32()?;
             a.scout = has_scout.then_some(scout);
@@ -460,7 +458,6 @@ impl Game {
         let time = r.f32()?;
         let state = r.u8()?;
         let winner = r.u8()?;
-        let by_wonder = r.bool()?;
         let timers = (r.f32()?, r.f32()?, r.u32()?);
         if r.at != bytes.len() {
             return None;
@@ -494,7 +491,6 @@ impl Game {
         g.time = time;
         g.state = state;
         g.winner = winner;
-        g.by_wonder = by_wonder;
         g.load_timers(timers);
         Some(g)
     }

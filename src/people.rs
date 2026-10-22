@@ -190,14 +190,25 @@ impl Game {
         for e in self.ents.iter_mut() {
             e.fed = false;
         }
-        for (_, i) in conv {
-            let e = &mut self.ents[i];
-            let st = e.kind.stats();
-            let o = e.owner as usize;
-            let pct = self.players[o].supply_pct as u32;
-            let has = |r: Res| (supply[o][r.idx()] * pct / 100) as i64 - used[o][r.idx()] as i64;
-            e.fed = st.consumes.iter().all(|&(r, k)| has(r) >= k as i64);
-            if e.fed {
+        // In passes until nothing more can be fed, so a chain works
+        // whatever order its buildings were built in (a radio factory
+        // older than the power plant it needs is fed in the second pass).
+        loop {
+            let mut progress = false;
+            for &(_, i) in &conv {
+                let e = &mut self.ents[i];
+                if e.fed {
+                    continue;
+                }
+                let st = e.kind.stats();
+                let o = e.owner as usize;
+                let pct = self.players[o].supply_pct as u32;
+                let has = |r: Res| (supply[o][r.idx()] * pct / 100) as i64 - used[o][r.idx()] as i64;
+                if !st.consumes.iter().all(|&(r, k)| has(r) >= k as i64) {
+                    continue;
+                }
+                e.fed = true;
+                progress = true;
                 for &(r, k) in st.consumes {
                     used[o][r.idx()] += k as u32;
                 }
@@ -208,6 +219,9 @@ impl Game {
                         supply[o][r.idx()] += (k as u32 * 100).div_ceil(pct.max(1));
                     }
                 }
+            }
+            if !progress {
+                break;
             }
         }
         for (o, p) in self.players.iter_mut().enumerate() {

@@ -67,7 +67,7 @@ pub enum Ev {
     Hammer = 9,   // a construction stroke
     ArrowHit = 11, // an arrow struck (data = 1 if it hit a building)
     Short = 12,   // the player holds more than they make, and units suffer (data = resource)
-    WonderBegun = 13, // someone laid a Wonder's foundation (data = owner)
+    // 13 was WonderBegun (the Wonder is gone).
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
     Upgraded = 15,   // one of the player's houses grew a tier (data = new kind)
     Downgraded = 16, // one of the player's houses fell back a tier (data = new kind)
@@ -414,9 +414,8 @@ pub struct Game {
     fog_timer: f32,
     /// 0 while playing, 1 once someone has won.
     pub state: u8,
-    /// Who won (1 or 2), and whether by Wonder rather than conquest.
+    /// Who won (1 to 4).
     pub winner: u8,
-    pub by_wonder: bool,
     /// Whose eyes this computer sees through: fog of war, alerts, the HUD.
     /// Always 1 in single player. In multiplayer it's 1 for the host and 2
     /// for the guest. None of the game's rules depend on it.
@@ -489,7 +488,6 @@ impl Game {
             fog_timer: 0.0,
             state: 0,
             winner: 0,
-            by_wonder: false,
             local,
             reveal: false,
             events: Vec::new(),
@@ -664,6 +662,11 @@ impl Game {
         a != b && a != GAIA && b != GAIA
     }
 
+    #[cfg(test)]
+    pub(crate) fn rebuild_grid_for_tests(&mut self) {
+        self.rebuild_grid();
+    }
+
     fn rebuild_grid(&mut self) {
         for c in self.grid.iter_mut() {
             c.clear();
@@ -701,9 +704,10 @@ impl Game {
         let reach = radius + if me.is_building() { me.kind.stats().size as f32 / 2.0 } else { me.kind.radius() };
         let mut best = None;
         let mut bd = f32::MAX;
+        let me_kind = me.kind;
         self.units_near(x, y, reach + 1.0, |id| {
             let e = &self.ents[id as usize];
-            if e.alive && Self::hostile(owner, e.owner) {
+            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) {
                 let d = e.edge_dist(x, y);
                 if d <= reach && d < bd {
                     bd = d;
@@ -785,7 +789,7 @@ impl Game {
     }
 
     /// Lose your Capitol and you're out: everything you own falls with it.
-    /// The last player standing wins, or whoever finishes a Wonder first.
+    /// The last player standing wins.
     /// A player gives up. Their things fall at the end of this tick, and
     /// `check_victory` puts them out of the game exactly as if their Capitol
     /// had been destroyed.
@@ -809,17 +813,14 @@ impl Game {
             }
         }
         let standing: Vec<u8> = self.player_ids().filter(|&p| !self.players[p as usize].defeated).collect();
-        let wonder = self.player_ids().find(|&p| self.has_built(p, Kind::Wonder));
-        let (w, by_wonder) = match (wonder, standing.as_slice()) {
-            (Some(p), _) => (p, true),
-            (None, [only]) => (*only, false),
-            (None, []) => (self.local, false), // everyone fell at once: call it a draw, kindly
-            _ => (0, false),
+        let w = match standing.as_slice() {
+            [only] => *only,
+            [] => self.local, // everyone fell at once: call it a draw, kindly
+            _ => 0,
         };
         if w != 0 {
             self.state = 1;
             self.winner = w;
-            self.by_wonder = by_wonder;
         }
     }
 
@@ -1006,10 +1007,6 @@ impl Game {
         }
         self.pay(owner, kind.stats().cost)?;
         let id = self.spawn_building(kind, owner, tx, ty, 0.0);
-        if kind == Kind::Wonder {
-            let (x, y) = (self.ents[id as usize].x, self.ents[id as usize].y);
-            self.push_event(Ev::WonderBegun, x, y, owner as f32);
-        }
         for &b in builders {
             self.order_build(b, id);
         }
@@ -1397,7 +1394,7 @@ impl Game {
     }
 
     fn do_attack(&mut self, i: usize, target: u32, auto: bool) {
-        if !self.alive(target) {
+        if !self.alive(target) || !self.ents[i].kind.can_hit(self.ents[target as usize].kind) {
             return self.end_attack(i);
         }
         let (x, y, kind) = (self.ents[i].x, self.ents[i].y, self.ents[i].kind);
@@ -1554,6 +1551,9 @@ impl Game {
     /// Move unit `i` toward `goal`, (re)computing a path when needed.
     pub(crate) fn travel(&mut self, i: usize, goal: Goal, repath_every: f32) -> Travel {
         let (x, y) = (self.ents[i].x, self.ents[i].y);
+        if self.ents[i].kind.is_air() {
+            return self.fly(i, goal);
+        }
         if goal.reached(x, y) {
             let e = &mut self.ents[i];
             e.path.clear();
@@ -1624,6 +1624,26 @@ impl Game {
         e.goal = Some(goal);
     }
 
+    /// Aircraft fly straight to their goal, over anything, and stay over
+    /// the map.
+    fn fly(&mut self, i: usize, goal: Goal) -> Travel {
+        let e = &mut self.ents[i];
+        if goal.reached(e.x, e.y) {
+            e.path.clear();
+            e.goal = None;
+            return Travel::Arrived;
+        }
+        let (tx, ty) = goal.nearest_point(e.x, e.y);
+        let (dx, dy) = (tx - e.x, ty - e.y);
+        let d = (dx * dx + dy * dy).sqrt().max(1e-4);
+        let s = (e.kind.stats().speed * DT).min(d);
+        e.x = (e.x + dx / d * s).clamp(0.5, self.map.w as f32 - 0.5);
+        e.y = (e.y + dy / d * s).clamp(0.5, self.map.h as f32 - 0.5);
+        e.facing = dy.atan2(dx);
+        e.anim = Anim::Walk;
+        Travel::Moving
+    }
+
     /// Returns how far the unit actually moved. Slides along walls.
     fn step_toward(&mut self, i: usize, tx: f32, ty: f32, max: f32) -> f32 {
         let e = &self.ents[i];
@@ -1657,7 +1677,7 @@ impl Game {
         let mut pushes: Vec<(usize, f32, f32)> = Vec::new();
         for i in 0..self.ents.len() {
             let a = &self.ents[i];
-            if !a.alive || a.is_building() {
+            if !a.alive || a.is_building() || a.kind.is_air() {
                 continue;
             }
             let (ax, ay, ar) = (a.x, a.y, a.kind.radius());
@@ -1668,6 +1688,9 @@ impl Game {
                     return;
                 }
                 let b = &self.ents[j];
+                if b.kind.is_air() {
+                    return;
+                }
                 let (dx, dy) = (b.x - ax, b.y - ay);
                 let d2 = dx * dx + dy * dy;
                 let min = ar + b.kind.radius();

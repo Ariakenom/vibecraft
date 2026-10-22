@@ -110,6 +110,9 @@ pub enum Dep {
     Nitrate = 9,
     /// Industrial: a coal seam.
     Coal = 10,
+    /// Modern: oil, and bauxite for aluminum.
+    Oil = 11,
+    Bauxite = 12,
 }
 
 impl Dep {
@@ -126,6 +129,8 @@ impl Dep {
             8 => Dep::Hills,
             9 => Dep::Nitrate,
             10 => Dep::Coal,
+            11 => Dep::Oil,
+            12 => Dep::Bauxite,
             _ => return None,
         })
     }
@@ -138,6 +143,8 @@ impl Dep {
 pub enum Class {
     /// Workers.
     Civilian,
+    /// Fighters (bombers fly too, but they're siege).
+    Air,
     Line,
     Ranged,
     Mounted,
@@ -167,6 +174,10 @@ pub enum Kind {
     Rifleman = 12,
     MachineGunner = 13,
     FieldGun = 14,
+    Infantry = 15,
+    Tank = 16,
+    Fighter = 17,
+    Bomber = 18,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -179,7 +190,7 @@ pub enum Kind {
     HuntingLodge = 73,
     Orchard = 74,
     Pasture = 75,
-    Wonder = 76,
+    // 76 was the Wonder (removed October 2026).
     Hut = 77,
     Cottage = 78,
     SheepFarm = 79,
@@ -203,6 +214,14 @@ pub enum Kind {
     CoalYard = 97,
     Press = 98,
     Factory = 99,
+    Apartment = 100,
+    OilWell = 101,
+    BauxiteMine = 102,
+    PowerPlant = 103,
+    HaberBosch = 104,
+    RadioFactory = 105,
+    TankWorks = 106,
+    Airfield = 107,
 }
 
 /// Kinds numbered from here on are buildings.
@@ -284,6 +303,13 @@ static CANNON: Stats = unit(180.0, 55.0, 10.0, 6.0, 1.1, 9.0, &[(Iron, 2), (Gunp
 static RIFLEMAN: Stats = unit(150.0, 20.0, 6.0, 2.2, 2.1, 8.0, &[(Steel, 1), (Gunpowder, 1)], 22.0);
 static MACHINE_GUNNER: Stats = unit(120.0, 9.0, 6.5, 0.5, 1.8, 8.0, &[(Steel, 1), (Gunpowder, 2)], 26.0);
 static FIELD_GUN: Stats = unit(220.0, 80.0, 12.0, 5.0, 1.6, 10.0, &[(Steel, 2), (Explosives, 1), (Horses, 1)], 34.0);
+// Modern: infantry with automatic weapons (they can shoot at aircraft),
+// tanks, and aircraft. Fighters fight in the air and strafe; bombers fly
+// over buildings and drop their bombs (range 1: right over the target).
+static INFANTRY: Stats = unit(170.0, 14.0, 6.0, 1.0, 2.2, 8.0, &[(Steel, 1), (Explosives, 1)], 22.0);
+static TANK: Stats = unit(520.0, 45.0, 7.0, 2.5, 2.6, 8.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
+static FIGHTER: Stats = unit(160.0, 18.0, 4.0, 0.8, 6.0, 11.0, &[(Aluminum, 1), (Oil, 1)], 28.0);
+static BOMBER: Stats = unit(260.0, 140.0, 1.0, 4.0, 4.0, 9.0, &[(Aluminum, 2), (Oil, 1), (Explosives, 2)], 40.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, so a
 // game can start: two kinds of food fill the two starting huts.
@@ -295,6 +321,7 @@ static HUT: Stats = building(300.0, 4.0, &[(Wood, 1)], 12.0, 2);
 static COTTAGE: Stats = building(450.0, 4.0, &[(Wood, 2), (Stone, 1)], 12.0, 2);
 static TOWNHOUSE: Stats = building(650.0, 4.0, &[(Wood, 2), (Stone, 2), (Brick, 2)], 12.0, 2);
 static TENEMENT: Stats = building(900.0, 4.0, &[(Wood, 2), (Stone, 2), (Brick, 3), (Steel, 1)], 12.0, 2);
+static APARTMENT: Stats = building(1200.0, 4.0, &[(Wood, 1), (Stone, 2), (Brick, 3), (Steel, 2)], 12.0, 2);
 static BARRACKS: Stats = building(800.0, 6.0, &[(Wood, 3)], 30.0, 3);
 static RANGE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 1)], 30.0, 3);
 static STABLE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 2)], 35.0, 3);
@@ -339,9 +366,16 @@ static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)
 static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 3)], 2, 22.0);
 static FACTORY: Stats = building(1100.0, 6.0, &[(Brick, 4), (Steel, 2)], 40.0, 3);
 
-// The Wonder holds a great many slots while it stands, needs three builders
-// and takes four minutes to rise. No fish: not every map has water nearby.
-static WONDER: Stats = Stats { builders: 3, ..building(4000.0, 8.0, &[(Wood, 8), (Stone, 10), (Grain, 2), (Meat, 2), (Fruit, 2), (Horses, 2)], 240.0, 4) };
+// Modern. Power plants burn coal; the Haber–Bosch plant makes nitrate
+// from coal and electricity, for players with no saltpeter.
+static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 3)], 2, Some(Dep::Oil), 25.0, 2);
+static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 3)], 2, Some(Dep::Bauxite), 25.0, 2);
+static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 4)], consumes: &[(Coal, 2)], workers: 2, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
+static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 3)], 2, 30.0);
+static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 3)], 2, 25.0);
+static TANK_WORKS: Stats = building(1300.0, 6.0, &[(Brick, 3), (Steel, 3)], 40.0, 3);
+// A big job: three builders.
+static AIRFIELD: Stats = Stats { builders: 3, ..building(1200.0, 8.0, &[(Brick, 2), (Steel, 2), (Aluminum, 1)], 45.0, 4) };
 
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
@@ -363,18 +397,18 @@ pub fn house_max_goods(tier: u8) -> u8 {
 /// A player enters the next era when this many of their houses have
 /// reached its tier (and keeps the era if they later drop back).
 pub const HOUSES_FOR_ERA: u32 = 10;
-/// The last era there is content for (0 Ancient … 3 Industrial).
-pub const LAST_ERA: u8 = 3;
+/// The last era there is content for (0 Ancient … 4 Modern).
+pub const LAST_ERA: u8 = 4;
 
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 50] = {
+    pub const ALL: [Kind; 61] = {
         use Kind::*;
         [
             Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture,
-            Barracks, Range, Stable, Tower, Wonder, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
-            ExplosivesWorks, Cannery, CoalYard, Press, Factory,
+            Barracks, Range, Stable, Tower, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
+            ExplosivesWorks, Cannery, CoalYard, Press, Factory, Infantry, Tank, Fighter, Bomber, Apartment, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
         ]
     };
 
@@ -403,7 +437,6 @@ impl Kind {
             HuntingLodge => &HUNTING_LODGE,
             Orchard => &ORCHARD,
             Pasture => &PASTURE,
-            Wonder => &WONDER,
             Hut => &HUT,
             Swordsman => &SWORDSMAN,
             Crossbowman => &CROSSBOWMAN,
@@ -437,6 +470,18 @@ impl Kind {
             CoalYard => &COAL_YARD,
             Press => &PRESS,
             Factory => &FACTORY,
+            Infantry => &INFANTRY,
+            Tank => &TANK,
+            Fighter => &FIGHTER,
+            Bomber => &BOMBER,
+            Apartment => &APARTMENT,
+            OilWell => &OIL_WELL,
+            BauxiteMine => &BAUXITE_MINE,
+            PowerPlant => &POWER_PLANT,
+            HaberBosch => &HABER_BOSCH,
+            RadioFactory => &RADIO_FACTORY,
+            TankWorks => &TANK_WORKS,
+            Airfield => &AIRFIELD,
         }
     }
 
@@ -450,7 +495,6 @@ impl Kind {
             Range => &[Barracks],
             Stable => &[Barracks, Pasture],
             Tower => &[Quarry],
-            Wonder => &[Range, Stable, Tower],
             Weaver => &[SheepFarm],
             SiegeWorkshop => &[Barracks],
             PowderMill => &[SaltpeterWorks],
@@ -458,6 +502,9 @@ impl Kind {
             SteelMill => &[IronMine, CoalMine],
             Press => &[Printer],
             Factory => &[SteelMill],
+            HaberBosch => &[PowerPlant],
+            RadioFactory => &[PowerPlant],
+            TankWorks => &[Factory],
             _ => &[],
         }
     }
@@ -465,11 +512,11 @@ impl Kind {
     /// Every buildable building, in tech-tree order (used by the UI and AI).
     /// Cottages aren't built: huts become cottages.
     #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 32] = {
+    pub const BUILDABLE: [Kind; 38] = {
         use Kind::*;
         [
-            Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
-            Carpenter, Printer, Circus, CoalMine, SteelMill, ExplosivesWorks, Cannery, CoalYard, Press, Factory,
+            Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
+            Carpenter, Printer, Circus, CoalMine, SteelMill, ExplosivesWorks, Cannery, CoalYard, Press, Factory, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
         ]
     };
 
@@ -478,10 +525,12 @@ impl Kind {
         use Kind::*;
         match self {
             Worker => Class::Civilian,
-            Spearman | Swordsman | Musketeer | Rifleman => Class::Line,
+            Spearman | Swordsman | Musketeer | Rifleman | Infantry => Class::Line,
             Archer | Crossbowman | MachineGunner => Class::Ranged,
-            Horseman | Knight | Dragoon => Class::Mounted,
-            Trebuchet | Cannon | FieldGun => Class::Siege,
+            // Armour fills the mounted role: fast, hits hard, beats the guns.
+            Horseman | Knight | Dragoon | Tank => Class::Mounted,
+            Trebuchet | Cannon | FieldGun | Bomber => Class::Siege,
+            Fighter => Class::Air,
             _ => Class::Building,
         }
     }
@@ -492,6 +541,7 @@ impl Kind {
             Kind::Hut => Some(Kind::Cottage),
             Kind::Cottage => Some(Kind::Townhouse),
             Kind::Townhouse => Some(Kind::Tenement),
+            Kind::Tenement => Some(Kind::Apartment),
             _ => None,
         }
     }
@@ -502,6 +552,7 @@ impl Kind {
             Kind::Cottage => Some(Kind::Hut),
             Kind::Townhouse => Some(Kind::Cottage),
             Kind::Tenement => Some(Kind::Townhouse),
+            Kind::Apartment => Some(Kind::Tenement),
             _ => None,
         }
     }
@@ -511,7 +562,7 @@ impl Kind {
     }
 
     pub fn is_military(self) -> bool {
-        matches!(self.class(), Class::Line | Class::Ranged | Class::Mounted | Class::Siege)
+        matches!(self.class(), Class::Line | Class::Ranged | Class::Mounted | Class::Siege | Class::Air)
     }
 
     /// The era a kind belongs to: 0 Ancient … 5 Atomic. Players can build
@@ -522,6 +573,7 @@ impl Kind {
             Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
             Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
             Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
+            Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield => 4,
             _ => 0,
         }
     }
@@ -533,8 +585,26 @@ impl Kind {
             Kind::Cottage => Some(1),
             Kind::Townhouse => Some(2),
             Kind::Tenement => Some(3),
+            Kind::Apartment => Some(4),
             _ => None,
         }
+    }
+
+    /// Does it fly? Aircraft cross water and buildings in straight lines,
+    /// never bump into anything, and only some units can hit them.
+    pub fn is_air(self) -> bool {
+        matches!(self, Kind::Fighter | Kind::Bomber)
+    }
+
+    /// Can it shoot at aircraft? Fighters, machine guns, modern infantry,
+    /// towers and the Capitol.
+    pub fn hits_air(self) -> bool {
+        matches!(self, Kind::Fighter | Kind::MachineGunner | Kind::Infantry | Kind::Tower | Kind::Capitol)
+    }
+
+    /// Can `self` attack `target` at all?
+    pub fn can_hit(self, target: Kind) -> bool {
+        !target.is_air() || self.hits_air()
     }
 
     /// A unit that holds a bed: everything that walks.
@@ -545,7 +615,9 @@ impl Kind {
     /// Which units this building can train. A slice of a static array.
     pub fn trains(self) -> &'static [Kind] {
         match self {
-            Kind::Barracks => &[Kind::Spearman, Kind::Swordsman, Kind::Musketeer, Kind::Rifleman],
+            Kind::Barracks => &[Kind::Spearman, Kind::Swordsman, Kind::Musketeer, Kind::Rifleman, Kind::Infantry],
+            Kind::TankWorks => &[Kind::Tank],
+            Kind::Airfield => &[Kind::Fighter, Kind::Bomber],
             Kind::Range => &[Kind::Archer, Kind::Crossbowman, Kind::MachineGunner],
             Kind::Factory => &[Kind::FieldGun],
             Kind::Stable => &[Kind::Horseman, Kind::Knight, Kind::Dragoon],
@@ -564,6 +636,8 @@ impl Kind {
             Kind::Horseman | Kind::Knight | Kind::Dragoon => 0.42,
             Kind::Trebuchet => 0.45,
             Kind::Cannon | Kind::FieldGun => 0.4,
+            Kind::Tank => 0.48,
+            Kind::Fighter | Kind::Bomber => 0.45,
             Kind::Worker => 0.28,
             _ => 0.32,
         }
@@ -585,6 +659,9 @@ pub fn damage_mult(attacker: Kind, target: Kind) -> f32 {
         (Siege, Building) => 3.0,
         (Siege, _) => 0.3,
         (Building, Mounted) => 1.3,
+        // Fighters own the air; on the ground they only strafe.
+        (Air, _) if target.is_air() => 2.0,
+        (Air, _) => 0.5,
         _ => 1.0,
     }
 }

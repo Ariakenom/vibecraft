@@ -27,7 +27,7 @@ pub fn census(g: &Game, p: u8) -> String {
             out += &format!("[unfinished {:?} at {},{} builders {} built {:.2}] ", e.kind, e.tx, e.ty, e.builders_in, e.built);
         }
     }
-    for r in Res::ALL.iter().take(13) {
+    for r in Res::ALL.iter().filter(|r| pl.used[r.idx()] > 0 || pl.supply[r.idx()] > 0) {
         out += &format!("{r:?} {}/{} ", pl.used[r.idx()], pl.supply[r.idx()]);
     }
     out
@@ -267,19 +267,20 @@ fn a_free_worker_walks_over_and_becomes_the_soldier() {
 #[test]
 fn a_foundation_waits_for_all_its_builders() {
     let mut g = Game::new(5, 1, 2);
-    // Plenty of everything, so the Wonder's slots don't empty the houses.
+    // Plenty of everything, so the airfield's slots don't empty the houses.
     g.players[1].supply_pct = 400;
     empty_campfire(&mut g);
-    let (x, y) = spot(&g, Kind::Wonder);
-    let w = g.spawn_building(Kind::Wonder, 1, x, y, 0.0);
+    assert_eq!(Kind::Airfield.stats().builders, 3);
+    let (x, y) = spot(&g, Kind::Airfield);
+    let w = g.spawn_building(Kind::Airfield, 1, x, y, 0.0);
     // Workers away from the campfire aren't free: nobody sends them.
     let far = |k: u32| (x as f32 + 1.0 + k as f32, y as f32 + 5.5);
     let b: Vec<u32> = (0..3).map(|k| g.spawn_unit(Kind::Worker, 1, far(k).0, far(k).1)).collect();
     g.order_build(b[0], w);
     g.order_build(b[1], w);
     run(&mut g, 10.0);
-    let wonder = &g.ents[w as usize];
-    assert_eq!((wonder.builders_in, wonder.built), (2, 0.0), "two of three builders: nothing happens");
+    let field = &g.ents[w as usize];
+    assert_eq!((field.builders_in, field.built), (2, 0.0), "two of three builders: nothing happens");
     assert!(!g.alive(b[0]) && !g.alive(b[1]), "builders are used up at the foundation");
     g.order_build(b[2], w);
     run(&mut g, 10.0);
@@ -406,7 +407,7 @@ fn nothing_is_built_on_the_campfire() {
 /// for a long time. See the plan's open questions.)
 #[test]
 fn normal_ais_reach_the_medieval_era() {
-    for seed in [1, 99, 1234] {
+    for seed in [1, 2, 3] {
         let mut g = Game::new(seed, 1, 2);
         g.set_ai(1, true);
         run(&mut g, 45.0 * 60.0);
@@ -441,7 +442,7 @@ fn watch_the_ai() {
             }
         }
         if g.state != 0 {
-            println!("winner {} wonder {}", g.winner, g.by_wonder);
+            println!("winner {}", g.winner);
             break;
         }
     }
@@ -690,4 +691,54 @@ fn tick_cost() {
         let units = g.ents.iter().filter(|e| e.alive && !e.is_building()).count();
         println!("{players} players, {}x{} map, {units} units: {:.3} ms a tick (walking with a path: {} on average)", g.map.w, g.map.h, t.elapsed().as_secs_f64() * 1000.0 / n as f64, paths / n);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7: the Modern era
+
+#[test]
+fn aircraft_fly_over_anything_and_only_some_units_hit_them() {
+    let mut g = Game::new(5, 1, 2);
+    // A fighter of player 2's over player 1's spearman: the spearman can't
+    // touch it; a machine gunner can.
+    let (x, y) = (30.0, 30.0);
+    let fighter = g.spawn_unit(Kind::Fighter, 2, x, y);
+    let spear = g.spawn_unit(Kind::Spearman, 1, x + 1.0, y);
+    let mg = g.spawn_unit(Kind::MachineGunner, 1, x + 1.5, y + 0.5);
+    g.rebuild_grid_for_tests();
+    assert_eq!(g.nearest_enemy(spear as usize, 6.0), None);
+    assert_eq!(g.nearest_enemy(mg as usize, 6.0), Some(fighter));
+    // Ordered to attack it anyway, the spearman gives up.
+    g.order_attack(spear, fighter);
+    g.tick();
+    assert_eq!(g.ents[spear as usize].order, Order::Idle);
+    // It flies straight across the map, water and buildings alike, at its speed.
+    let cap = g.find_first(1, Kind::Capitol).unwrap();
+    let (cx, cy) = (g.ents[cap].x, g.ents[cap].y);
+    let plane = g.spawn_unit(Kind::Fighter, 1, cx - 3.0, cy);
+    g.order_move(plane, cx + 3.0, cy);
+    run(&mut g, 1.2);
+    let p = &g.ents[plane as usize];
+    assert!((p.y - cy).abs() < 0.01 && p.x > cx + 2.9, "straight over the Capitol: {} {}", p.x, p.y);
+}
+
+#[test]
+fn a_chain_of_converters_works_in_any_order() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].era = 4;
+    g.players[1].supply_pct = 300;
+    for _ in 0..6 {
+        let (x, y) = spot(&g, Kind::Hut);
+        g.spawn_building(Kind::Hut, 1, x, y, 1.0);
+    }
+    empty_campfire(&mut g);
+    for k in [Kind::Brickworks, Kind::IronMine, Kind::CoalMine, Kind::SteelMill, Kind::SteelMill] {
+        build(&mut g, k);
+    }
+    // The radio factory is older than the power plant it needs.
+    let radios = build(&mut g, Kind::RadioFactory);
+    build(&mut g, Kind::PowerPlant);
+    g.resolve();
+    assert!(g.ents[radios as usize].fed, "{}", census(&g, 1));
+    assert!(g.players[1].supply[Res::Radios.idx()] >= 3);
 }

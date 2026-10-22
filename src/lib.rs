@@ -226,17 +226,15 @@ pub extern "C" fn fog_ptr() -> *const u8 {
 }
 
 #[unsafe(no_mangle)]
-/// 0 playing; from the local player's point of view: 1 won by conquest,
-/// 2 lost by conquest, 3 won with a Wonder, 4 lost to a Wonder,
-/// 5 you're out but the others play on (watch, or leave).
+/// 0 playing; from the local player's point of view: 1 won, 2 lost,
+/// 5 you're out but the others play on (watch, or leave). (3 and 4 were
+/// wins and losses by Wonder.)
 pub extern "C" fn state() -> u32 {
-    game(|g| match (g.winner, g.by_wonder) {
-        (0, _) if g.players[g.local as usize].defeated => 5,
-        (0, _) => 0,
-        (w, false) if w == g.local => 1,
-        (_, false) => 2,
-        (w, true) if w == g.local => 3,
-        _ => 4,
+    game(|g| match g.winner {
+        0 if g.players[g.local as usize].defeated => 5,
+        0 => 0,
+        w if w == g.local => 1,
+        _ => 2,
     })
 }
 #[unsafe(no_mangle)]
@@ -715,17 +713,6 @@ pub extern "C" fn has_built(kind: u32) -> u32 {
     let Some(k) = Kind::from_u32(kind) else { return 0 };
     game(|g| g.has_built(g.local, k) as u32)
 }
-/// Construction progress (0..1) of the furthest-along rival Wonder, or -1 if none.
-#[unsafe(no_mangle)]
-pub extern "C" fn enemy_wonder() -> f32 {
-    game(|g| {
-        g.ents
-            .iter()
-            .filter(|e| e.alive && e.owner != g.local && e.kind == Kind::Wonder)
-            .map(|e| e.built)
-            .fold(-1.0, f32::max)
-    })
-}
 
 /// Debug/testing: fully heal the player's buildings (for long headless test games).
 #[unsafe(no_mangle)]
@@ -948,19 +935,16 @@ pub extern "C" fn set_view(player: u32, reveal: u32) {
     })
 }
 /// Like `state()`, but from player `p`'s point of view, whoever we're
-/// looking through: 0 playing, 1 won by conquest, 2 lost by conquest, 3 won
-/// with a Wonder, 4 lost to a Wonder, 5 out while the others play on.
+/// looking through: 0 playing, 1 won, 2 lost, 5 out while the others play on.
 #[unsafe(no_mangle)]
 pub extern "C" fn state_of(p: u32) -> u32 {
     game(|g| {
         let out = g.players.get(p as usize).is_some_and(|pl| pl.defeated);
-        match (g.winner as u32, g.by_wonder) {
-            (0, _) if out => 5,
-            (0, _) => 0,
-            (w, false) if w == p => 1,
-            (_, false) => 2,
-            (w, true) if w == p => 3,
-            _ => 4,
+        match g.winner as u32 {
+            0 if out => 5,
+            0 => 0,
+            w if w == p => 1,
+            _ => 2,
         }
     })
 }
@@ -968,11 +952,6 @@ pub extern "C" fn state_of(p: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn view_reveal() -> u32 {
     game(|g| g.reveal as u32)
-}
-/// 1 if the winner won by finishing a Wonder.
-#[unsafe(no_mangle)]
-pub extern "C" fn by_wonder() -> u32 {
-    game(|g| g.by_wonder as u32)
 }
 /// For the spectators' scoreboard: living units of player `p`
 /// (`which` 0), or just their soldiers (1).

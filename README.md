@@ -448,14 +448,14 @@ versions don't play together.
 
 ## The game
 
-- **Winning:** destroy every rival Capitol, or finish a Wonder. The AI goes
-  for a Wonder too, on Normal and Hard. Lose your Capitol and everything you
-  own falls with it.
+- **Winning:** destroy every rival Capitol. Lose your Capitol and
+  everything you own falls with it. (There was a Wonder victory; it was
+  removed in October 2026.)
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
-  `docs/plan/economy-and-eras-plan.md`); so far there are four: Ancient,
-  Medieval, Gunpowder and Industrial.
+  `docs/plan/economy-and-eras-plan.md`); so far there are five: Ancient,
+  Medieval, Gunpowder, Industrial and Modern.
 - **Resources are slots.** Nothing is gathered or stockpiled:
   producers make slots (a lumber camp by a forest makes 4 wood), and
   everything you have holds some while it exists, giving them back when
@@ -483,10 +483,17 @@ versions don't play together.
   the Industrial era: coal mines, steel mills, explosives works,
   canneries, coal yards, presses and factories; riflemen, machine gunners
   and field guns.
+  Ten apartment blocks (full tenements with nine goods) bring the Modern
+  era: oil wells, bauxite mines, power plants, radio factories, the
+  Haber–Bosch plant (nitrate without saltpeter), tank works and airfields;
+  infantry, tanks, fighters and bombers. **Aircraft** fly straight over
+  water and buildings and only fighters, machine gunners, infantry, towers
+  and the Capitol can hit them; bombers flatten buildings but need fighters
+  to protect them.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
-  whether it builds a Wonder, and its supply (80%, 100%, 130%).
+  and its supply (80%, 100%, 130%).
 - **Maps:** two players get an 80×80 map with 180° symmetry; three or four
   get 96×96 with four-way symmetry, so every start is the same, just turned.
 
@@ -495,12 +502,13 @@ versions don't play together.
   middle-drag rotates and tilts.
 - **Build:** Q hut, E farm, R lumber camp, T quarry, Y fishing hut,
   U hunting lodge, I orchard, O pasture, F barracks, G range, C stable,
-  V tower, B wonder. Medieval: J sheep farm, Shift+J weaver, L iron mine,
+  V tower. Medieval: J sheep farm, Shift+J weaver, L iron mine,
   N brickworks, Shift+E bakery, Shift+N brewery, Shift+F siege workshop.
   Gunpowder: Shift+T saltpeter works, Shift+U powder mill, Shift+R
   carpenter, Shift+Y printer, Shift+C circus. Industrial: Shift+L coal
   mine, Shift+O steel mill, Shift+V explosives works, Shift+I cannery,
-  Shift+Q coal yard, Shift+G press, Shift+B factory.
+  Shift+Q coal yard, Shift+G press, Shift+B factory. Modern: Shift+Z oil
+  well, Shift+X power plant; the rest are clicked.
   Del (twice) demolishes the selected buildings.
 - **Train:** Q, E, R, T for the units a building trains, oldest first.
 - **Other keys:**

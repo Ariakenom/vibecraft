@@ -51,7 +51,6 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #top:has(.res.many) #volume { display: none; }
 .res .era { background: transparent; border: 1px solid var(--line); border-radius: 3px; padding: 1px 9px; font: 400 14px var(--display); letter-spacing: .04em; color: var(--bronze); cursor: pointer; }
 .res .era:hover { border-color: var(--bronze); }
-.res .foe-wonder { color: var(--bad); font-weight: 700; }
 #restip { position: absolute; top: calc(100% + 4px); width: 260px; background: #1b1610f4; border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; z-index: 6; font-size: 13px; line-height: 1.45; box-shadow: 0 8px 24px #0008; }
 #restip h4 { margin: 0 0 4px; font: 400 15px var(--display); }
 #restip .row { display: flex; justify-content: space-between; gap: 10px; font-variant-numeric: tabular-nums; }
@@ -120,6 +119,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #cmd.denser { grid-template-columns: repeat(9, 34px); grid-auto-rows: 34px; gap: 3px; width: 330px; }
 #cmd.denser .cbtn canvas { width: 32px; height: 32px; }
 #cmd.denser .cbtn kbd { font-size: 10px; }
+#cmd.densest { grid-template-columns: repeat(11, 29px); grid-auto-rows: 29px; gap: 2px; width: 340px; }
+#cmd.densest .cbtn canvas { width: 27px; height: 27px; }
+#cmd.densest .cbtn kbd { font-size: 9px; }
 .cbtn { position: relative; padding: 0; background: linear-gradient(#3a3023, #282017); border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
 .cbtn:hover { border-color: var(--bronze); }
 .cbtn.poor { opacity: .5; }
@@ -366,7 +368,7 @@ body.observing #hint { display: none; }
 (function () {
   var tips = ["<b>Spears</b> beat horsemen, <b>horsemen</b> beat archers, <b>archers</b> beat spears.",
     "Every unit eats food. Keep plenty of citizens on <b>berries</b> and <b>farms</b>.",
-    "Press <b>.</b> to find an idle citizen.", "Finish a <b>Wonder</b> to win without conquering anyone.",
+    "Press <b>.</b> to find an idle citizen.", "Houses grow into bigger ones with every good they can use: ten bring the next <b>era</b>.",
     "Your <b>Capitol</b> and towers shoot back.", "Press <b>K</b> to see the tech tree.",
     "Send a friend the <b>watch link</b> from the menu, and they can spectate.", "Press <b>Enter</b> in an online game to chat."];
   document.getElementById("bootTip").innerHTML = tips[Math.floor(Math.random() * tips.length)];
@@ -435,7 +437,7 @@ body.observing #hint { display: none; }
 
   <div class="overlay" id="startScreen">
     <div class="card">
-      <h1>VibeCraft<small>Grow a town, raise an army, and outlast your rivals, or out-build them with a Wonder.</small></h1>
+      <h1>VibeCraft<small>Grow a town through the eras, raise an army, and outlast your rivals.</small></h1>
       <section class="lobby" aria-labelledby="seatsTitle">
         <div class="lobby-head">
           <h2 id="seatsTitle">Players</h2>
@@ -489,7 +491,7 @@ body.observing #hint { display: none; }
         <div><dt><kbd class="k">M</kbd></dt><dd>Sound on or off</dd></div>
         <div><dt><kbd class="k">Ctrl</kbd> + <kbd class="k">S</kbd></dt><dd>Save the game (Menu loads)</dd></div>
       </dl>
-      <p class="note">Spears beat horsemen, horsemen beat archers, archers beat spears. Your Capitol and towers shoot back. Every unit eats food each minute: run out and your people starve. Grow from village to empire by building (<kbd class="k">K</kbd> shows the tech tree), and win by conquest or by finishing a Wonder.</p>
+      <p class="note">Spears beat horsemen, horsemen beat archers, archers beat spears. Your Capitol and towers shoot back. Every unit eats food each minute: run out and your people starve. Grow from village to empire by building (<kbd class="k">K</kbd> shows the tech tree), and win by conquest.</p>
     </div>
   </div>
 
@@ -511,7 +513,7 @@ body.observing #hint { display: none; }
         <h1 style="font-size: 30px">Tech tree</h1>
         <button class="ghost" id="techClose">Close</button>
       </div>
-      <p class="note">Each building unlocks the next; nothing is researched. Costs are slots, held while the thing exists, and every unit is also a person. Later eras come as your houses grow: each era's house holds more kinds of goods. Finish the Wonder to win without conquering anyone.</p>
+      <p class="note">Each building unlocks the next; nothing is researched. Costs are slots, held while the thing exists, and every unit is also a person. Later eras come as your houses grow: each era's house holds more kinds of goods.</p>
       <div id="techBody"></div>
     </div>
   </div>

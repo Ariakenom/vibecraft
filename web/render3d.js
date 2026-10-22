@@ -322,6 +322,8 @@ function roof(len, width, height) {
 // Units are drawn bigger than their real footprint so they read well from
 // a distance. This is only visual: the simulation doesn't change.
 const UNIT_SCALE = 1.5;
+// Aircraft fly this high above the ground (tiles).
+const AIR_ALT = 2.6;
 const SKIN = "#e0b48c", WOOD = "#7a5532", DARKWOOD = "#4e3420", STONE = "#a39a88", STONE2 = "#8a8272", IRON = "#9da3ab";
 
 // Units face +x. Feet at y = 0. The tool (weapon or axe) is a separate mesh
@@ -455,16 +457,6 @@ function buildingModel(kind, owner) {
       for (const [x, z, sz] of [[0.65, 0.5, 0.26], [0.75, 0.15, 0.22], [0.55, -0.4, 0.3], [0.85, -0.65, 0.2], [0.6, 0.5, 0.18]]) m.add(box(sz, sz * 0.8, sz), STONE2, x, sz * 0.4 + (x === 0.6 ? 0.26 : 0), z);
       banner(-0.75, 0.65, 1.0);
       break;
-    case K.Wonder: {
-      // A stepped pyramid crowned with gold.
-      const steps = [[3.7, "#c8bba0"], [3.0, "#d3c7ad"], [2.3, "#c8bba0"], [1.6, "#d3c7ad"], [0.95, "#c8bba0"]];
-      steps.forEach(([w, c], i) => m.add(box(w, 0.55, w), c, 0, 0.275 + i * 0.55, 0));
-      m.add(box(0.5, 0.6, 1.2), "#b6a888", 0, 0.3, 1.75); // stairway
-      m.add(box(0.7, 0.6, 0.7), "#e8c45a", 0, 3.05, 0);
-      m.add(cone(0.45, 0.6, 4).rotateY(Math.PI / 4), "#f2d877", 0, 3.65, 0);
-      for (const [x, z] of [[1.6, 1.6], [-1.6, 1.6], [1.6, -1.6], [-1.6, -1.6]]) { m.add(cyl(0.05, 0.05, 1.4, 5), DARKWOOD, x, 0.7, z); m.flag(0.4, 0.25, team, x + 0.2, 1.25, z); }
-      break;
-    }
     case K.Hut: {
       // A round hut: daub walls, a thatched cone with a smoke hole, a door.
       m.add(cyl(0.62, 0.66, 0.55, 12), "#b8a07a", 0, 0.28, 0);
@@ -584,7 +576,7 @@ function resourceModels() {
   }
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
     deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]),
-    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false) };
+    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false) };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -604,7 +596,7 @@ const MODELS_B64 = "/*MODELS_BASE64*/";
 let GLB_NAMES = null;
 function glbName(kind) {
   GLB_NAMES ??= { [K.Worker]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
-    [K.Range]: "Range", [K.Stable]: "Stable", [K.Tower]: "Tower", [K.Farm]: "Farm", [K.Wonder]: "Wonder",
+    [K.Range]: "Range", [K.Stable]: "Stable", [K.Tower]: "Tower", [K.Farm]: "Farm",
     [K.LumberCamp]: "Sawmill", [K.Quarry]: "Mason", [K.HuntingLodge]: "Settlement",
     [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
     [K.Cottage]: "Cottage", [K.SheepFarm]: "SheepFarm", [K.IronMine]: "IronMine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
@@ -612,7 +604,9 @@ function glbName(kind) {
     [K.Musketeer]: "Musketeer", [K.Dragoon]: "Dragoon", [K.Cannon]: "Cannon", [K.Townhouse]: "Townhouse", [K.SaltpeterWorks]: "SaltpeterWorks",
     [K.PowderMill]: "PowderMill", [K.Carpenter]: "Carpenter", [K.Printer]: "Printer", [K.Circus]: "Circus",
     [K.Rifleman]: "Rifleman", [K.MachineGunner]: "MachineGunner", [K.FieldGun]: "FieldGun", [K.Tenement]: "Tenement", [K.CoalMine]: "CoalMine",
-    [K.SteelMill]: "SteelMill", [K.ExplosivesWorks]: "ExplosivesWorks", [K.Cannery]: "Cannery", [K.CoalYard]: "CoalYard", [K.Press]: "Press", [K.Factory]: "Factory" };
+    [K.SteelMill]: "SteelMill", [K.ExplosivesWorks]: "ExplosivesWorks", [K.Cannery]: "Cannery", [K.CoalYard]: "CoalYard", [K.Press]: "Press", [K.Factory]: "Factory",
+    [K.Infantry]: "Infantry", [K.Tank]: "Tank", [K.Fighter]: "Fighter", [K.Bomber]: "Bomber", [K.Apartment]: "Apartment", [K.OilWell]: "OilWell",
+    [K.BauxiteMine]: "BauxiteMine", [K.PowerPlant]: "PowerPlant", [K.HaberBosch]: "HaberBosch", [K.RadioFactory]: "RadioFactory", [K.TankWorks]: "TankWorks", [K.Airfield]: "Airfield" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
@@ -807,7 +801,7 @@ function initRenderer() {
 
   loadGlbModels();
   R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"]]) {
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"]]) {
     if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
   }
   buildSmoke();
@@ -937,7 +931,7 @@ function buildWorld() {
   };
   R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
     horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false),
-    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false) };
+    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false), oil: mk(R3.resGeo.oil, n, false), bauxite: mk(R3.resGeo.bauxite, n, false) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -1342,7 +1336,7 @@ function makeObj(i) {
   if (isBld(kind)) {
     const s = stat(kind, 6);
     o.baseY = flattenUnder(o.x, o.y, s);
-    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.FishingHut]: 1.0, [K.Tower]: 3, [K.Wonder]: 4 }[kind] || 1.6;
+    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.FishingHut]: 1.0, [K.Tower]: 3 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
     if (kind === K.Capitol) root.add(campfire());
@@ -1486,7 +1480,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
       if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
       toolWorld = -1.45 - jab * 0.1;
-    } else if (anim === 3 && (kind === K.Crossbowman || kind === K.Musketeer || kind === K.Rifleman || kind === K.MachineGunner)) {
+    } else if (anim === 3 && (kind === K.Crossbowman || kind === K.Musketeer || kind === K.Rifleman || kind === K.MachineGunner || kind === K.Infantry)) {
       // Crossbow levelled at the target in both hands; a kick when it looses.
       const kick = Math.max(0, Math.sin(T * 2.4) - 0.9) * 4;
       B.armR.rotation.z = 1.3 + kick * 0.15; B.armL.rotation.z = 1.25; B.armL.rotation.x = -0.35;
@@ -1500,7 +1494,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.body.rotation.y = 0.35;
       toolWorld = 0;
     } else {
-      toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Musketeer || kind === K.Rifleman ? 1.25 : kind === K.MachineGunner ? 0 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
+      toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Musketeer || kind === K.Rifleman ? 1.25 : kind === K.MachineGunner || kind === K.Infantry ? 0 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
       if (kind === K.Worker) o.toolMesh.rotation.z = -0.4;
     }
     if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
@@ -1573,7 +1567,7 @@ function render3d(alpha, now, dt) {
       else { x += nudge.dx * f; y += nudge.dy * f; }
     }
     o.x = x; o.y = y;
-    o.root.position.set(x, groundAt(x, y), y);
+    o.root.position.set(x, groundAt(x, y) + (isAir(kind) ? AIR_ALT + Math.sin(t * 1.3 + id) * 0.08 : 0), y);
     // Turn smoothly toward the facing Rust reports (three.js turns the other way).
     let target = -E(i, F.face), d = target - o.face;
     d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -1589,9 +1583,11 @@ function render3d(alpha, now, dt) {
     if (o.tool) {
       let swing = 0;
       if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
-      else if (anim === 3) swing = kind === K.Archer ? 0.35 : kind === K.Cannon || kind === K.FieldGun ? -Math.max(0, Math.sin(ph * 2.5) - 0.85) * 0.6 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
+      else if (anim === 3) swing = kind === K.Archer ? 0.35 : kind === K.Cannon || kind === K.FieldGun || kind === K.Tank ? -Math.max(0, Math.sin(ph * 2.5) - 0.85) * 0.6 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
       o.tool.rotation.z = -swing - o.toolTilt;
+      if (isAir(kind)) { o.tool.rotation.z = 0; o.tool.rotation.x = t * 40; } // the propeller
     }
+    if (isAir(kind)) { o.body.position.y = 0; o.body.rotation.z = 0; o.body.rotation.x = Math.sin(t * 0.9 + id) * 0.08; }
     const mat = (flags & 8) ? hitMat : entMat;
     o.body.material = mat;
     if (o.toolMesh) o.toolMesh.material = mat;
@@ -1669,13 +1665,13 @@ function updateResources() {
   for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
-  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [] };
+  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [], oil: [], bauxite: [] };
   for (const m of Object.values(R3.res)) m.count = 0;
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
     // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game,
-    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal.
+    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal, 11 oil, 12 bauxite.
     let mesh, scale;
     if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
@@ -1686,6 +1682,8 @@ function updateResources() {
     else if (kind === 8) { mesh = "sheep"; scale = UNIT_SCALE; } // like the sheep farm's sheep
     else if (kind === 9) { mesh = "nitrate"; scale = 0.8 + 0.3 * h2; }
     else if (kind === 10) { mesh = "coal"; scale = 0.8 + 0.3 * h2; }
+    else if (kind === 11) { mesh = "oil"; scale = 0.85 + 0.2 * h2; }
+    else if (kind === 12) { mesh = "bauxite"; scale = 0.8 + 0.3 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;
@@ -1726,9 +1724,9 @@ function updateArrows(alpha) {
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
-    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun;
-    if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner) continue; // bullets are too small to see
-    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : 0.62;
+    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank;
+    if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter) continue; // bullets are too small to see
+    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
     const toH = atBuilding ? 0.9 : 0.55;
@@ -1736,7 +1734,7 @@ function updateArrows(alpha) {
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon ? total * 0.08 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
+    const arc = shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
@@ -1968,7 +1966,8 @@ function updateSmoke() {
   const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: CAMPFIRE,
     [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55],
     [K.Townhouse]: [0.35, 1.75, -0.2], [K.PowderMill]: [-0.45, 1.1, -0.45],
-    [K.Tenement]: [0.4, 2.35, -0.2], [K.SteelMill]: [-0.9, 2.65, -0.8], [K.Factory]: [1.0, 2.3, -0.9], [K.Cannery]: [0.55, 1.55, -0.35] };
+    [K.Tenement]: [0.4, 2.35, -0.2], [K.SteelMill]: [-0.9, 2.65, -0.8], [K.Factory]: [1.0, 2.3, -0.9], [K.Cannery]: [0.55, 1.55, -0.35],
+    [K.PowerPlant]: [0.9, 2.75, -0.7] };
   if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
   const list = [];
   for (const o of R3.objs.values()) {

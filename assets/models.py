@@ -1707,6 +1707,263 @@ def coal_seam():
     return m
 
 
+# --- Modern -------------------------------------------------------------------------------
+OLIVE, OLIVE2, CONCRETE, GLASS = "#5f6a44", "#4d5737", "#b9b5aa", "#9fc3d6"
+
+def infantry():
+    m = Model("Infantry")
+    tabs_person(m, OLIVE, belt="#3a2c20", legs_col=OLIVE2, sleeves=OLIVE)
+    m.part("body")
+    m.box(0.07, 0.16, 0.15, OLIVE2, -0.12, 0.36, 0, vary=0)              # pack
+    m.cyl(0.11, 0.12, 0.04, TEAM, 0, 0.45, 0, seg=12, vary=0)            # team scarf
+    for z in (-0.06, 0.0, 0.06):
+        m.box(0.03, 0.05, 0.04, "#3a3a2a", 0.12, 0.28, z, vary=0)        # pouches
+    m.part("head", smooth=False)
+    dome(m, 0.12, OLIVE2, 0.585, sy=0.8)                                 # helmet
+    m.cyl(0.125, 0.125, 0.012, OLIVE2, 0, 0.585, 0, seg=14, vary=0)
+    t = Model("Infantry.tool")  # an assault rifle, level
+    t.box(0.34, 0.035, 0.03, "#2a2c30", 0.08, 0.0, 0, vary=0)
+    t.box(0.05, 0.08, 0.025, "#2a2c30", 0.05, -0.05, 0, rz=0.2, vary=0)   # magazine
+    t.box(0.09, 0.05, 0.03, "#4e3420", -0.12, -0.01, 0, vary=0)           # stock
+    t.cyl(0.008, 0.008, 0.1, "#2a2c30", 0.29, 0.01, 0, seg=5, rz=math.pi / 2, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.02, 0.32, 0.13), tool_bone="armR", pivots=HUMAN_PIVOTS)
+
+def tank():
+    """A tank: hull, tracks, a turret with its gun (the tool: it kicks when it
+    fires). No skeleton."""
+    m = Model("Tank")
+    for z in (-0.2, 0.2):
+        m.box(0.72, 0.16, 0.12, "#2e2f2a", 0, 0.1, z, bevel=0.03, vary=0)   # tracks
+        for k in range(5):
+            m.cyl(0.055, 0.055, 0.125, "#4a4c42", -0.26 + k * 0.13, 0.08, z, seg=10, rx=math.pi / 2, vary=0)
+    m.box(0.66, 0.16, 0.34, OLIVE, 0, 0.24, 0, bevel=0.02, vary=0.02)      # hull
+    m.box(0.2, 0.08, 0.34, OLIVE2, 0.3, 0.2, 0, rz=0.4, vary=0)            # glacis
+    m.box(0.12, 0.08, 0.1, "#3a3a2a", -0.28, 0.35, 0.1, vary=0)            # engine deck box
+    m.box(0.18, 0.03, 0.16, TEAM, -0.2, 0.325, -0.06, vary=0)              # team marking
+    m.cyl(0.17, 0.15, 0.12, OLIVE, -0.02, 0.38, 0, seg=12, vary=0.02)      # turret ring and turret
+    m.cyl(0.07, 0.07, 0.04, OLIVE2, -0.06, 0.46, 0.06, seg=10, vary=0)     # hatch
+    m.box(0.02, 0.18, 0.02, "#2a2c30", -0.12, 0.52, -0.08, vary=0)         # aerial
+    t = Model("Tank.tool")  # the gun, pointing forward from the turret
+    t.cyl(0.03, 0.025, 0.42, "#3e4146", 0.24, 0.0, 0, seg=8, rz=-math.pi / 2, vary=0)
+    t.box(0.12, 0.08, 0.1, OLIVE2, 0.06, 0.0, 0, vary=0)                   # mantlet
+    t.cyl(0.035, 0.035, 0.05, "#2a2c30", 0.44, 0.0, 0, seg=8, rz=-math.pi / 2, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.05, 0.38, 0.0), tool_bone="body", pivots={})
+
+def fighter():
+    """A single-engine fighter, nose +x. The propeller is its tool (the game
+    spins it). No skeleton: the game flies it high above the ground."""
+    m = Model("Fighter")
+    m.smooth = True
+    sphere(m, 0.07, "#8a9098", 0.0, 0.0, 0, sx=4.2, sy=1.0, sz=1.0)        # fuselage
+    m.smooth = False
+    m.box(0.18, 0.02, 0.78, "#8a9098", 0.04, -0.02, 0, taper=None, vary=0) # wings
+    for z in (-0.3, 0.3):
+        m.cyl(0.05, 0.05, 0.022, TEAM, 0.04, -0.005, z, seg=12, vary=0)    # roundels
+        m.cyl(0.025, 0.025, 0.024, CLOTH, 0.04, -0.004, z, seg=10, vary=0)
+    m.box(0.08, 0.015, 0.28, "#8a9098", -0.26, 0.01, 0, vary=0)            # tailplane
+    m.box(0.09, 0.1, 0.015, TEAM, -0.27, 0.07, 0, vary=0)                  # fin, team coloured
+    sphere(m, 0.045, GLASS, 0.06, 0.05, 0, sx=1.8, sy=0.9, sz=0.9, vary=0) # canopy
+    m.cyl(0.045, 0.04, 0.05, "#3e4146", 0.29, 0.0, 0, seg=10, rz=-math.pi / 2, vary=0)  # cowling
+    t = Model("Fighter.tool")  # the propeller: three blades and a spinner
+    t.cyl(0.025, 0.0, 0.05, "#c8453a", 0.02, 0.0, 0, seg=8, rz=-math.pi / 2, vary=0)
+    for k in range(3):
+        a = k * 2 * math.pi / 3
+        t.box(0.01, 0.13, 0.025, "#2a2c30", 0.0, math.cos(a) * 0.065, math.sin(a) * 0.065, rx=-a, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.32, 0.0, 0.0), tool_bone="body", pivots={})
+
+def bomber():
+    """A twin-engine bomber, nose +x. Its tool is the glazed nose (round, so
+    the game's spin doesn't show); the propellers are drawn as discs."""
+    m = Model("Bomber")
+    m.smooth = True
+    sphere(m, 0.095, "#6e7660", 0.0, 0.0, 0, sx=4.4, sy=1.0, sz=1.0)
+    m.smooth = False
+    m.box(0.24, 0.025, 1.2, "#6e7660", 0.03, 0.0, 0, vary=0)               # wings
+    for z in (-0.28, 0.28):
+        m.cyl(0.05, 0.045, 0.26, "#5b624e", 0.1, 0.0, z, seg=10, rz=-math.pi / 2, vary=0)  # engines
+        m.cyl(0.09, 0.09, 0.006, "#c9ced5", 0.24, 0.0, z, seg=14, rz=-math.pi / 2, vary=0)  # prop discs
+        m.cyl(0.055, 0.055, 0.027, TEAM, 0.0, 0.006, z * 1.6, seg=12, vary=0)  # roundels
+        m.cyl(0.028, 0.028, 0.029, CLOTH, 0.0, 0.007, z * 1.6, seg=10, vary=0)
+    m.box(0.1, 0.02, 0.4, "#6e7660", -0.36, 0.02, 0, vary=0)               # tailplane
+    for z in (-0.17, 0.17):
+        m.box(0.1, 0.13, 0.015, TEAM, -0.37, 0.08, z, vary=0)              # twin fins
+    sphere(m, 0.05, GLASS, 0.18, 0.07, 0, sx=1.6, sy=0.8, sz=0.9, vary=0)  # cockpit
+    m.box(0.12, 0.02, 0.1, "#2e2f2a", 0.0, -0.09, 0, vary=0)               # bomb bay doors
+    t = Model("Bomber.tool")
+    t.ball(0.07, GLASS, 0.0, 0.0, 0, sub=2, sx=1.1, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.4, 0.0, 0.0), tool_bone="body", pivots={})
+
+def apartment():
+    """A Modern home: a concrete block of flats, balconies, a flat roof."""
+    m = Model("Apartment")
+    foundation(m, 2, col=CONCRETE)
+    m.box(1.4, 2.5, 1.2, "#d6d0c2", 0, 1.31, 0, vary=0.02)
+    for k in range(5):
+        y = 0.35 + k * 0.48
+        for x in (-0.45, 0.0, 0.45):
+            m.box(0.22, 0.24, 0.03, "#5d7a8c", x, y, 0.605, vary=0.05)       # windows
+            m.box(0.3, 0.03, 0.12, CONCRETE, x, y - 0.14, 0.66, vary=0)      # balconies
+            m.box(0.3, 0.08, 0.01, TEAM if (k + int(x * 10)) % 3 == 0 else "#8a8478", x, y - 0.1, 0.72, vary=0)
+        for z in (-0.3, 0.3):
+            m.box(0.03, 0.24, 0.22, "#5d7a8c", 0.705, y, z, vary=0.05)
+    m.box(1.44, 0.08, 1.24, "#9a958a", 0, 2.6, 0, vary=0)                  # roof edge
+    m.box(0.3, 0.25, 0.3, "#9a958a", 0.3, 2.75, -0.2, vary=0)              # lift housing
+    m.cyl(0.015, 0.015, 0.4, "#3e4146", -0.4, 2.85, 0.2, seg=5, vary=0)    # aerial for the radios
+    m.box(0.22, 0.015, 0.015, "#3e4146", -0.4, 2.98, 0.2, vary=0)
+    door(m, 0, 0.605, w=0.3, h=0.36, y=0.06)
+    m.pole_flag(0.8, 0.75, 0.9)
+    return m
+
+def oil_well():
+    """A pumpjack nodding over the oil, and a storage tank."""
+    m = Model("OilWell")
+    foundation(m, 2, col="#5a5248")
+    m.box(0.5, 0.06, 0.25, "#2e2f2a", -0.2, 0.09, 0.2, vary=0)             # base skid
+    for z in (0.12, 0.28):
+        m.box(0.05, 0.6, 0.05, "#3e4146", -0.2, 0.4, z, rx=(0.15 if z > 0.2 else -0.15), vary=0)  # A-frame
+    m.box(0.85, 0.07, 0.07, "#c8453a", -0.15, 0.72, 0.2, rz=0.15, vary=0)  # walking beam
+    m.box(0.12, 0.2, 0.1, "#c8453a", 0.28, 0.66, 0.2, rz=0.15, vary=0)     # horse head
+    m.box(0.02, 0.6, 0.02, "#2a2c30", 0.33, 0.34, 0.2, vary=0)             # polished rod
+    m.box(0.16, 0.16, 0.1, "#2e2f2a", -0.55, 0.42, 0.2, vary=0)            # counterweight
+    m.cyl(0.32, 0.32, 0.55, "#c9ced5", 0.4, 0.33, -0.45, seg=14, vary=0.02)  # storage tank
+    m.cyl(0.33, 0.33, 0.04, "#8a939e", 0.4, 0.62, -0.45, seg=14, vary=0)
+    m.box(0.3, 0.08, 0.02, TEAM, 0.4, 0.38, -0.12, vary=0)
+    m.cyl(0.04, 0.04, 0.6, "#3e4146", -0.25, 0.08, -0.45, seg=6, rz=math.pi / 2, vary=0)  # pipe
+    m.pole_flag(-0.8, -0.7, 1.1)
+    return m
+
+def bauxite_mine():
+    """An open pit of red-brown earth with a conveyor and a small smelter."""
+    m = Model("BauxiteMine")
+    foundation(m, 2, col="#7a5a46")
+    m.cyl(0.6, 0.45, 0.06, "#8a4a32", -0.2, 0.08, 0.15, seg=12, vary=0.04)  # the pit
+    m.cyl(0.42, 0.3, 0.05, "#6e3a28", -0.2, 0.1, 0.15, seg=12, vary=0.04)
+    for x, z, r in ((0.55, 0.55, 0.18), (0.68, 0.3, 0.12)):
+        m.cyl(r, 0.0, r, "#b86a4a", x, 0.06 + r * 0.5, z, seg=7, vary=0.08)
+    m.box(0.9, 0.04, 0.1, "#3e4146", 0.2, 0.35, -0.3, rz=0.35, vary=0)      # conveyor
+    for x in (-0.15, 0.55):
+        m.box(0.03, 0.4, 0.03, "#3e4146", x, 0.2, -0.3, vary=0)
+    m.box(0.45, 0.5, 0.4, "#9a958a", 0.55, 0.31, -0.55, vary=0.03)          # smelter
+    m.cyl(0.07, 0.06, 0.6, "#7a7468", 0.68, 0.85, -0.62, seg=8, vary=0)
+    m.box(0.25, 0.04, 0.15, "#d7dde4", 0.2, 0.08, 0.7, vary=0)              # aluminum ingots
+    m.box(0.25, 0.04, 0.15, "#c9ced5", 0.2, 0.12, 0.7, vary=0)
+    m.pole_flag(-0.8, -0.7, 1.1)
+    return m
+
+def power_plant():
+    """A coal power station: a turbine hall, a cooling tower, a tall chimney."""
+    m = Model("PowerPlant")
+    foundation(m, 3, col=CONCRETE)
+    m.box(1.4, 0.9, 1.0, "#a8a294", -0.45, 0.51, 0.35, vary=0.02)          # turbine hall
+    m.prism(1.42, 1.0, 0.25, "#6e6a62", -0.45, 0.96, 0.35)
+    for x in (-0.95, -0.6, -0.25, 0.1):
+        m.box(0.2, 0.5, 0.03, "#5d7a8c", x, 0.55, 0.865, vary=0.05)
+    m.cyl(0.55, 0.42, 1.3, "#c9c4b8", 0.6, 0.71, 0.4, seg=16, vary=0.02)    # cooling tower
+    m.cyl(0.43, 0.48, 0.25, "#c9c4b8", 0.6, 1.48, 0.4, seg=16, vary=0.02)
+    m.cyl(0.13, 0.11, 2.6, "#8a8478", 0.9, 1.36, -0.7, seg=10, vary=0.02)   # chimney: smoke comes out at the top
+    for y in (2.2, 2.45):
+        m.cyl(0.135, 0.135, 0.06, "#c8453a", 0.9, y, -0.7, seg=10, vary=0)
+    for x, z, r in ((-0.9, -0.85, 0.25), (-0.5, -0.9, 0.2)):
+        m.cyl(r, 0.0, r * 0.8, "#26262a", x, 0.06 + r * 0.4, z, seg=7, vary=0.08)  # coal
+    for k in range(3):  # pylons and wires
+        m.box(0.03, 0.6, 0.03, "#3e4146", -1.25, 0.36, -0.6 + k * 0.6, vary=0)
+        m.box(0.2, 0.02, 0.02, "#3e4146", -1.25, 0.64, -0.6 + k * 0.6, vary=0)
+    m.pole_flag(-1.3, 1.25, 1.1)
+    return m
+
+def haber_bosch():
+    """A chemical works: tall reactor columns, pipes and spherical tanks."""
+    m = Model("HaberBosch")
+    foundation(m, 2, col=CONCRETE)
+    for x, h in ((-0.45, 1.3), (-0.15, 1.0)):
+        m.cyl(0.13, 0.13, h, "#c9ced5", x, h / 2 + 0.06, -0.35, seg=12, vary=0.02)
+        m.cyl(0.14, 0.14, 0.04, "#8a939e", x, h + 0.06, -0.35, seg=12, vary=0)
+    m.ball(0.22, "#d7dde4", 0.4, 0.32, 0.35, sub=2, vary=0)                 # spherical tank
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            m.box(0.025, 0.2, 0.025, "#3e4146", 0.4 + sx * 0.13, 0.12, 0.35 + sz * 0.13, vary=0)
+    m.box(0.5, 0.4, 0.4, "#a8a294", 0.35, 0.26, -0.4, vary=0.02)           # control house
+    for y in (0.5, 0.75):
+        m.cyl(0.025, 0.025, 0.9, "#8a6a4a", -0.1, y, 0.0, seg=6, rz=math.pi / 2, vary=0)  # pipes
+    m.cyl(0.025, 0.025, 0.6, "#c8453a", -0.45, 0.3, 0.2, seg=6, vary=0)
+    m.box(0.3, 0.12, 0.03, TEAM, 0.35, 0.36, -0.19, vary=0)
+    m.pole_flag(-0.8, 0.7, 1.0)
+    return m
+
+def radio_factory():
+    m = Model("RadioFactory")
+    foundation(m, 2, col=CONCRETE)
+    m.box(1.25, 0.7, 1.0, "#cfc8b6", 0, 0.41, 0.05, vary=0.02)
+    m.box(1.29, 0.06, 1.04, "#8a8478", 0, 0.78, 0.05, vary=0)
+    for x in (-0.4, 0.0, 0.4):
+        m.box(0.28, 0.3, 0.03, "#5d7a8c", x, 0.45, 0.565, vary=0.05)       # long windows
+    m.box(0.04, 1.1, 0.04, "#3e4146", 0.5, 1.3, -0.3, vary=0)              # the radio mast
+    for y in (1.2, 1.5, 1.8):
+        m.box(0.3 - (y - 1.2) * 0.25, 0.015, 0.015, "#3e4146", 0.5, y, -0.3, vary=0)
+    m.ball(0.035, "#c8453a", 0.5, 1.87, -0.3, sub=1, vary=0)
+    m.box(0.5, 0.18, 0.03, TEAM, -0.3, 0.68, 0.565, vary=0)               # a sign
+    for k in range(3):
+        crate(m, -0.6 + k * 0.18, 0.72, s=0.14)
+    m.pole_flag(-0.8, -0.6, 1.0)
+    return m
+
+def tank_works():
+    """A big assembly hall with a gantry crane and a tank rolling out."""
+    m = Model("TankWorks")
+    foundation(m, 3, col=CONCRETE)
+    m.box(2.3, 1.0, 1.4, "#8a8a7c", 0, 0.56, -0.3, vary=0.02)
+    m.box(2.32, 0.08, 1.42, "#5b5e52", 0, 1.1, -0.3, vary=0)
+    for k in range(4):
+        m.box(0.5, 0.05, 1.42, "#6e7066", -0.86 + k * 0.57, 1.18, -0.3, rx=0.0, vary=0)
+    m.box(0.9, 0.75, 0.03, "#3e4146", -0.4, 0.44, 0.415, vary=0)           # the big door
+    m.box(0.6, 0.18, 0.03, TEAM, 0.65, 0.85, 0.415, vary=0)
+    for x in (0.55, 1.05):  # an outdoor gantry crane
+        m.box(0.05, 0.9, 0.05, "#c8a23a", x, 0.5, 0.8, vary=0)
+    m.box(0.6, 0.06, 0.06, "#c8a23a", 0.8, 0.95, 0.8, vary=0)
+    m.box(0.012, 0.3, 0.012, "#2a2c30", 0.8, 0.78, 0.8, vary=0)
+    m.box(0.5, 0.12, 0.3, OLIVE, -0.4, 0.13, 0.85, bevel=0.02, vary=0)    # a hull outside
+    m.pole_flag(-1.35, 1.25, 1.2)
+    return m
+
+def airfield():
+    """A runway, a hangar with an arched roof, a control tower, a windsock."""
+    m = Model("Airfield")
+    m.box(3.85, 0.5, 3.85, "#6f6553", 0, -0.2, 0, vary=0.02)
+    m.box(3.8, 0.06, 3.8, "#7a9a44", 0, 0.03, 0, vary=0.03)
+    m.box(3.7, 0.03, 0.9, "#4a4a48", 0, 0.07, 1.1, vary=0.01)            # the runway
+    for k in range(7):
+        m.box(0.3, 0.01, 0.06, CLOTH, -1.5 + k * 0.5, 0.09, 1.1, vary=0)
+    for k in range(9):  # the hangar: an arch of ribs
+        a = k / 8 * math.pi
+        m.box(1.6, 0.06, 0.32, "#8a939e", -0.6 + 0.0, 0.07 + math.sin(a) * 0.65, -0.8 + math.cos(a) * 0.75, rx=a - math.pi / 2, vary=0.02)
+    m.box(1.6, 0.6, 0.03, "#3e4146", -0.6, 0.35, -0.8 + 0.76, vary=0)    # its door (open, dark)
+    m.box(0.3, 0.9, 0.3, CONCRETE, 1.4, 0.5, -1.2, vary=0.02)            # control tower
+    m.box(0.42, 0.25, 0.42, GLASS, 1.4, 1.07, -1.2, vary=0)
+    m.box(0.46, 0.04, 0.46, "#5b5e52", 1.4, 1.21, -1.2, vary=0)
+    m.box(0.02, 0.5, 0.02, "#3e4146", 1.6, 0.3, 0.3, vary=0)             # windsock
+    m.cyl(0.05, 0.02, 0.22, "#e8742c", 1.7, 0.52, 0.3, seg=8, rz=math.pi / 2, vary=0)
+    m.box(0.5, 0.12, 0.03, TEAM, -0.6, 0.95, -0.03, vary=0)
+    m.pole_flag(-1.75, -1.75, 1.2)
+    return m
+
+def oil_field():
+    """An oil deposit: a black seep in a sandy hollow."""
+    m = Model("OilField")
+    m.cyl(0.42, 0.38, 0.04, "#a8946a", 0, 0.02, 0, seg=10, vary=0.04)
+    m.cyl(0.28, 0.26, 0.03, "#121214", 0.02, 0.045, -0.02, seg=10, vary=0.02)
+    m.cyl(0.12, 0.12, 0.032, "#2a2a30", -0.06, 0.047, 0.05, seg=8, vary=0)  # a sheen
+    for x, z in ((0.3, 0.2), (-0.25, -0.25)):
+        m.rock(0.08, "#8a7a5a", x, 0, z, vary=0.06)
+    return m
+
+def bauxite():
+    """Bauxite: red-brown earthy rocks."""
+    m = Model("Bauxite")
+    for x, z, r in [(0, 0, 0.27), (0.22, 0.14, 0.18), (-0.2, -0.12, 0.17), (0.08, -0.24, 0.11)]:
+        m.rock(r, "#b0603e", x, 0, z, flat=0.65, vary=0.08)
+    return m
+
+
 def clear_scene():
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob, do_unlink=True)
@@ -1843,13 +2100,15 @@ def main():
     spacing = 7.0
     groups = {
         # (granary, smithy, market and temple are kept above but no longer exported: no kind uses them.)
-        "buildings": [capitol, barracks, archery_range, stable, tower, settlement, farm, sawmill, mason, wonder,
+        # (wonder is kept above but no longer exported: the Wonder is gone.)
+        "buildings": [capitol, barracks, archery_range, stable, tower, settlement, farm, sawmill, mason,
                       cottage, sheep_farm, iron_mine, brickworks, bakery, weaver, brewery, siege_workshop,
                       townhouse, saltpeter_works, powder_mill, carpenter, printer, circus,
-                      tenement, coal_mine, steel_mill, explosives_works, cannery, coal_yard, press, factory],
-        "resources": [pine, oak, bush, stone, gold, iron_ore, clay_pit, sheep_herd, saltpeter, coal_seam],
+                      tenement, coal_mine, steel_mill, explosives_works, cannery, coal_yard, press, factory,
+                      apartment, oil_well, bauxite_mine, power_plant, haber_bosch, radio_factory, tank_works, airfield],
+        "resources": [pine, oak, bush, stone, gold, iron_ore, clay_pit, sheep_herd, saltpeter, coal_seam, oil_field, bauxite],
         "units": [citizen, spearman, archer, horseman, swordsman, crossbowman, knight, trebuchet, musketeer, dragoon, cannon,
-                  rifleman, machine_gunner, field_gun],
+                  rifleman, machine_gunner, field_gun, infantry, tank, fighter, bomber],
     }
     ao_dist = {"buildings": 0.5, "resources": 0.2, "units": 0.1}
     all_objs, pivots_all = [], []
