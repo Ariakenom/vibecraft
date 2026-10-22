@@ -8,15 +8,14 @@ const PROJ_STRIDE = 10; // x, y, px, py, loosed from x, y, shooter kind, at a bu
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
-const K = { Builder: 0, Spearman: 1, Archer: 2, Horseman: 3, Arrival: 4, Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
+const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76, Hut: 77 };
 const isBld = k => k >= 64;
-const NAMES = { [K.Builder]: "Builder", [K.Arrival]: "Newcomer", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
+const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
   [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture", [K.Wonder]: "Wonder" };
 const DESC = {
-  [K.Builder]: "Walks to a foundation and is used up there: once enough builders have arrived, the building rises by itself.",
-  [K.Arrival]: "On their way to a house with a free bed.",
+  [K.Worker]: "Works at producers, builds (and is used up doing it), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people).",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
@@ -47,7 +46,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
 const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water"];
-const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Moving in"];
+const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
@@ -57,7 +56,7 @@ const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
 const BUILD_MENU = [[K.Hut, "Q"], [K.Farm, "E"], [K.LumberCamp, "R"], [K.Quarry, "T"], [K.FishingHut, "Y"], [K.HuntingLodge, "U"], [K.Orchard, "I"],
   [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"], [K.Wonder, "B"]];
 const TRAIN_KEYS = "QERT";
-const TRAINS = { [K.Capitol]: [K.Builder], [K.Barracks]: [K.Spearman], [K.Range]: [K.Archer], [K.Stable]: [K.Horseman] };
+const TRAINS = { [K.Barracks]: [K.Spearman], [K.Range]: [K.Archer], [K.Stable]: [K.Horseman] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -93,6 +92,8 @@ const CURSORS = {
   5: svgCursor(`<path d="M6 30V3" stroke="${DK}" stroke-width="4" stroke-linecap="round"/><path d="M6 30V3" stroke="#d9c9a8" stroke-width="2"/>
     <path d="M7 4l17 5-17 6z" fill="#3f86e0" stroke="${DK}" stroke-width="1.6" stroke-linejoin="round"/>`, 6, 30),
 };
+
+CURSORS[6] = CURSORS[4]; // 6: send workers to work at a producer
 
 // ===========================================================================
 // Boot the WebAssembly module
@@ -196,6 +197,16 @@ function plural(k, n) {
 }
 function slotsHtml(list, mark = true) {
   return list.map(([r, c]) => `<span class="${mark && free(r) < c ? "short" : ""}" title="${RES_NAMES[r]}">${resIcon(r)}${c}</span>`).join("");
+}
+// The resource icons as images, for drawing on the overlay canvas.
+const resImages = [];
+function resImage(r) {
+  if (!resImages[r]) {
+    const img = new Image();
+    img.src = "data:image/svg+xml," + encodeURIComponent(resIcon(r).replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" '));
+    resImages[r] = img;
+  }
+  return resImages[r];
 }
 function costHtml(k) {
   const c = slotsOf(k);
@@ -338,10 +349,26 @@ function drawOverlay() {
   octx.setTransform(dpr, 0, 0, dpr, 0, 0);
   octx.clearRect(0, 0, view._w, view._h);
   for (let i = 0; i < entCount; i++) {
-    const sel = E(i, F.flags) & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(E(i, F.kind)), short = E(i, F.flags) & 16, idleP = E(i, F.flags) & 32;
-    if (!sel && !short && !idleP && (f >= 1 || bld)) continue;
+    const k = E(i, F.kind), flags = E(i, F.flags);
+    const sel = flags & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(k), short = flags & 16, paused = flags & 64, idleP = (flags & 32) && !paused;
+    // Your houses show the first good they still want, in a bubble.
+    const want = bld && E(i, F.owner) === ME && !(flags & 2) && stat(k, 10) >= 0 ? houseWants(k, W.house_goods(E(i, F.id))).wants[0] : undefined;
+    if (!sel && !short && !idleP && !paused && want === undefined && (f >= 1 || bld)) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
+    if (want !== undefined) {
+      const x = p.x, y = p.y - 18, img = resImage(want);
+      octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
+      octx.beginPath(); octx.moveTo(x - 4, y + 11); octx.lineTo(x, y + 16); octx.lineTo(x + 4, y + 11); octx.fill();
+      if (img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
+      if (!sel && f >= 1) continue;
+    }
+    if (paused) { // a producer you paused: two bars
+      const x = p.x, y = p.y - 20;
+      octx.fillStyle = "rgba(20,16,10,.8)"; octx.beginPath(); octx.arc(x, y, 11, 0, 7); octx.fill();
+      octx.fillStyle = "#e3b23c"; octx.fillRect(x - 5, y - 5.5, 3.5, 11); octx.fillRect(x + 1.5, y - 5.5, 3.5, 11);
+      if (!sel && f >= 1) continue;
+    }
     if (idleP) { // a producer with no crew: a person, crossed out
       const x = p.x, y = p.y - 20;
       octx.fillStyle = "rgba(20,16,10,.8)"; octx.beginPath(); octx.arc(x, y, 13, 0, 7); octx.fill();
@@ -443,18 +470,19 @@ function renderTopBar() {
   for (let r = 0; r < W.n_res(); r++) if (W.supply(r) || W.used(r)) shown.push(r);
   if (!topBar || topBar.key !== shown.join(",")) setupTopBar(shown);
   $("res").hidden = !!observe && !observe.view;
+  // What's left of each resource: after everything that holds it, houses
+  // included (they give it up if something new needs it).
   for (const c of topBar.chips) {
-    const r = +c.dataset.r, f = free(r);
+    const r = +c.dataset.r, f = free(r) - W.housed(r);
     c.querySelector("b").textContent = f;
     const sm = c.querySelector("small");
     sm.textContent = `/ ${W.supply(r)}`;
     c.classList.toggle("over", f < 0);
   }
-  // People: everyone (at home and units) out of the beds there are, and
-  // how many at home have no job.
-  const hungry = W.unsupplied(), home = W.people(0), beds = W.people(1), units = W.people(2), idle = home - W.people(3);
+  // People: the free workers at the campfire, out of everyone.
+  const hungry = W.unsupplied(), freeP = W.people(0), all = W.people(4);
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
-  topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${home + units}<small>/ ${beds}</small><small>· ${idle} free</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
+  topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${freeP}<small>/ ${all}</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
   topBar.era.textContent = `${ERA_NAMES[eraIndex()]} era`;
   const ew = W.enemy_wonder();
   topBar.wonder.hidden = ew < 0;
@@ -496,18 +524,20 @@ function renderResTip() {
   tip.hidden = false;
 }
 
-// Where everyone is: at home, at work, in arms, on the way.
+// Where everyone is: free at the campfire, at work, in arms.
 function renderPeopleTip(tip) {
-  const home = W.people(0), beds = W.people(1), units = W.people(2), work = W.people(3), coming = W.people(4);
+  const freeP = W.people(0), beds = W.people(1), soldiers = W.people(2), work = W.people(3), all = W.people(4);
   const line = (label, v, cls = "") => `<div class="row ${cls}"><span>${label}</span><b>${v}</b></div>`;
   let html = `<h4>People</h4>`;
-  html += line("At home, working", work) + line("At home, free", home - work, home - work ? "pos" : "") + line("Builders and soldiers", units);
-  html += `<div class="row total"><span>Beds</span><b>${home + units} / ${beds}</b></div>`;
-  if (coming) html += line("On their way", coming, "pos");
-  html += home + units + coming < beds
-    ? `<p>There are free beds: someone new arrives at the Capitol every 10 seconds.</p>`
+  html += line("Free, at the campfire", freeP, freeP ? "pos" : "") + line("Working", work) + line("Soldiers and recruits", soldiers);
+  const other = all - freeP - work - soldiers;
+  if (other > 0) html += line("Building, or elsewhere", other);
+  html += `<div class="row total"><span>Everyone</span><b>${all}</b></div>`;
+  html += line("Beds", beds);
+  html += all < beds
+    ? `<p>There are free beds: someone new turns up at the campfire every ${W.people(5) ? `few` : ""} seconds, sooner in a bigger town.</p>`
     : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of food: each kind is 2 more beds in every house that gets it.</p>`;
-  html += `<p class="note">Every builder and soldier is someone who left home. Producers need people at home to work them.</p>`;
+  html += `<p class="note">Free workers go to work, build and enlist by themselves. Training a soldier takes one from the campfire.</p>`;
   tip.innerHTML = html;
   const chip = topBar.pop.getBoundingClientRect(), app = $("app").getBoundingClientRect();
   tip.style.left = `${Math.max(8, Math.min(app.width - 270, chip.left - app.left))}px`;
@@ -533,7 +563,7 @@ function renderTech() {
     col.innerHTML = `<h3>${["I", "II", "III", "IV", "V", "VI"][era]} · ${name}</h3>` +
       `<div class="era-house"><b>${HOUSE_NAMES[era]}</b><span>up to ${max} goods, ${max * 2} people</span><span class="cost inline">${goods.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span></div>`;
     // Buildings first, then units, each in Rust's order.
-    const kinds = allKinds().filter(k => W.kind_era(k) === era && k !== K.Capitol);
+    const kinds = allKinds().filter(k => W.kind_era(k) === era && k !== K.Capitol && k !== K.Worker);
     kinds.sort((a, b) => isBld(b) - isBld(a));
     const list = document.createElement("div"); list.className = "era-list";
     for (const k of kinds) list.append(techCard(k));
@@ -586,7 +616,7 @@ function renderSelection(force) {
   } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
-    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. People live in <b>Huts</b>: each kind of food a hut gets is 2 more beds, and newcomers fill free beds. People at home work your producers; every builder and soldier is someone who left home. Select a builder and put up a <b>Lumber Camp</b> by a forest or a <b>Farm</b>, then more huts and food. Press <kbd class="k">.</kbd> to find idle builders.`;
+    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait at the <b>campfire</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Capitol) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> to select the free workers`;
     panel.append(d);
   } else if (sel.length === 1) {
     singleInfo(panel, sel[0]);
@@ -624,20 +654,24 @@ function singleInfo(panel, i) {
   } else if (E(i, F.flags) & 2) {
     const need = stat(k, 9), got = W.builders_in(id);
     html += got < need
-      ? `<div class="statline">Waiting for builders · ${got} of ${need} here. Send idle builders with a right-click.</div>`
+      ? `<div class="statline">Waiting for builders · ${got} of ${need} here. Free workers at the campfire come by themselves.</div>`
       : `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
   } else if (stat(k, 10) >= 0) {
-    // A house: who lives here, and which goods give its beds.
-    const goods = W.house_goods(id), max = W.house_max_goods(stat(k, 10)), n = popcount(goods);
-    const have = []; for (let r = 0; r < W.n_res(); r++) if (goods >> r & 1) have.push(r);
-    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken</div>`;
+    // A house: which goods it has and which it wants; its beds.
+    const goods = W.house_goods(id), { have, wants } = houseWants(k, goods);
+    const icons = list => `<span class="cost inline">${list.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span>`;
+    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken · 2 beds for each good</div>`;
     if (owner === ME || observe) {
-      html += `<div class="statline">Gets ${have.length ? `<span class="cost inline">${have.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span>` : "nothing yet"}</div>`;
-      if (n < max) html += `<div class="statline">Room for ${max - n} more kind${max - n === 1 ? "" : "s"} of food: each adds 2 beds.</div>`;
+      html += `<div class="statline">Has ${have.length ? icons(have) : "nothing yet"}</div>`;
+      html += wants.length ? `<div class="statline">Wants ${icons(wants)} <span class="muted">(any ${wants.length > 1 ? `${house_room(k, goods)} of these` : "one"})</span></div>` : `<div class="statline">Has every good a ${NAMES[k]} can use.</div>`;
     }
   } else if (slotsOf(k, 1).length) {
-    html += `<div class="statline">Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span>${stat(k, 7) ? ` · ${stat(k, 7)} worker${stat(k, 7) === 1 ? "" : "s"}` : ""}</div>`;
-    if (E(i, F.flags) & 32) html += `<div class="statline bad">Idle: nobody at home is free to work it. Build huts and give them food.</div>`;
+    const need = stat(k, 7);
+    html += `<div class="statline">Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span>${need ? ` · workers <b>${E(i, F.residents)}</b> of ${need}` : ""}</div>`;
+    if (owner === ME && (E(i, F.flags) & 64)) html += `<div class="statline bad">Paused: it makes nothing and hires nobody. Press Resume, or send workers here with a right-click.</div>`;
+    else if (E(i, F.flags) & 32) html += `<div class="statline bad">Waiting for workers: when someone is free at the campfire, they come.</div>`;
+  } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
+    html += `<div class="statline">Waiting for a recruit from the campfire.</div>`;
   }
   info.innerHTML = html;
   if (isBld(k) && (owner === ME || observe) && W.queue_len(id) > 0) {
@@ -692,7 +726,7 @@ function renderCommands(sel) {
     return h;
   };
 
-  if (kinds.has(K.Builder)) {
+  if (kinds.has(K.Worker) || kinds.has(K.Capitol)) {
     for (const [k, key] of BUILD_MENU) {
       const fn = () => startPlacing(k);
       const locked = isBld(k) && !W.unlocked(k);
@@ -707,6 +741,16 @@ function renderCommands(sel) {
     add(cmdButton(`Train ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), tip: unitTip(k) + `<p>Right-click the map to set a rally point.</p>` }), key, fn);
   }
   const hasUnits = mine.some(i => !isBld(E(i, F.kind)));
+  // Producers: pause (their workers go to the campfire) or resume.
+  const workplaces = mine.filter(i => isBld(E(i, F.kind)) && stat(E(i, F.kind), 7) > 0 && !(E(i, F.flags) & 2));
+  if (workplaces.length && !hasUnits) {
+    const paused = workplaces.every(i => E(i, F.flags) & 64);
+    const ids = workplaces.map(i => E(i, F.id));
+    const fn = () => { issue({ c: 10, ids, a: paused ? 1 : 0 }); Sfx.ui("command", 1); selKey = ""; };
+    add(cmdButton(paused ? "Resume" : "Pause", "Z", fn, { glyph: paused ? "▶" : "❚❚", tip: paused
+      ? "<h4>Resume</h4><p>Hire workers again: free workers from the campfire come.</p>"
+      : "<h4>Pause</h4><p>Its workers go back to the campfire. It keeps its slots but makes nothing.</p>" }), "Z", fn);
+  }
   const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
   if (doomed.length && !hasUnits) {
     const armed = demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000;
@@ -735,6 +779,18 @@ function toast(msg, cls = "") {
 }
 // Error codes from Rust (`CmdError::code` in game.rs).
 let demolishArm = null;
+// A house's goods: which it has, and which it could still take (house goods
+// of its era or earlier it doesn't have, while it has room for more).
+function houseWants(k, goods) {
+  const tier = stat(k, 10), max = W.house_max_goods(tier);
+  const have = [], could = [];
+  for (let r = 0; r < W.n_res(); r++) {
+    if (goods >> r & 1) have.push(r);
+    else if (W.is_house_good(r) && W.res_era(r) <= tier) could.push(r);
+  }
+  return { have, wants: have.length < max ? could : [] };
+}
+function house_room(k, goods) { return W.house_max_goods(stat(k, 10)) - popcount(goods); }
 const popcount = v => { let n = 0; for (; v; v >>>= 1) n += v & 1; return n; };
 function explain(code) {
   if (code >= 2000) return `Build a ${NAMES[code - 2000]} first`;
@@ -743,8 +799,9 @@ function explain(code) {
     return `Not enough ${RES_NAMES[r]}` + (p != null ? `: build another ${NAMES[p]}` : "");
   }
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
+  if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is at home to train: build huts and give them food" }[code] || "Can't do that";
+    13: "Nobody is free at the campfire to train" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -807,7 +864,7 @@ function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
   if (!arr.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = arr[0] | 0;
-  if (c < 1 || c > 9) return null;
+  if (c < 1 || c > 10) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
 const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || isBld(E(i, F.kind)) === buildings)).map(i => E(i, F.id));
@@ -864,7 +921,7 @@ function boxSelect(x0, y0, x1, y1, add, kindFilter = -1) {
   for (let i = 0; i < entCount; i++) {
     if (E(i, F.owner) !== ME) continue;
     const k = E(i, F.kind);
-    if (k === K.Arrival || (kindFilter >= 0 && k !== kindFilter)) continue;
+    if (kindFilter >= 0 && k !== kindFilter) continue;
     const p = entScreen(i, false);
     if (!p || p.behind || p.x < lx || p.x > hx || p.y < ly || p.y > hy) continue;
     (isBld(k) ? buildings : units).push(E(i, F.id));
@@ -1057,7 +1114,7 @@ window.addEventListener("keydown", e => {
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
-  if (k === "." || k === ",") { const id = W.idle_builder(); if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; } else toast("No idle builders"); return; }
+  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free at the campfire"); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
   if (cmdKeys[k]) { cmdKeys[k](); e.preventDefault(); }
 });

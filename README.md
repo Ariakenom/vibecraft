@@ -127,7 +127,7 @@ loaded games misbehave.
 **Tune a unit or building.** Stats, slot costs, what producers make, their
 workers and the builders a foundation needs are the `static … Stats` lines
 in `src/defs.rs`. Tech requirements are `Kind::requires`; a kind's era is
-`Kind::era`. The population numbers (arrival interval, beds per good, goods
+`Kind::era`. The population numbers (`growth_interval`, beds per good, goods
 per house tier) are constants there too, and so is `UNSUPPLIED_DAMAGE`.
 Units are kinds 0–63, buildings 64 and up.
 
@@ -460,12 +460,13 @@ versions don't play together.
   everything you have holds some while it exists, giving them back when
   it's gone. Lose a producer and you hold more than you make: your newest
   units that need it lose health until it fits again.
-- **People live in huts.** A hut gets 2 beds for each different food it
-  receives (up to 3 kinds). While there's a free bed, a newcomer arrives
-  at the Capitol every 10 seconds. People at home work the producers; every
-  builder and soldier is someone who left home, and holds a bed while
-  alive. Builders are used up at their foundation, which then rises by
-  itself. Everyone busy and every bed full? Demolish something.
+- **People are workers you can see.** A hut gets 2 beds for each
+  different food it receives (up to 3 kinds). While there's a free bed, a
+  newcomer appears at the campfire in front of the Capitol (faster as the
+  town grows). Workers idle in the campfire circle are free; they walk off
+  by themselves to build foundations, work producers and become soldiers.
+  A producer works only while its workers stand at it, so raids that kill
+  them hurt. Move its workers away to pause it.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
@@ -482,7 +483,8 @@ versions don't play together.
 - **Train:** Q.
 - **Other keys:**
   - Z attack-move, X stop
-  - H home, `.` idle builder
+  - H home, `.` free workers (at the campfire)
+  - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause, M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, copy a watch link for spectators

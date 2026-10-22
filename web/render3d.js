@@ -348,17 +348,7 @@ function unitModel(kind, owner) {
     return { body: m.build(), tool: t.build(), pivot: [0, 0.7, 0.11], height: 0.95 };
   }
   legs(0.11, DARKWOOD);
-  if (kind === K.Arrival) {
-    // A newcomer: travelling clothes, a bundle on the back, a walking stick.
-    legs(0.11, DARKWOOD);
-    m.add(box(0.14, 0.24, 0.2), "#8f7b5c", 0, 0.34, 0);
-    m.add(box(0.15, 0.05, 0.21), "#5e4c34", 0, 0.27, 0);
-    m.add(ball(0.072, 1), SKIN, 0, 0.53, 0);
-    m.add(box(0.1, 0.16, 0.16), "#c8b48c", -0.12, 0.4, 0); // the bundle
-    t.add(cyl(0.012, 0.012, 0.6, 5), WOOD, 0, 0.0, 0);
-    return { body: m.build(), tool: t.build(), pivot: [0.05, 0.3, 0.11], height: 0.66 };
-  }
-  const bodyCol = kind === K.Archer ? "#5d6a3a" : kind === K.Builder ? "#b89a6c" : team;
+  const bodyCol = kind === K.Archer ? "#5d6a3a" : kind === K.Worker ? "#b89a6c" : team;
   m.add(box(0.14, 0.24, 0.2), bodyCol, 0, 0.34, 0);
   m.add(box(0.15, 0.05, 0.21), kind === K.Spearman ? dark : team, 0, 0.27, 0); // belt
   m.add(ball(0.072, 1), SKIN, 0, 0.53, 0);
@@ -378,7 +368,7 @@ function unitModel(kind, owner) {
     t.add(bow, "#6b4a2a", 0.06, 0, 0);
     return { body: m.build(), tool: t.build(), pivot: [0.04, 0.38, 0.1], height: 0.66 };
   }
-  // builder
+  // worker
   m.add(cap, team, 0, 0.545, 0);
   t.add(cyl(0.013, 0.013, 0.36, 5), WOOD, 0, 0.0, 0);
   t.add(box(0.05, 0.05, 0.11), IRON, 0, 0.17, 0.03);
@@ -600,7 +590,7 @@ const MODELS_B64 = "/*MODELS_BASE64*/";
 // in main.js, which loads after this file.
 let GLB_NAMES = null;
 function glbName(kind) {
-  GLB_NAMES ??= { [K.Builder]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
+  GLB_NAMES ??= { [K.Worker]: "Citizen", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
     [K.Range]: "Range", [K.Stable]: "Stable", [K.Tower]: "Tower", [K.Farm]: "Farm", [K.Wonder]: "Wonder",
     [K.LumberCamp]: "Sawmill", [K.Quarry]: "Mason", [K.HuntingLodge]: "Settlement" };
   return GLB_NAMES[kind];
@@ -1278,9 +1268,11 @@ function viewQuad() {
 }
 
 // --- Per-frame update --------------------------------------------------------
-// The Capitol's gathering spot, where newcomers arrive: a campfire in front
-// of its door (+z), with a flame that flickers (`updateCampfires`).
-const CAMPFIRE = [0, 0.25, 2.25];
+// The Capitol's gathering spot, where free workers wait and newcomers turn
+// up: a campfire in front of its door (+z; CAMPFIRE_AHEAD in people.rs),
+// with a flame that flickers (`updateCampfires`), inside a ring of trodden
+// earth that marks the area (CAMPFIRE_AREA) where a worker counts as free.
+const CAMPFIRE = [0, 0.25, 3.2], CAMPFIRE_AREA = 3.0;
 let campfireGeo = null, flameMat = null;
 function campfire() {
   if (!campfireGeo) {
@@ -1293,6 +1285,10 @@ function campfire() {
   const g = new THREE.Group();
   g.position.set(CAMPFIRE[0], 0, CAMPFIRE[2]);
   const ring = new THREE.Mesh(campfireGeo, entMat); ring.receiveShadow = true; g.add(ring);
+  const area = new THREE.Mesh(new THREE.RingGeometry(CAMPFIRE_AREA - 0.12, CAMPFIRE_AREA, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#d9c9a8", transparent: true, opacity: 0.35, depthWrite: false }));
+  area.position.y = 0.04; area.renderOrder = 1; g.add(area);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(CAMPFIRE_AREA - 0.12, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#8a7350", transparent: true, opacity: 0.18, depthWrite: false }));
+  ground.position.y = 0.03; g.add(ground);
   const flame = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 7), flameMat);
   flame.position.y = 0.2; flame.userData.flame = true; g.add(flame);
   (R3.flames ??= []).push(flame);
@@ -1444,7 +1440,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
     B.head.rotation.z = -o.lean * 0.4;
     const tb = B[o.toolBone];
     let toolWorld = null; // the tool's angle in the unit's frame, or null to follow the arm
-    if (anim === 2 || (anim === 3 && kind === K.Builder)) {
+    if (anim === 2 || (anim === 3 && kind === K.Worker)) {
       // A big overhead chop: wind up, strike, recover.
       const c = (T * 1.5) % 1;
       const a = c < 0.55 ? 0.3 + (c / 0.55) * 2.4 : c < 0.68 ? 2.7 - ((c - 0.55) / 0.13) * 2.6 : 0.1 + ((c - 0.68) / 0.32) * 0.2;
@@ -1469,7 +1465,7 @@ function animateRig(o, kind, anim, t, dt, hit) {
       toolWorld = 0;
     } else {
       toolWorld = kind === K.Spearman ? -0.25 : kind === K.Archer ? 0 : null;
-      if (kind === K.Builder) o.toolMesh.rotation.z = -0.4;
+      if (kind === K.Worker) o.toolMesh.rotation.z = -0.4;
     }
     if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
   }
@@ -2099,7 +2095,7 @@ function icon(k, owner, px) {
   if (mdl.tool) {
     const t = new THREE.Mesh(mdl.tool, mat);
     t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
-    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Builder ? -0.4 : 0) : -(mdl.toolTilt || 0);
+    t.rotation.z = mdl.rig ? (k === K.Spearman ? -0.25 : k === K.Worker ? -0.4 : 0) : -(mdl.toolTilt || 0);
     g.add(t);
   }
   g.rotation.y = isBld(k) ? -0.6 : -0.9;

@@ -11,7 +11,10 @@ mod defs;
 mod game;
 mod map;
 mod path;
+mod people;
 mod save;
+#[cfg(test)]
+mod sim_tests;
 
 use defs::{Kind, Res};
 use game::{Command, Game, Intent, Order};
@@ -108,12 +111,32 @@ pub extern "C" fn render() -> u32 {
                 Order::AttackMove { .. } => 2,
                 Order::Attack { .. } => 3,
                 Order::Build(_) => 6,
-                Order::Arrive(_) => 7,
+                Order::Work(_) => 7,
+                Order::Enlist(_) => 8,
             };
-            // A producer short of workers makes nothing: the page shows it idle.
-            if e.built >= 1.0 && !e.crewed && e.owner == g.local {
-                flags |= 32;
+            // Yours only: a producer short of workers makes nothing (32),
+            // one paused by you (64), a free worker at the campfire (128).
+            if e.owner == g.local {
+                let st = e.kind.stats();
+                if e.built >= 1.0 && st.workers > 0 && !e.crewed {
+                    flags |= 32;
+                }
+                if e.is_building() && st.workers > 0 && !e.hiring {
+                    flags |= 64;
+                }
+                if g.is_free_worker(e) {
+                    flags |= 128;
+                }
             }
+            // Houses: who lives there and its beds. Producers: workers
+            // there and workers needed. Training buildings: recruits inside.
+            let (n1, n2) = if e.kind.house_tier().is_some() {
+                (e.residents as f32, e.beds() as f32)
+            } else if e.kind.stats().workers > 0 {
+                (e.crew as f32, e.kind.stats().workers as f32)
+            } else {
+                (e.recruits as f32, e.queue.len() as f32)
+            };
             let (rx, ry) = e.rally.unwrap_or((f32::NAN, f32::NAN));
             w.ents.extend_from_slice(&[
                 e.id as f32,
@@ -128,8 +151,8 @@ pub extern "C" fn render() -> u32 {
                 flags as f32,
                 progress,
                 e.anim as u32 as f32,
-                e.residents as f32, // houses: who lives there...
-                e.beds() as f32,    // ...and how many beds it has
+                n1,
+                n2,
                 e.facing,
                 order as f32,
                 rx,
@@ -198,10 +221,6 @@ pub extern "C" fn fog_ptr() -> *const u8 {
     game(|g| g.fog.as_ptr() as usize) as *const u8
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn pop() -> u32 {
-    game(|g| g.players[g.local as usize].pop)
-}
 #[unsafe(no_mangle)]
 /// 0 playing; from the local player's point of view: 1 won by conquest,
 /// 2 lost by conquest, 3 won with a Wonder, 4 lost to a Wonder,
@@ -283,7 +302,7 @@ pub extern "C" fn select_ids(n: u32) {
         w.game.clear_selection();
         for &id in w.scratch.iter().take(n as usize) {
             if let Some(e) = w.game.ents.get_mut(id as usize) {
-                if e.alive && e.owner == w.game.local && e.kind != Kind::Arrival {
+                if e.alive && e.owner == w.game.local {
                     e.selected = true;
                 }
             }
@@ -291,8 +310,8 @@ pub extern "C" fn select_ids(n: u32) {
     })
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn idle_builder() -> i32 {
-    game(|g| g.select_idle_builder())
+pub extern "C" fn free_workers() -> i32 {
+    game(|g| g.select_free_workers())
 }
 
 /// Read `n` entity ids that JavaScript wrote into the scratch buffer.
@@ -305,7 +324,8 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 /// 4 train (`arg` = unit kind), 5 cancel training, 6 place a building
 /// (`arg` = kind, x/y = tile), 7 the computer takes over player `arg`
 /// (sent with owner 0 by the multiplayer host when someone leaves), 8
-/// surrender, 9 demolish the buildings in the scratch buffer.
+/// surrender, 9 demolish the buildings in the scratch buffer, 10 pause
+/// (`arg` 0) or resume (1) the producers in it.
 /// Returns 0 or a `CmdError` code.
 ///
 /// In single player the page calls this at once. In multiplayer it calls
@@ -339,6 +359,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
             },
             8 => Command::Surrender,
             9 => Command::Demolish { ids },
+            10 => Command::Hire { ids, on: arg != 0 },
             _ => return 0,
         };
         match w.game.apply(owner as u8, cmd) {
@@ -350,7 +371,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
 
 /// What right-clicking (x, y) would do with the `n` ids in the scratch
 /// buffer, for the mouse cursor: 0 nothing, 1 move, 2 attack, 4 build,
-/// 5 rally. (3 and 6–9 were gathering.)
+/// 5 rally, 6 work there.
 #[unsafe(no_mangle)]
 pub extern "C" fn intent(n: u32, x: f32, y: f32) -> u32 {
     with(|w| {
@@ -362,6 +383,7 @@ pub extern "C" fn intent(n: u32, x: f32, y: f32) -> u32 {
             Intent::Attack(_) => 2,
             Intent::Build(_) => 4,
             Intent::Rally => 5,
+            Intent::Work(_) => 6,
         }
     })
 }
@@ -563,9 +585,9 @@ pub extern "C" fn short_of(kind: u32) -> i32 {
     let Some(k) = Kind::from_u32(kind) else { return -1 };
     game(|g| g.short_of(g.local, k).map_or(-1, |r| r as i32))
 }
-/// The local player's people: `which` 0 residents at home, 1 beds, 2 units
-/// (each holds a bed; queued ones too), 3 residents at work, 4 newcomers on
-/// their way.
+/// The local player's people: `which` 0 free workers at the campfire,
+/// 1 beds, 2 soldiers (and recruits in training), 3 workers at producers,
+/// 4 everyone, 5 seconds until the next newcomer.
 #[unsafe(no_mangle)]
 pub extern "C" fn people(which: u32) -> u32 {
     player_people(game(|g| g.local as u32), which)
@@ -574,11 +596,12 @@ pub extern "C" fn people(which: u32) -> u32 {
 pub extern "C" fn player_people(p: u32, which: u32) -> u32 {
     game(|g| {
         g.players.get(p as usize).map_or(0, |pl| match which {
-            0 => pl.residents,
+            0 => pl.free,
             1 => pl.beds,
-            2 => pl.units,
+            2 => pl.soldiers,
             3 => pl.working,
-            _ => pl.arriving,
+            4 => pl.people,
+            _ => pl.arrive_timer.ceil().max(0.0) as u32,
         })
     })
 }
@@ -624,14 +647,25 @@ pub extern "C" fn count_built(kind: u32) -> u32 {
     game(|g| g.ents.iter().filter(|e| e.alive && e.owner == g.local && e.kind as u32 == kind && e.built >= 1.0).count() as u32)
 }
 /// The kinds, for building the tech tree from: `kind_count` of them,
-/// `kind_at(n)` is the n-th (newcomers left out: nobody makes them).
+/// `kind_at(n)` is the n-th.
 #[unsafe(no_mangle)]
 pub extern "C" fn kind_count() -> u32 {
-    Kind::ALL.iter().filter(|&&k| k != Kind::Arrival).count() as u32
+    Kind::ALL.len() as u32
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kind_at(n: u32) -> i32 {
-    Kind::ALL.iter().filter(|&&k| k != Kind::Arrival).nth(n as usize).map_or(-1, |&k| k as i32)
+    Kind::ALL.get(n as usize).map_or(-1, |&k| k as i32)
+}
+/// The campfire's position (`which` 0 x, 1 y) of the local player, or -1.
+#[unsafe(no_mangle)]
+pub extern "C" fn campfire(which: u32) -> f32 {
+    game(|g| g.campfire(g.local).map_or(-1.0, |(x, y)| if which == 0 { x } else { y }))
+}
+/// 1 if the local player can train more units now (a free worker isn't yet
+/// spoken for).
+#[unsafe(no_mangle)]
+pub extern "C" fn unclaimed_workers() -> u32 {
+    game(|g| g.unclaimed_workers(g.local))
 }
 /// The era a kind belongs to (0 Ancient … 5 Atomic).
 #[unsafe(no_mangle)]

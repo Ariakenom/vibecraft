@@ -49,8 +49,6 @@ impl Ai {
 
 /// How the AI plays at each difficulty (Easy, Normal, Hard).
 struct Style {
-    /// Builders to keep around.
-    builders: usize,
     /// Share of all people to keep under arms.
     army_share: f32,
     /// Units a military building may have queued at once.
@@ -60,9 +58,9 @@ struct Style {
 }
 
 const STYLES: [Style; 3] = [
-    Style { builders: 2, army_share: 0.2, queue: 1, wonder: false },
-    Style { builders: 3, army_share: 0.3, queue: 1, wonder: true },
-    Style { builders: 3, army_share: 0.4, queue: 2, wonder: true },
+    Style { army_share: 0.2, queue: 1, wonder: false },
+    Style { army_share: 0.3, queue: 1, wonder: true },
+    Style { army_share: 0.4, queue: 2, wonder: true },
 ];
 
 /// Free residents the AI keeps at home: one to crew the next food producer
@@ -100,10 +98,9 @@ struct Census {
     me: u8,
     /// Where its Capitol stands.
     home: (f32, f32),
-    builders: Vec<u32>,
-    idle: Vec<u32>,
     army: Vec<u32>,
-    /// Residents at home with no job: who can crew a new producer.
+    /// Free workers at the campfire not yet spoken for: who can build,
+    /// crew a new producer or become a soldier.
     spare: u32,
     /// How many of each kind, buildings under construction included.
     /// Indexed by `Kind as usize`.
@@ -137,7 +134,7 @@ impl Game {
         let Some(cap) = self.find_first(me, Kind::Capitol) else { return };
         let mut c = self.census(me, (self.ents[cap].x, self.ents[cap].y));
         let style = &STYLES[self.ais[me as usize].difficulty.min(2) as usize];
-        let next = self.ai_economy(cap, style, &mut c);
+        let next = self.ai_economy(style, &mut c);
         self.ai_army(style, next, &mut c);
         self.ai_scout(&mut c);
         self.ai_fight(&c);
@@ -152,36 +149,24 @@ impl Game {
                 if e.built < 1.0 {
                     c.unfinished.push(e.id);
                 }
-            } else if e.kind == Kind::Builder {
-                c.builders.push(e.id);
-                if e.order == Order::Idle {
-                    c.idle.push(e.id);
-                }
-            } else if e.kind != Kind::Arrival && Some(e.id) != scout {
+            } else if e.kind != Kind::Worker && Some(e.id) != scout {
                 c.army.push(e.id);
             }
         }
-        let p = &self.players[me as usize];
-        c.spare = p.residents.saturating_sub(p.working);
+        // Free workers not yet spoken for by a queue or a foundation.
+        let missing: u32 = c.unfinished.iter().map(|&b| self.builders_missing(b)).sum();
+        c.spare = self.unclaimed_workers(me).saturating_sub(missing);
         c
     }
 
     // -----------------------------------------------------------------------
     // Economy
 
-    /// Builders, beds and the build plan. Returns the plan's next project,
-    /// whose slots the army leaves free.
-    fn ai_economy(&mut self, cap: usize, style: &Style, c: &mut Census) -> Option<Kind> {
+    /// Beds and the build plan. Builders and crews come by themselves from
+    /// the campfire (people.rs); the AI only makes sure enough are free.
+    /// Returns the plan's next project, whose slots the army leaves free.
+    fn ai_economy(&mut self, style: &Style, c: &mut Census) -> Option<Kind> {
         let me = c.me;
-        // Builders: each is a person, used up at a foundation.
-        // A foundation waiting with no builder anywhere may take the last
-        // free resident.
-        let q = self.ents[cap].queue.len();
-        let waiting = c.builders.is_empty() && c.unfinished.iter().any(|&b| self.builders_missing(b) > 0);
-        let keep = if waiting { 0 } else { KEEP_FREE };
-        if c.builders.len() + q < style.builders && q < 1 && c.spare > keep && self.queue_unit(cap as u32, Kind::Builder).is_ok() {
-            c.spare -= 1;
-        }
         // Everyone at work and nobody free to crew a new producer: tear
         // down one that makes what nobody uses.
         if c.spare == 0 {
@@ -191,7 +176,7 @@ impl Game {
         let busy = c.unfinished.iter().any(|&b| self.builders_missing(b) > 0) || c.unfinished.len() >= 2;
         let p = self.players[me as usize];
         // Beds ahead of people: grow before the houses are full.
-        let tight = p.residents + p.units + p.arriving + 2 >= p.beds;
+        let tight = p.people + 2 >= p.beds;
         // Beds and the plan take turns, so neither starves the other.
         let mut acted = busy;
         let plan_turn = self.ais[me as usize].last_grew;
@@ -221,12 +206,6 @@ impl Game {
         if next.is_none() || (!acted && plan_turn) {
             self.ais[me as usize].last_grew = false;
         }
-        // Idle builders go to foundations that still need them.
-        for id in std::mem::take(&mut c.idle) {
-            if let Some(b) = c.unfinished.iter().copied().find(|&b| self.builders_missing(b) > 0) {
-                self.order_build(id, b);
-            }
-        }
         next
     }
 
@@ -242,7 +221,10 @@ impl Game {
     fn ai_grow(&mut self, c: &mut Census) -> Step {
         let p = self.players[c.me as usize];
         if FOODS.iter().any(|&r| p.spare(r) > 0) {
-            return self.ai_project(Kind::Hut, c, true);
+            let step = self.ai_project(Kind::Hut, c, true);
+            if step != Step::Blocked {
+                return step;
+            }
         }
         let mut by_supply = FOODS.to_vec();
         by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
@@ -288,9 +270,10 @@ impl Game {
         if self.short_of(me, what).is_some() {
             return Step::Blocked; // short of something nothing makes yet
         }
-        let crew = what.stats().workers as u32;
+        // Its builders and its crew, and some free workers kept back.
+        let st = what.stats();
         let keep = if for_beds { 0 } else { KEEP_FREE };
-        if crew > 0 && c.spare < crew + keep {
+        if c.spare < st.builders as u32 + st.workers as u32 + keep {
             return Step::Waiting;
         }
         if !self.ai_place(what, c) {
@@ -320,28 +303,26 @@ impl Game {
                 // ties, so both multiplayer copies pick the same deposit.
                 near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
                 // Every other tile: neighbours share most of their spots.
-                near.iter().step_by(2).take(150).find_map(|&(_, i)| {
+                near.iter().step_by(2).take(400).find_map(|&(_, i)| {
                     let (x, y) = self.deps[i].center();
                     self.find_spot(me, kind, x, y, 1, 3)
                 })
             }
             Some(_) => self.find_spot(me, kind, bx, by, 3, 24),
-            None => self.find_spot(me, kind, bx, by, 5, 24),
+            // Further out as the town fills up.
+            None => self.find_spot(me, kind, bx, by, 5, 36),
         };
         let Some((tx, ty)) = spot else { return false };
-        let n = kind.stats().builders as usize;
-        let builders: Vec<u32> = (0..n).filter_map(|_| c.idle.pop()).collect();
-        match self.place(me, kind, tx, ty, &builders) {
+        // Builders come from the campfire by themselves.
+        match self.place(me, kind, tx, ty, &[]) {
             Ok(id) => {
-                c.spare = c.spare.saturating_sub(kind.stats().workers as u32);
+                let st = kind.stats();
+                c.spare = c.spare.saturating_sub(st.workers as u32 + st.builders as u32);
                 c.unfinished.push(id);
                 c.have[kind as usize] += 1;
                 true
             }
-            Err(_) => {
-                c.idle.extend(builders);
-                false
-            }
+            Err(_) => false,
         }
     }
 
@@ -386,7 +367,7 @@ impl Game {
         let mut army = c.army.len() + queued;
         for b in producers {
             let pl = self.players[me as usize];
-            let people = (pl.residents + pl.units) as f32;
+            let people = pl.people as f32;
             if c.spare <= crew || army as f32 >= people * style.army_share {
                 break;
             }
@@ -461,7 +442,7 @@ impl Game {
         // Attack in waves that grow over time, but never beyond what our
         // people can field.
         let p = &self.players[me as usize];
-        let most = ((p.residents + p.units) as f32 * STYLES[diff.min(2) as usize].army_share * 0.8) as usize;
+        let most = (p.people as f32 * STYLES[diff.min(2) as usize].army_share * 0.8) as usize;
         let wave = self.ais[me as usize].wave_size.min(most.max(4));
         if self.time >= self.ais[me as usize].next_attack && c.army.len() >= wave {
             if let Some((tx, ty)) = self.target_for(me, bx, by) {

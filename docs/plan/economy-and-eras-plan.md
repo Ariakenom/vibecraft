@@ -263,6 +263,27 @@ plays out, and Patrik has played it. Merge to `main`.
 
 ---
 
+## Playtest round (October 22): people are units
+
+**Status: done and merged to `main`.** From Patrik's playtest notes:
+- Resource chips show what's **left** (free − held by houses) over supply;
+  the people chip shows free / everyone.
+- Houses show *Has* and *Wants* in their panel, and a floating icon above
+  each house of the cheapest good it is missing.
+- **People are units** (`src/people.rs`): `Kind::Worker` replaces Builder
+  and Arrival. Residents are gone; newcomers spawn at the campfire, free =
+  idle workers in its circle. Workers stand at producers (crew counted
+  within 1 tile) and can be killed. Moving them pauses the producer
+  (`hiring = false`, command 10 resumes). Training takes a worker who
+  walks into the building (`recruits`).
+- Growth kept but scaled with beds (`growth_interval`), see the design doc
+  for why instant refill would make losses free.
+- Tests moved to `src/sim_tests.rs` (24). Save `VERSION` 6, `NET.PROTOCOL` 11.
+- Some AI-vs-AI seeds now raid each other for over 100 minutes without an
+  end; the end-to-end test uses seeds that finish.
+
+---
+
 ## Phase 4: House tiers, eras, chains and the Medieval era
 
 **Goal:** the era engine, proven with one era of content.

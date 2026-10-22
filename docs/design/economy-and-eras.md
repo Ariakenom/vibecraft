@@ -57,44 +57,60 @@ goods have chains (wood → furniture; iron + coal → steel).
 
 ### People
 
-People are not entities while they are at home. Each house has a number of
-**residents**. Units are drawn from them.
+Since the October 2026 playtest, **everyone is a unit you can see.** A
+person is a **Worker** (or a soldier trained from one). Houses only count
+beds; nobody sits inside them.
 
 - **Houses** give beds. A house's **capacity** is 2 beds for each different
   house good it receives (see *House goods*). Total beds = the sum over all
-  houses.
-- **Units hold a bed while alive.** Residents at home + units ≤ total beds.
-- **Arrivals.** While there's a free bed, a new person arrives at the
-  Capitol every *10 s (first guess)*, doing something era-appropriate (on
-  foot by a campfire, by cart, by stagecoach, by train, by bus, by car), and
-  walks to the nearest house with a free bed. On arrival they become a
-  resident. This is the only way population grows.
-- **Training** a unit takes one resident from the nearest house at once
-  (it walks out later, as an immersion task). Cancelling returns them.
+  houses. Everyone alive holds a bed: workers + soldiers ≤ beds.
+- **The campfire.** Each Capitol has a campfire in front of it with a
+  marked circle around it (radius 3) where nothing can be built. Newcomers
+  appear there, and workers with nothing to do go back there. **A worker
+  standing idle in the circle is free**: the top bar's people chip counts
+  them. So the number of free people is something you see, not a figure.
+- **Growth.** While there's a free bed, a newcomer appears at the campfire
+  every `40 / (4 + beds/4)` seconds: 10 s for a starting town, about 5 s at
+  48 beds. It is the only way population grows.
+- **Training.** Ordering a soldier sends the nearest free worker into the
+  training building; training only runs while a recruit is inside. No free
+  worker, no order. Cancelling sends the recruit back out as a worker.
 - **Death** frees the bed. Someone new has to arrive to fill it, which is
   the real cost of losses.
+- **Too few beds** (a house lost its food): free workers leave first, then
+  workers at producers of things other than house goods, then anyone.
+  Soldiers never leave.
+
+**Why growth is not instant.** The playtest asked whether visible workers
+make the slow growth unnecessary. They don't: a lost worker gives back his
+slots and bed, so if beds refilled at once, killing workers would cost
+nothing, and raids would be pointless again, which is exactly what the
+visible workers are meant to fix. Growth now speeds up with the size of the
+town instead, so a big city recovers in a reasonable time while a raid
+still hurts.
 
 ### Workers
 
-Producers need **workers**, counted from residents at home (no walking
-workers for now; visible workers are a later immersion task).
-
-- Each producer lists how many workers it needs (*1–4, first guess*).
-- Every second, workers are handed out to producers in a fixed order (see
-  *Resolution order*). A producer without its full crew makes nothing.
-- This is what makes an army cost the economy: every soldier is a resident
+- Each producer needs a number of **workers** (*1–4, first guess*). They
+  walk there and stand at the building; a producer makes its output only
+  while its full crew is within 1 tile of it. Free workers are sent out by
+  themselves: foundations and training first, then producers, house-good
+  producers first.
+- **Workers can be killed** where they work, so raiding a farm stops it
+  until new workers walk over. Defending your workers matters.
+- **Pausing.** Ordering a worker away from a producer pauses it: it hires
+  nobody and makes nothing, but its inputs (other than workers) stay
+  taken. Resume it from its panel (Z) or by right-clicking it with workers.
+- This is what makes an army cost the economy: every soldier is a worker
   who isn't working.
 
 ### Builders
 
-- The Capitol trains **Builders**. A Builder costs one resident, like any
-  unit.
-- Placing a building lays a foundation and takes its slot cost. Builders
-  you send walk to it. Each building needs a number of builders (1 for most,
-  3 for big ones, *first guess*). When enough have arrived, they are
-  **consumed** and the building rises over its build time by itself.
-- Extra builders go idle. Builders can be killed on the way, so escorting
-  them matters. This is deliberate micro.
+- A foundation needs a number of workers (1 for most, 3 for big ones,
+  *first guess*). Free workers are sent by themselves, or you send them.
+  When enough have arrived, they are **used up** and the building rises
+  over its build time by itself.
+- Workers can be killed on the way, so escorting them matters.
 - Repair: not in the first version.
 
 ### House goods
@@ -229,7 +245,7 @@ buildings. Newer units have better numbers within their class.
 | Modern | Infantry (steel, explosives) | | Tank (steel ×2, oil, explosives) | | Fighter (aluminum, oil); Bomber (aluminum ×2, oil, explosives ×2) |
 | Atomic | | | | Rocket artillery (steel ×2, oil, explosives ×2) | Jet (aluminum ×2, oil ×2) |
 
-Plus the **Builder** (Capitol, all eras) and the **Nuke**, launched from a
+Plus the **Worker** (not trained; newcomers appear at the campfire) and the **Nuke**, launched from a
 Missile silo (uranium ×2, explosives ×2), as the Atomic era's big moment.
 Every unit also costs one resident. About 21 units in all.
 
@@ -264,8 +280,8 @@ number of slots, and its fate is decided later.
 ## Start of a game (first guess)
 
 Capitol (makes 4 wood, 2 stone, 2 grain and 2 fruit by itself, no
-workers), 2 huts, 6 residents, 2 Builders. The two foods give each hut 4
-beds: 8 for 6 residents and 2 builders. Enough to place a lumber camp, a
+workers), 2 huts and 8 workers at the campfire. The two foods give each hut
+4 beds: 8 for 8 workers. Enough to place a lumber camp, a
 farm and a third hut straight away.
 
 ## What it should feel like

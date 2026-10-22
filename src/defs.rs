@@ -124,13 +124,12 @@ impl Dep {
 /// too, so renumbering means bumping the save `VERSION`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
-    Builder = 0,
+    /// A person who isn't a soldier: works at producers, builds (and is used
+    /// up doing it), or stands free at the campfire (see people.rs).
+    Worker = 0,
     Spearman = 1,
     Archer = 2,
     Horseman = 3,
-    /// A newcomer walking from the Capitol to a house with a free bed. Not
-    /// a unit you command: on arrival they become a resident and vanish.
-    Arrival = 4,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -201,8 +200,7 @@ use Res::*;
 // Units. Every number here is a first guess, to be tuned in play. Every
 // unit also takes one resident from a house (see `Game::queue_unit`).
 //                                    hp   atk  range  cd   speed sight cost          time
-static BUILDER: Stats = unit(45.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
-static ARRIVAL: Stats = unit(30.0, 0.0, 0.0, 1.0, 2.0, 3.0, &[], 0.0);
+static WORKER: Stats = unit(45.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
 static SPEARMAN: Stats = unit(95.0, 8.0, 0.4, 1.5, 2.1, 6.0, &[(Wood, 1)], 15.0);
 static ARCHER: Stats = unit(55.0, 6.0, 5.5, 1.8, 2.1, 8.0, &[(Wood, 1)], 16.0);
 static HORSEMAN: Stats = unit(120.0, 9.0, 0.4, 1.6, 3.6, 7.0, &[(Horses, 1)], 20.0);
@@ -236,9 +234,13 @@ static WONDER: Stats = Stats { builders: 3, ..building(4000.0, 8.0, &[(Wood, 8),
 /// fraction of their maximum health every second. 0 turns it off.
 pub const UNSUPPLIED_DAMAGE: f32 = 0.01;
 
-/// Seconds between newcomers arriving at a player's Capitol, while there's a
-/// free bed somewhere.
-pub const ARRIVAL_INTERVAL: f32 = 10.0;
+/// Seconds between newcomers arriving at a player's campfire, while there's
+/// a free bed. A bigger town grows faster: 6.7 s with 8 beds, 2.9 s with
+/// 40, 1.7 s with 80. Losses are felt (a lost army takes a while to come
+/// back) without crippling anyone.
+pub fn growth_interval(beds: u32) -> f32 {
+    40.0 / (4.0 + beds as f32 / 4.0)
+}
 /// Beds a house gives for each different good it gets.
 pub const BEDS_PER_GOOD: u8 = 2;
 /// How many different goods a house of this tier can use (3 for a hut).
@@ -249,9 +251,9 @@ pub fn house_max_goods(tier: u8) -> u8 {
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 19] = {
+    pub const ALL: [Kind; 18] = {
         use Kind::*;
-        [Builder, Spearman, Archer, Horseman, Arrival, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
+        [Worker, Spearman, Archer, Horseman, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, Wonder]
     };
 
     /// Convert a number from JavaScript into a `Kind`. Returns `None` for junk,
@@ -263,8 +265,7 @@ impl Kind {
     pub fn stats(self) -> &'static Stats {
         use Kind::*;
         match self {
-            Builder => &BUILDER,
-            Arrival => &ARRIVAL,
+            Worker => &WORKER,
             Spearman => &SPEARMAN,
             Archer => &ARCHER,
             Horseman => &HORSEMAN,
@@ -329,15 +330,14 @@ impl Kind {
         }
     }
 
-    /// A unit that holds a bed: everything that walks except arrivals.
+    /// A unit that holds a bed: everything that walks.
     pub fn holds_bed(self) -> bool {
-        !self.is_building() && self != Kind::Arrival
+        !self.is_building()
     }
 
     /// Which units this building can train. A slice of a static array.
     pub fn trains(self) -> &'static [Kind] {
         match self {
-            Kind::Capitol => &[Kind::Builder],
             Kind::Barracks => &[Kind::Spearman],
             Kind::Range => &[Kind::Archer],
             Kind::Stable => &[Kind::Horseman],
@@ -353,7 +353,7 @@ impl Kind {
     pub fn radius(self) -> f32 {
         match self {
             Kind::Horseman => 0.42,
-            Kind::Builder | Kind::Arrival => 0.28,
+            Kind::Worker => 0.28,
             _ => 0.32,
         }
     }
