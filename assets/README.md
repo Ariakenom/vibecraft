@@ -35,9 +35,12 @@ conventions, which the game relies on:
   `Bakery`, `Weaver`, `Brewery`, `SiegeWorkshop`, `IronOre`, `ClayPit`,
   `Sheep`, `Swordsman`, `Crossbowman`, `Knight`, `Trebuchet`; Gunpowder:
   `Townhouse`, `SaltpeterWorks`, `PowderMill`, `Carpenter`, `Printer`,
-  `Circus`, `Saltpeter`, `Musketeer`, `Dragoon`, `Cannon`. (The Trebuchet
-  and the Cannon have no skeleton: no bone pivots, so the game rolls them
-  whole and moves their tool, the arm or the barrel.) The object's own location doesn't matter.
+  `Circus`, `Saltpeter`, `Musketeer`, `Dragoon`, `Cannon`; Industrial:
+  `Tenement`, `CoalMine`, `SteelMill`, `ExplosivesWorks`, `Cannery`,
+  `CoalYard`, `Press`, `Factory`, `CoalSeam`, `Rifleman`, `MachineGunner`,
+  `FieldGun`. (The Trebuchet, the Cannon and the Field Gun have no
+  skeleton: no bone pivots, so the game rolls them whole and moves their
+  tool, the arm or the barrel.) The object's own location doesn't matter.
 - **Units** face +X with their feet at the ground. The weapon or tool is a
   child object named `<Unit>.tool`, with its origin in the hand that holds
   it (the right hand, or the left for the Archer's bow).

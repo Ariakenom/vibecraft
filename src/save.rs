@@ -29,7 +29,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 6: people are units (workers, the campfire, recruits); no residents.
 /// 7: the Medieval era (new kinds, deposits for iron, clay and sheep).
 /// 8: the Gunpowder era.
-const VERSION: u32 = 8;
+/// 9: the Industrial era.
+const VERSION: u32 = 9;
 
 // ---------------------------------------------------------------------------
 // Writer

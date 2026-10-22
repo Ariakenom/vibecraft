@@ -8,15 +8,18 @@ const PROJ_STRIDE = 10; // x, y, px, py, loosed from x, y, shooter kind, at a bu
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
-const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11,
+const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Wonder: 76, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
-  Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91 };
+  Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91,
+  Tenement: 92, CoalMine: 93, SteelMill: 94, ExplosivesWorks: 95, Cannery: 96, CoalYard: 97, Press: 98, Factory: 99 };
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
-const isGun = k => k === K.Musketeer || k === K.Dragoon || k === K.Cannon;
+const isGun = k => k === K.Musketeer || k === K.Dragoon || k === K.Cannon || k === K.Rifleman || k === K.MachineGunner || k === K.FieldGun;
+// Big guns: a boom, a big puff, a shell you can see.
+const isBigGun = k => k === K.Cannon || k === K.FieldGun;
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
@@ -26,12 +29,16 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "Siege Workshop",
   [K.Musketeer]: "Musketeer", [K.Dragoon]: "Dragoon", [K.Cannon]: "Cannon",
   [K.Townhouse]: "Townhouse", [K.SaltpeterWorks]: "Saltpeter Works", [K.PowderMill]: "Powder Mill", [K.Carpenter]: "Carpenter",
-  [K.Printer]: "Printer", [K.Circus]: "Circus" };
+  [K.Printer]: "Printer", [K.Circus]: "Circus",
+  [K.Rifleman]: "Rifleman", [K.MachineGunner]: "Machine Gunner", [K.FieldGun]: "Field Gun",
+  [K.Tenement]: "Tenement", [K.CoalMine]: "Coal Mine", [K.SteelMill]: "Steel Mill", [K.ExplosivesWorks]: "Explosives Works",
+  [K.Cannery]: "Cannery", [K.CoalYard]: "Coal Yard", [K.Press]: "Press", [K.Factory]: "Factory" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and is used up doing it), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, it becomes a Cottage by itself if 1 more wood and 1 stone are free.",
   [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut. Full, with 5 goods, it becomes a Townhouse (from the Medieval era) if 1 more stone and 2 brick are free.",
-  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Below 5 goods it falls back to a cottage.",
+  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Below 5 goods it falls back to a cottage. Full, with 7 goods, it becomes a Tenement (from the Gunpowder era) if 1 more brick and 1 steel are free.",
+  [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (18 people). Ten bring the Industrial era. Below 7 goods it falls back to a townhouse.",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Swordsman]: "Armoured infantry. Like spearmen, deadly to riders, but tougher and harder-hitting. Costs iron.",
   [K.Crossbowman]: "Shoots further and harder than an archer. Strong against infantry, weak against riders. Costs iron.",
@@ -40,11 +47,14 @@ const DESC = {
   [K.Musketeer]: "Line infantry with muskets: shoots, and its bayonet keeps riders off. Costs iron and gunpowder.",
   [K.Dragoon]: "Fast riders who shoot from the saddle. Run down archers and crossbowmen. Costs horses and gunpowder.",
   [K.Cannon]: "Outranges every tower and trebuchet, and brings walls down. Slow, and poor against people.",
+  [K.Rifleman]: "Line infantry with a rifle: long reach, steady fire, and keeps riders off. Costs steel and gunpowder.",
+  [K.MachineGunner]: "Sprays fire at infantry. Strong against foot soldiers, weak against riders. Costs steel and two gunpowder.",
+  [K.FieldGun]: "Horse-drawn artillery firing shells. The longest reach of all; flattens buildings. Costs steel, explosives and a horse.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
   [K.Capitol]: "Your seat of power. Lose it and you lose the game.",
-  [K.Barracks]: "Trains spearmen, swordsmen from the Medieval era and musketeers from the Gunpowder era.",
-  [K.Range]: "Trains archers, and crossbowmen from the Medieval era.",
+  [K.Barracks]: "Trains spearmen; swordsmen, musketeers and riflemen as the eras come.",
+  [K.Range]: "Trains archers; crossbowmen from the Medieval era and machine gunners from the Industrial.",
   [K.Stable]: "Trains horsemen, knights from the Medieval era and dragoons from the Gunpowder era.",
   [K.Tower]: "Shoots at enemies in range.",
   [K.Farm]: "Grows grain anywhere on open ground.",
@@ -67,6 +77,13 @@ const DESC = {
   [K.Carpenter]: "Makes furniture from wood, for townhouses.",
   [K.Printer]: "Prints books (on paper made from wood), for townhouses.",
   [K.Circus]: "Puts on shows for four houses. Costly, and it holds two horses while it stands.",
+  [K.CoalMine]: "Digs coal from the seam next to it.",
+  [K.SteelMill]: "Makes steel from iron and coal. Steel builds tenements, factories and the modern army.",
+  [K.ExplosivesWorks]: "Makes explosives from nitrate and coal: shells for field guns.",
+  [K.Cannery]: "Cans fish and meat: canned food for tenements.",
+  [K.CoalYard]: "Sells coal for heating, for tenements.",
+  [K.Press]: "Prints newspapers, for tenements.",
+  [K.Factory]: "Builds field guns.",
 };
 // The six eras, and the house each brings. Which kinds and resources
 // belong to which era comes from Rust (kind_era, res_era); so do the
@@ -79,7 +96,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
@@ -91,14 +108,15 @@ const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
 const BUILD_MENU = [[K.Hut, "Q"], [K.Farm, "E"], [K.LumberCamp, "R"], [K.Quarry, "T"], [K.FishingHut, "Y"], [K.HuntingLodge, "U"], [K.Orchard, "I"],
   [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"], [K.Wonder, "B"],
   [K.SheepFarm, "J"], [K.Weaver, "⇧J"], [K.IronMine, "L"], [K.Brickworks, "N"], [K.Bakery, "⇧E"], [K.Brewery, "⇧N"], [K.SiegeWorkshop, "⇧F"],
-  [K.SaltpeterWorks, "⇧T"], [K.PowderMill, "⇧U"], [K.Carpenter, "⇧R"], [K.Printer, "⇧Y"], [K.Circus, "⇧C"]];
+  [K.SaltpeterWorks, "⇧T"], [K.PowderMill, "⇧U"], [K.Carpenter, "⇧R"], [K.Printer, "⇧Y"], [K.Circus, "⇧C"],
+  [K.CoalMine, "⇧L"], [K.SteelMill, "⇧O"], [K.ExplosivesWorks, "⇧V"], [K.Cannery, "⇧I"], [K.CoalYard, "⇧Q"], [K.Press, "⇧G"], [K.Factory, "⇧B"]];
 function buildMenu() {
   const soon = W.era_progress(0) > 0;
   return BUILD_MENU.filter(([k]) => W.kind_era(k) <= W.era() || (soon && W.kind_era(k) === W.era() + 1));
 }
 const TRAIN_KEYS = "QERT";
-const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer], [K.Range]: [K.Archer, K.Crossbowman], [K.Stable]: [K.Horseman, K.Knight, K.Dragoon],
-  [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon] };
+const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
+  [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -122,6 +140,13 @@ const RES_ICON = [
   '<svg viewBox="0 0 16 16"><path d="M3 3h10v6H3z" fill="#9a6a3c"/><path d="M2 9h12v2.5H2z" fill="#7d5631"/><path d="M3 11.5h1.5V15H3zM11.5 11.5H13V15h-1.5z" fill="#5e3f22"/><path d="M4.5 4.5h7v3h-7z" fill="#b9854e"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M2 3.5c2-1 4-1 6 .5v10c-2-1.5-4-1.5-6-.5z" fill="#8a3a2a"/><path d="M14 3.5c-2-1-4-1-6 .5v10c2-1.5 4-1.5 6-.5z" fill="#a8452e"/><path d="M3 5c1.5-.6 3-.6 4.2.4M3 7c1.5-.6 3-.6 4.2.4" stroke="#e9d9b8" stroke-width=".6" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M8 1l6.5 6H1.5z" fill="#c8453a"/><path d="M8 1l3 6H5z" fill="#efe6d1"/><path d="M2.5 7h11v7h-11z" fill="#e8d9b0"/><path d="M6.5 14v-4c0-1 .7-1.5 1.5-1.5s1.5.5 1.5 1.5v4z" fill="#3a2c20"/><path d="M8 1V0" stroke="#d2a33a"/></svg>',
+  // coal, steel, explosives, canned food, heating, newspapers
+  '<svg viewBox="0 0 16 16"><path d="M2 12l2-5 4-2 3 2 3 4-2 3H4z" fill="#26262a"/><path d="M4 7l4-2 3 2-3 1.5z" fill="#4a4a52"/><path d="M9 10l2-1" stroke="#5c5c66"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M1.5 10h13v3.5h-13z" fill="#5b6470"/><path d="M1.5 10l2-3h13l-2 3z" fill="#9aa4b2"/><path d="M14.5 10l2-3v3.5l-2 3z" fill="#47505b"/><path d="M4 8.5h8" stroke="#d3dae2" stroke-width=".7"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M5 4h6v10.5H5z" fill="#c8453a"/><path d="M5 6.5h6M5 12h6" stroke="#f0e2b8" stroke-width=".8"/><path d="M8 4V2.5c0-.8 1-1.4 2-1" stroke="#7a6a50" fill="none"/><path d="M10.5 1.2l1 .5-.6.8z" fill="#f4c542"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M3.5 4.5h9v9.5h-9z" fill="#b9c2cc"/><ellipse cx="8" cy="4.5" rx="4.5" ry="1.4" fill="#dfe5eb"/><path d="M3.5 7.5h9v4h-9z" fill="#c8453a"/><path d="M6 9.5h4" stroke="#f0e2b8"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M8 14.5c-3 0-4.5-2-4.5-4.3 0-2.6 2.2-3.7 2.6-6.7 1.4 1 2 2.4 1.9 3.6.9-.6 1.4-1.6 1.4-2.8 2 1.6 3.1 3.6 3.1 5.9 0 2.3-1.5 4.3-4.5 4.3z" fill="#e8742c"/><path d="M8 14.5c-1.4 0-2.2-1-2.2-2.2 0-1.4 1.2-2.2 1.5-3.6.8.7 1 1.5 1 2.1.6-.3.9-.9 1-1.6 1 .9 1.1 1.9 1.1 3.1 0 1.2-.8 2.2-2.4 2.2z" fill="#f6c84a"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M2 3h10.5v11H3.5C2.7 14 2 13.3 2 12.5z" fill="#ece6d6"/><path d="M12.5 5H14v7.5c0 .8-.7 1.5-1.5 1.5z" fill="#c9c2b0"/><path d="M3.5 4.5h7.5v2.5H3.5z" fill="#3a3a3a"/><path d="M3.5 8.5h3.5M3.5 10h3.5M3.5 11.5h3.5M8 8.5h3M8 10h3M8 11.5h3" stroke="#8a8478" stroke-width=".7"/></svg>',
 ];
 const resIcon = r => RES_ICON[r] || `<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="#6d6455"/><text x="8" y="11" text-anchor="middle" font-size="8" fill="#efe6d1" font-family="sans-serif">${RES_NAMES[r][0].toUpperCase()}</text></svg>`;
 
@@ -456,7 +481,7 @@ function drawMinimap() {
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
   // Then iron ore, clay and sheep hills (5, water, has no dots).
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8"], dot = Math.max(1.5, s);
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
@@ -644,7 +669,7 @@ function techCard(k) {
   const trainers = Object.keys(TRAINS).map(Number).filter(b => TRAINS[b].includes(k));
   const built = bld ? W.has_built(k) : false, open = bld ? W.unlocked(k) : trainers.some(b => W.has_built(b)) && W.kind_era(k) <= W.era();
   // Houses past the first grow from the one below; nobody builds them.
-  const grows = { [K.Cottage]: K.Hut, [K.Townhouse]: K.Cottage }[k];
+  const grows = { [K.Cottage]: K.Hut, [K.Townhouse]: K.Cottage, [K.Tenement]: K.Townhouse }[k];
   card.className = "tcard " + (built ? "built" : open ? "open" : "locked");
   card.append(iconEl(k, ME, 40));
   const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
@@ -866,7 +891,8 @@ function houseWants(k, goods) {
 function houseTierLine(k, goods, residents, beds) {
   const tier = stat(k, 10), n = popcount(goods), max = W.house_max_goods(tier);
   // Each tier: what it falls back to below, and what it grows into.
-  const TIERS = { [K.Hut]: [null, 0, K.Cottage, "1 wood and 1 stone"], [K.Cottage]: [K.Hut, 3, K.Townhouse, "1 stone and 2 brick"], [K.Townhouse]: [K.Cottage, 5, null, ""] };
+  const TIERS = { [K.Hut]: [null, 0, K.Cottage, "1 wood and 1 stone"], [K.Cottage]: [K.Hut, 3, K.Townhouse, "1 stone and 2 brick"],
+    [K.Townhouse]: [K.Cottage, 5, K.Tenement, "1 brick and 1 steel"], [K.Tenement]: [K.Townhouse, 7, null, ""] };
   const t = TIERS[k];
   if (!t) return "";
   const [down, keep, up, mats] = t;
@@ -1275,7 +1301,7 @@ function handleEvents() {
         break; }
       case EV.Melee: Sfx.at("melee", x, y, 45, d); break;
       case EV.Shoot:
-        if (isGun(d)) { Sfx.at(d === K.Cannon ? "cannon" : "musket", x, y, 40); gunSmoke(x, y, d); }
+        if (isGun(d)) { Sfx.at(isBigGun(d) ? "cannon" : d === K.MachineGunner ? "mg" : "musket", x, y, 40); gunSmoke(x, y, d); }
         else Sfx.at("bow", x, y, 60, isBld(d));
         break;
       case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;

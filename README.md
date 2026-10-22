@@ -454,8 +454,8 @@ versions don't play together.
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
-  `docs/plan/economy-and-eras-plan.md`); so far there are three: Ancient,
-  Medieval and Gunpowder.
+  `docs/plan/economy-and-eras-plan.md`); so far there are four: Ancient,
+  Medieval, Gunpowder and Industrial.
 - **Resources are slots.** Nothing is gathered or stockpiled:
   producers make slots (a lumber camp by a forest makes 4 wood), and
   everything you have holds some while it exists, giving them back when
@@ -479,6 +479,10 @@ versions don't play together.
   Ten townhouses (full cottages with five goods, grown with brick) bring
   the Gunpowder era: saltpeter works and powder mills, carpenters,
   printers and the circus; musketeers, dragoons and cannon.
+  Ten tenements (full townhouses with seven goods, grown with steel) bring
+  the Industrial era: coal mines, steel mills, explosives works,
+  canneries, coal yards, presses and factories; riflemen, machine gunners
+  and field guns.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
@@ -494,9 +498,11 @@ versions don't play together.
   V tower, B wonder. Medieval: J sheep farm, Shift+J weaver, L iron mine,
   N brickworks, Shift+E bakery, Shift+N brewery, Shift+F siege workshop.
   Gunpowder: Shift+T saltpeter works, Shift+U powder mill, Shift+R
-  carpenter, Shift+Y printer, Shift+C circus.
+  carpenter, Shift+Y printer, Shift+C circus. Industrial: Shift+L coal
+  mine, Shift+O steel mill, Shift+V explosives works, Shift+I cannery,
+  Shift+Q coal yard, Shift+G press, Shift+B factory.
   Del (twice) demolishes the selected buildings.
-- **Train:** Q, E, R for the first, second and third unit a building trains.
+- **Train:** Q, E, R, T for the units a building trains, oldest first.
 - **Other keys:**
   - Z attack-move, X stop
   - H home, `.` free workers (at the campfire)

@@ -634,3 +634,60 @@ fn ai_stats() {
     }
     println!("after {minutes} min: {medieval} of {n} players Medieval, {} people on average, {ended} of 12 games over", people / n);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6: the Industrial era
+
+#[test]
+fn steel_comes_from_iron_and_coal_and_makes_field_guns_possible() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].era = 3;
+    g.players[1].supply_pct = 300;
+    // Beds for all the crews (people over beds leave, crews too).
+    for _ in 0..4 {
+        let (x, y) = spot(&g, Kind::Hut);
+        g.spawn_building(Kind::Hut, 1, x, y, 1.0);
+    }
+    empty_campfire(&mut g);
+    for k in [Kind::Brickworks, Kind::IronMine, Kind::CoalMine] {
+        build(&mut g, k);
+    }
+    let mill = build(&mut g, Kind::SteelMill);
+    assert!(g.ents[mill as usize].fed, "{}", census(&g, 1));
+    assert!(g.players[1].supply[Res::Steel.idx()] >= 3);
+    // Shells: nitrate and coal. Field guns: steel, shells and a horse.
+    build(&mut g, Kind::SaltpeterWorks);
+    let works = build(&mut g, Kind::ExplosivesWorks);
+    assert!(g.ents[works as usize].fed, "{}", census(&g, 1));
+    build(&mut g, Kind::Pasture);
+    assert!(g.unlocked(1, Kind::Factory));
+    assert_eq!(g.short_of(1, Kind::FieldGun), None, "{}", census(&g, 1));
+    // A tenement holds steel: a townhouse grows into one only from the
+    // Gunpowder era on.
+    assert_eq!(Kind::Townhouse.upgrade(), Some(Kind::Tenement));
+    assert_eq!(Kind::Tenement.house_tier(), Some(3));
+    assert!(Kind::Tenement.stats().cost.iter().any(|&(r, _)| r == Res::Steel));
+}
+
+/// How long a tick takes late in a game, natively: `cargo test --release
+/// tick_cost -- --ignored --nocapture`. (The browser runs the wasm build,
+/// a little slower; `node test/wasm.mjs` measures the start of a game.)
+#[test]
+#[ignore]
+fn tick_cost() {
+    for players in [2u8, 4] {
+        let mut g = Game::new(1234, 1, players);
+        g.set_ai(1, true);
+        run(&mut g, 30.0 * 60.0);
+        let t = std::time::Instant::now();
+        let n = 20 * 60;
+        let mut paths = 0;
+        for _ in 0..n {
+            g.tick();
+            g.events.clear();
+            paths += g.ents.iter().filter(|e| e.alive && !e.path.is_empty()).count();
+        }
+        let units = g.ents.iter().filter(|e| e.alive && !e.is_building()).count();
+        println!("{players} players, {}x{} map, {units} units: {:.3} ms a tick (walking with a path: {} on average)", g.map.w, g.map.h, t.elapsed().as_secs_f64() * 1000.0 / n as f64, paths / n);
+    }
+}

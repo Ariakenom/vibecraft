@@ -375,7 +375,27 @@ unsupplied units are the newest; class counters.
   70 to 95 people in the Medieval era; see open question 5). Hard AIs end
   games by conquest in under 30 minutes.
 
-## Phases 6–8: one era each
+## Phase 6: the Industrial era
+
+**Status: done and merged to `main`** (October 2026).
+- Tenement (tier 3, 9 goods, 18 people): a full townhouse with 7 goods
+  grows into one from the Gunpowder era, if 1 more brick and 1 steel are
+  free. Ten bring the Industrial era (`LAST_ERA` 3).
+- Coal (a seam near every base) → Coal Mine; Steel Mill (iron 2 + coal 2
+  → steel 3, 3 workers, needs an iron mine and a coal mine); Explosives
+  Works (nitrate 2 + coal → explosives 2); Cannery (fish + meat → canned
+  food 3); Coal Yard (coal 2 → heating 3); Press (wood 2 → newspapers 3,
+  needs a printer); Factory (field guns, needs a steel mill).
+- Rifleman (Line: steel + gunpowder), Machine Gunner (Ranged, fast fire:
+  steel + 2 gunpowder), Field Gun (Siege, range 12: steel 2, explosives,
+  a horse). A machine-gun rattle; field guns boom and throw shells.
+- Measured (`tick_cost`, natively, 30 minutes into a game): 0.26 ms a
+  tick with 2 players on 80×80, 0.8 ms with 4 players on 96×96 (266
+  units). Pathfinding is cheap, so a bigger map is affordable; the map
+  size is left as it is until real games say they need room.
+- Save `VERSION` 9, protocol 15.
+
+## Phases 7–8: one era each
 
 Each phase is content on top of the Phase 4 engine: resources, deposits,
 buildings, units, models with fallbacks, sounds, AI plan entries and the
@@ -383,7 +403,6 @@ house goods for that tier.
 
 | Phase | Era | New systems beyond content |
 |---|---|---|
-| 6 | Industrial | Steel, explosives, heating. Field guns borrow horses. Measure pathfinding on a bigger map and decide map size. |
 | 7 | Modern | Air units: a flying movement layer that ignores pathing and blocking, and which only some units can hit. Haber–Bosch plant. Oil. |
 | 8 | Atomic | Missile silo and the Nuke: a targeted area attack with a long launch visible to everyone, a flash, and a crater that stays on the map. Reactor. |
 

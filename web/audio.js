@@ -116,6 +116,12 @@ const Sfx = (() => {
       noise(sfxBus, "highpass", jit(1800), 900, 0.7, v * 0.7, p, t, 0.001, 0.08);
       noise(sfxBus, "lowpass", jit(700), 150, 0.8, v * 0.5, p, t + 0.005, 0.003, 0.3);
       tone(sfxBus, "sine", 140, 55, v * 0.35, p, t, 0.001, 0.12); },
+    // A machine gun: a burst of five quick cracks.
+    mg(v, p) { const t = ac.currentTime;
+      for (let k = 0; k < 5; k++) {
+        noise(sfxBus, "highpass", jit(2200), 1200, 0.7, v * 0.45, p, t + k * 0.07, 0.001, 0.045);
+        tone(sfxBus, "sine", 160, 70, v * 0.2, p, t + k * 0.07, 0.001, 0.05);
+      } },
     cannon(v, p) { const t = ac.currentTime;
       tone(sfxBus, "sine", 75, 32, v * 0.9, p, t, 0.002, 0.6);
       noise(sfxBus, "lowpass", 500, 60, 0.7, v * 0.9, p, t, 0.004, 1.2);
