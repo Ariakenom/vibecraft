@@ -1010,7 +1010,7 @@ function houseTierLine(k, goods, residents, beds) {
   const tier = stat(k, 10), n = popcount(goods), max = W.house_max_goods(tier);
   // Each tier: what it falls back to below, and what it grows into.
   const TIERS = { [K.Hut]: [null, 0, K.Cottage, "1 wood and 1 stone"], [K.Cottage]: [K.Hut, 3, K.Townhouse, "1 stone and 2 brick"],
-    [K.Townhouse]: [K.Cottage, 5, K.Tenement, "1 brick and 1 steel"], [K.Tenement]: [K.Townhouse, 7, K.Apartment, "1 more steel"],
+    [K.Townhouse]: [K.Cottage, 5, K.Tenement, "2 more brick"], [K.Tenement]: [K.Townhouse, 7, K.Apartment, "2 steel"],
     [K.Apartment]: [K.Tenement, 9, K.TowerBlock, "1 more steel and 1 aluminum"], [K.TowerBlock]: [K.Apartment, 11, null, ""] };
   const t = TIERS[k];
   if (!t) return "";
@@ -1462,9 +1462,9 @@ function handleEvents() {
         Sfx.ui("nuke");
         nukeFlash(x, y);
         break;
-      case EV.Upgraded: {
+      case EV.Upgraded: { // (the count only when it's the kind of house the next era needs)
         const era = W.era(), got = W.era_progress(0), need = W.era_progress(1);
-        toast(`A house grew into a ${NAMES[d]}` + (era < W.era_progress(2) ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
+        toast(`A house grew into a ${NAMES[d]}` + (era < W.era_progress(2) && stat(d, 10) > era ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
         Sfx.at("hammer", x, y, 90);
         break; }
       case EV.Downgraded: toast(`A house fell back to a ${NAMES[d]}: it lost one of its goods`, "bad"); break;

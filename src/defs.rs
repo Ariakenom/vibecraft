@@ -334,7 +334,9 @@ static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces
 static HUT: Stats = building(300.0, 4.0, &[(Wood, 1)], 12.0, 2);
 static COTTAGE: Stats = building(450.0, 4.0, &[(Wood, 2), (Stone, 1)], 12.0, 2);
 static TOWNHOUSE: Stats = building(650.0, 4.0, &[(Wood, 2), (Stone, 2), (Brick, 2)], 12.0, 2);
-static TENEMENT: Stats = building(900.0, 4.0, &[(Wood, 2), (Stone, 2), (Brick, 3), (Steel, 1)], 12.0, 2);
+// (Each house is made of what the era before it has: tenements, which bring
+// the Industrial era, can't need steel, which only that era makes.)
+static TENEMENT: Stats = building(900.0, 4.0, &[(Wood, 2), (Stone, 2), (Brick, 4)], 12.0, 2);
 static APARTMENT: Stats = building(1200.0, 4.0, &[(Wood, 1), (Stone, 2), (Brick, 3), (Steel, 2)], 12.0, 2);
 static TOWER_BLOCK: Stats = building(1600.0, 4.0, &[(Stone, 2), (Brick, 2), (Steel, 3), (Aluminum, 1)], 12.0, 2);
 static BARRACKS: Stats = building(800.0, 6.0, &[(Wood, 3)], 30.0, 3);
@@ -352,51 +354,53 @@ static FISHING_HUT: Stats = extractor(300.0, &[(Wood, 1)], &[(Fish, 2)], 1, Some
 static HUNTING_LODGE: Stats = extractor(300.0, &[(Wood, 1)], &[(Meat, 2)], 1, Some(Dep::Game), 12.0, 2);
 static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(Dep::Fertile), 12.0, 2);
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
+// From the Medieval era on, every producer makes twice what it first did
+// (playtest: towns needed far too many buildings). Ancient ones as before.
 // Medieval extractors.
-static SHEEP_FARM: Stats = extractor(350.0, &[(Wood, 1)], &[(Wool, 2)], 1, Some(Dep::Hills), 14.0, 3);
-static IRON_MINE: Stats = extractor(500.0, &[(Wood, 2)], &[(Iron, 3)], 2, Some(Dep::Iron), 20.0, 2);
-static BRICKWORKS: Stats = extractor(450.0, &[(Wood, 1), (Stone, 1)], &[(Brick, 3)], 2, Some(Dep::Clay), 18.0, 2);
+static SHEEP_FARM: Stats = extractor(350.0, &[(Wood, 1)], &[(Wool, 4)], 1, Some(Dep::Hills), 14.0, 3);
+static IRON_MINE: Stats = extractor(500.0, &[(Wood, 2)], &[(Iron, 6)], 2, Some(Dep::Iron), 20.0, 2);
+static BRICKWORKS: Stats = extractor(450.0, &[(Wood, 1), (Stone, 1)], &[(Brick, 6)], 2, Some(Dep::Clay), 18.0, 2);
 
 // Converters: they borrow their inputs, as long as they're free.
 //                                  hp     cost                       takes          makes          workers time
-static BAKERY: Stats = converter(400.0, &[(Wood, 1), (Stone, 1)], &[(Grain, 2)], &[(Bread, 2)], 1, 16.0);
-static WEAVER: Stats = converter(350.0, &[(Wood, 2)], &[(Wool, 2)], &[(Clothes, 2)], 1, 16.0);
-static BREWERY: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Grain, 2)], &[(Beer, 2)], 1, 16.0);
+static BAKERY: Stats = converter(400.0, &[(Wood, 1), (Stone, 1)], &[(Grain, 2)], &[(Bread, 4)], 1, 16.0);
+static WEAVER: Stats = converter(350.0, &[(Wood, 2)], &[(Wool, 2)], &[(Clothes, 4)], 1, 16.0);
+static BREWERY: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Grain, 2)], &[(Beer, 4)], 1, 16.0);
 static SIEGE_WORKSHOP: Stats = building(800.0, 6.0, &[(Wood, 3), (Brick, 2)], 35.0, 3);
 
 // Gunpowder.
-static SALTPETER_WORKS: Stats = extractor(400.0, &[(Wood, 1), (Brick, 1)], &[(Nitrate, 3)], 2, Some(Dep::Nitrate), 18.0, 2);
-static POWDER_MILL: Stats = converter(450.0, &[(Wood, 2), (Brick, 1)], &[(Nitrate, 2), (Wood, 1)], &[(Gunpowder, 3)], 2, 20.0);
-static CARPENTER: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Wood, 2)], &[(Furniture, 2)], 1, 16.0);
-static PRINTER: Stats = converter(400.0, &[(Stone, 1), (Brick, 2)], &[(Wood, 2)], &[(Books, 2)], 1, 18.0);
+static SALTPETER_WORKS: Stats = extractor(400.0, &[(Wood, 1), (Brick, 1)], &[(Nitrate, 6)], 2, Some(Dep::Nitrate), 18.0, 2);
+static POWDER_MILL: Stats = converter(450.0, &[(Wood, 2), (Brick, 1)], &[(Nitrate, 2), (Wood, 1)], &[(Gunpowder, 6)], 2, 20.0);
+static CARPENTER: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Wood, 2)], &[(Furniture, 4)], 1, 16.0);
+static PRINTER: Stats = converter(400.0, &[(Stone, 1), (Brick, 2)], &[(Wood, 2)], &[(Books, 4)], 1, 18.0);
 // The circus: costly, and it borrows horses, but four houses get a show.
-static CIRCUS: Stats = Stats { produces: &[(Circus, 4)], consumes: &[(Horses, 2)], workers: 3, ..building(900.0, 5.0, &[(Wood, 4), (Stone, 3), (Brick, 3)], 40.0, 3) };
+static CIRCUS: Stats = Stats { produces: &[(Circus, 8)], consumes: &[(Horses, 2)], workers: 3, ..building(900.0, 5.0, &[(Wood, 4), (Stone, 3), (Brick, 3)], 40.0, 3) };
 
 // Industrial.
-static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 4)], 2, Some(Dep::Coal), 20.0, 2);
-static STEEL_MILL: Stats = Stats { produces: &[(Steel, 3)], consumes: &[(Iron, 2), (Coal, 2)], workers: 3, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
-static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 2)], 2, 25.0);
-static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 3)], 2, 22.0);
-static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 3)], 1, 16.0);
-static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 3)], 2, 22.0);
+static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 8)], 2, Some(Dep::Coal), 20.0, 2);
+static STEEL_MILL: Stats = Stats { produces: &[(Steel, 6)], consumes: &[(Iron, 2), (Coal, 2)], workers: 3, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
+static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 4)], 2, 25.0);
+static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 6)], 2, 22.0);
+static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 6)], 1, 16.0);
+static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 6)], 2, 22.0);
 static FACTORY: Stats = building(1100.0, 6.0, &[(Brick, 4), (Steel, 2)], 40.0, 3);
 
 // Modern. Power plants burn coal; the Haber–Bosch plant makes nitrate
 // from coal and electricity, for players with no saltpeter.
-static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 3)], 2, Some(Dep::Oil), 25.0, 2);
-static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 3)], 2, Some(Dep::Bauxite), 25.0, 2);
-static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 4)], consumes: &[(Coal, 2)], workers: 2, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
-static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 3)], 2, 30.0);
-static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 3)], 2, 25.0);
+static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 6)], 2, Some(Dep::Oil), 25.0, 2);
+static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 6)], 2, Some(Dep::Bauxite), 25.0, 2);
+static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 8)], consumes: &[(Coal, 2)], workers: 2, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
+static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 6)], 2, 30.0);
+static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 6)], 2, 25.0);
 static TANK_WORKS: Stats = building(1300.0, 6.0, &[(Brick, 3), (Steel, 3)], 40.0, 3);
 // A big job: three builders.
 static AIRFIELD: Stats = Stats { builders: 3, ..building(1200.0, 8.0, &[(Brick, 2), (Steel, 2), (Aluminum, 1)], 45.0, 4) };
 
 // Atomic. The reactor makes far more electricity than a coal plant.
-static URANIUM_MINE: Stats = extractor(700.0, &[(Steel, 2), (Brick, 1)], &[(Uranium, 2)], 2, Some(Dep::Uranium), 30.0, 2);
-static REACTOR: Stats = Stats { produces: &[(Electricity, 8)], consumes: &[(Uranium, 1)], workers: 3, builders: 2, ..building(1500.0, 4.0, &[(Steel, 4), (Brick, 3)], 50.0, 3) };
-static CAR_PLANT: Stats = converter(900.0, &[(Steel, 2), (Brick, 2)], &[(Steel, 1), (Oil, 1)], &[(Cars, 3)], 3, 30.0);
-static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum, 1), (Electricity, 1)], &[(Tvs, 3)], 2, 28.0);
+static URANIUM_MINE: Stats = extractor(700.0, &[(Steel, 2), (Brick, 1)], &[(Uranium, 4)], 2, Some(Dep::Uranium), 30.0, 2);
+static REACTOR: Stats = Stats { produces: &[(Electricity, 16)], consumes: &[(Uranium, 1)], workers: 3, builders: 2, ..building(1500.0, 4.0, &[(Steel, 4), (Brick, 3)], 50.0, 3) };
+static CAR_PLANT: Stats = converter(900.0, &[(Steel, 2), (Brick, 2)], &[(Steel, 1), (Oil, 1)], &[(Cars, 6)], 3, 30.0);
+static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum, 1), (Electricity, 1)], &[(Tvs, 6)], 2, 28.0);
 static MISSILE_SILO: Stats = Stats { builders: 2, ..building(1500.0, 6.0, &[(Steel, 4), (Brick, 2)], 60.0, 3) };
 
 /// The nuke: a missile silo arms one (holding these slots while it waits),
