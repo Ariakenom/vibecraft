@@ -612,3 +612,25 @@ fn gunpowder_comes_from_nitrate_and_wood() {
     assert!(!g.ents[mill as usize].fed);
     assert_eq!(g.players[1].supply[Res::Gunpowder.idx()], 0);
 }
+
+/// How Normal AIs fare over many maps: `cargo test --release ai_stats --
+/// --ignored --nocapture`. VC_MINUTES sets the length (45).
+#[test]
+#[ignore]
+fn ai_stats() {
+    let minutes = std::env::var("VC_MINUTES").ok().and_then(|v| v.parse().ok()).unwrap_or(45.0);
+    let (mut medieval, mut people, mut ended, mut n) = (0, 0, 0, 0);
+    for seed in 1..=12 {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        run(&mut g, minutes * 60.0);
+        for p in 1..=2usize {
+            n += 1;
+            medieval += (g.players[p].era >= 1) as u32;
+            people += g.players[p].people;
+        }
+        ended += (g.state != 0) as u32;
+        println!("seed {seed:2}: eras {} {}, people {} {}, ended {}", g.players[1].era, g.players[2].era, g.players[1].people, g.players[2].people, g.state != 0);
+    }
+    println!("after {minutes} min: {medieval} of {n} players Medieval, {} people on average, {ended} of 12 games over", people / n);
+}

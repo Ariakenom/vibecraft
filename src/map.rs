@@ -221,14 +221,16 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
 
     // Hand-placed starting deposits near base 1, copied to every base.
     // (dx, dy, feature, cluster radius)
-    // The Medieval ones (iron, clay, sheep hills) sit a little further out,
+    // Fruit and game are wide enough for a few orchards and lodges: houses
+    // need three different foods to grow into cottages. The Medieval ones
+    // (iron, clay, sheep hills) and saltpeter sit a little further out,
     // clear of the road to the middle.
     let clusters: [(i32, i32, Feat, f32); 9] = [
         (-8, -9, Feat::Tree, 3.4),
-        (6, -6, Feat::Fertile, 1.6),
+        (6, -6, Feat::Fertile, 2.4),
         (9, 4, Feat::Horses, 1.6),
         (-6, 6, Feat::Stone, 1.5),
-        (2, 9, Feat::Game, 1.6),
+        (2, 9, Feat::Game, 2.4),
         (-2, -14, Feat::Iron, 1.5),
         (14, 8, Feat::Clay, 1.5),
         (14, -2, Feat::Hills, 1.6),
@@ -284,6 +286,23 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     }
     for (x, y, f, r) in neutral {
         place(x * w / MAP_W, y * h / MAP_H, f, r);
+    }
+    // A pond by every base, so every start has fish: houses need three
+    // different foods to grow, and the others are few.
+    let pond = (b1.0 - 4, b1.1 + 11);
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let (x, y) = (pond.0 + dx, pond.1 + dy);
+            if (dx * dx + dy * dy) as f32 > 2.6 || x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
+                continue;
+            }
+            for (px, py) in images(x, y) {
+                let i = (py * w + px) as usize;
+                terrain[i] = WATER;
+                shade[i] = shade[i].min(70);
+                feat[i] = Feat::None;
+            }
+        }
     }
     // Clear the town sites themselves.
     for &(bx, by) in &all_bases {

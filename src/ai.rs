@@ -235,8 +235,11 @@ impl Game {
         if c.spare < 3 {
             self.ai_release(c);
         }
-        // One project at a time: wait while a foundation still needs builders.
-        let busy = c.unfinished.iter().any(|&b| self.builders_missing(b) > 0) || c.unfinished.len() >= 2;
+        // One project at a time: wait while a foundation still needs
+        // builders. Far-off ones don't hold the town up: their builders may
+        // be cut down on the way, again and again.
+        let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| (self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 22.0).collect();
+        let busy = near.iter().any(|&b| self.builders_missing(b) > 0) || near.len() >= 2;
         let p = self.players[me as usize];
         // Beds ahead of people: grow before the houses are full.
         let tight = p.people + 2 >= p.beds;
@@ -414,8 +417,13 @@ impl Game {
                 })
             }
             Some(_) => self.find_spot(me, kind, bx, by, 3, 24, &c.reach),
-            // Further out as the town fills up.
-            None => self.find_spot(me, kind, bx, by, 5, 36, &c.reach),
+            // Further out as the town fills up, leaving the ground next to
+            // deposits to the producers that need it (if there's room).
+            None => {
+                let s = kind.stats().size;
+                let clear = |tx: i32, ty: i32| !self.next_to_deposit(tx, ty, s);
+                self.find_spot_where(me, kind, bx, by, 5, 36, &c.reach, &clear).or_else(|| self.find_spot(me, kind, bx, by, 5, 36, &c.reach))
+            }
         };
         let Some((tx, ty)) = spot else { return false };
         // Builders come from the campfire by themselves.
@@ -435,6 +443,21 @@ impl Game {
     /// it, that we have explored and our workers can walk to.
     #[allow(clippy::too_many_arguments)]
     fn find_spot(&self, me: u8, kind: Kind, x: f32, y: f32, rmin: i32, rmax: i32, reach: &[bool]) -> Option<(i32, i32)> {
+        self.find_spot_where(me, kind, x, y, rmin, rmax, reach, &|_, _| true)
+    }
+
+    /// Is any tile around a footprint a deposit other than forest (which
+    /// there's plenty of)?
+    fn next_to_deposit(&self, tx: i32, ty: i32, size: i32) -> bool {
+        let m = &self.map;
+        (ty - 1..=ty + size).any(|y| {
+            (tx - 1..=tx + size).any(|x| m.inside(x, y) && m.dep_at[m.idx(x, y)] >= 0 && self.deps[m.dep_at[m.idx(x, y)] as usize].kind != Dep::Forest)
+        })
+    }
+
+    /// `find_spot`, with an extra test each spot must pass.
+    #[allow(clippy::too_many_arguments)]
+    fn find_spot_where(&self, me: u8, kind: Kind, x: f32, y: f32, rmin: i32, rmax: i32, reach: &[bool], ok: &dyn Fn(i32, i32) -> bool) -> Option<(i32, i32)> {
         let s = kind.stats().size;
         let (cx, cy) = (x as i32 - s / 2, y as i32 - s / 2);
         for r in rmin..=rmax {
@@ -445,7 +468,7 @@ impl Game {
                 let (dx, dy) = ring_point(r, t);
                 let (tx, ty) = (cx + dx, cy + dy);
                 let seen = self.explored_by(me, tx, ty) && self.explored_by(me, tx + s - 1, ty + s - 1);
-                if seen && self.can_place(kind, tx, ty, me, 1) && touches(&self.map, reach, tx, ty, s) {
+                if seen && self.can_place(kind, tx, ty, me, 1) && touches(&self.map, reach, tx, ty, s) && ok(tx, ty) {
                     return Some((tx, ty));
                 }
             }
@@ -474,7 +497,10 @@ impl Game {
         for b in producers {
             let pl = self.players[me as usize];
             let people = pl.people as f32;
-            if c.spare <= crew || army as f32 >= people * style.army_share {
+            // Well short of its army, it takes the next free worker even if
+            // the next project then waits; otherwise the economy goes first.
+            let behind = (army as f32) < people * style.army_share * 0.5;
+            if c.spare == 0 || (!behind && c.spare <= crew) || army as f32 >= people * style.army_share {
                 break;
             }
             let spare = |r: Res| pl.free(r) - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32);

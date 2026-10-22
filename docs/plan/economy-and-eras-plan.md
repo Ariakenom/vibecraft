@@ -406,5 +406,12 @@ markets and trade; deciding the Wonder's fate.
 5. AI endgame: since people are units and houses grow tiers, two Normal
    AIs plateau around 60 to 100 people and raid each other without either
    winning. Options: siege in attack waves, a Medieval Wonder, waves sized
-   by the enemy's army rather than our people, or cheaper wood (lumber
-   camps with 1 worker).
+   by the enemy's army rather than our people, or cheaper wood.
+   Measured with `ai_stats` (12 maps, 45 minutes): 20 of 24 Normal AIs
+   reach the Medieval era, about 70 people each, no game over. Tried and
+   dropped: lumber camps with 1 worker (bigger towns, but fewer reached
+   the Medieval era: 16 of 24). Kept (October 22): every base gets a pond
+   and wider fruit and game, so every start has four foods; the AI keeps
+   the ground next to deposits for producers, doesn't let far-off
+   foundations hold its town up, and takes a free worker for the army
+   when it has under half its share.
