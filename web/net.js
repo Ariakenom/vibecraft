@@ -220,7 +220,7 @@ const Trace = {
     this.cur = this.blank(); this.curAt = now;
     return true;
   },
-  dump() { return JSON.stringify({ trace: 2, protocol: NET.PROTOCOL, tickMs: NET.TICK_MS, ua: navigator.userAgent, info: this.info, samples: this.samples, events: this.events }); },
+  dump() { return JSON.stringify({ trace: 2, protocol: NET.PROTOCOL, version: typeof versionInfo === "function" ? versionInfo() : null, tickMs: NET.TICK_MS, ua: navigator.userAgent, info: this.info, samples: this.samples, events: this.events }); },
 };
 
 

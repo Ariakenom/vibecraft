@@ -531,22 +531,22 @@ fn converters_hold_their_inputs_and_the_newest_stops_first() {
     let mut g = Game::new(5, 1, 2);
     g.players[1].era = 1;
     let supply = |g: &Game, r: Res| g.players[1].supply[r.idx()];
-    // The Capitol's 2 grain feed one bakery: 2 bread.
+    // The Capitol's 2 grain feed one bakery: 4 bread.
     let first = build(&mut g, Kind::Bakery);
     assert!(g.ents[first as usize].fed);
-    assert_eq!((supply(&g, Res::Bread), free(&g, Res::Grain)), (2, 0));
+    assert_eq!((supply(&g, Res::Bread), free(&g, Res::Grain)), (4, 0));
     // A second bakery finds no grain free: it stops, the first goes on.
     let second = build(&mut g, Kind::Bakery);
     assert!(g.ents[first as usize].fed && !g.ents[second as usize].fed);
-    assert_eq!(supply(&g, Res::Bread), 2);
+    assert_eq!(supply(&g, Res::Bread), 4);
     // A farm feeds it too.
     build(&mut g, Kind::Farm);
     assert!(g.ents[second as usize].fed);
-    assert_eq!(supply(&g, Res::Bread), 4);
+    assert_eq!(supply(&g, Res::Bread), 8);
     // Paused, a bakery makes nothing but still holds its grain.
     g.apply(1, Command::Hire { ids: vec![first], on: false }).unwrap();
     g.resolve();
-    assert_eq!(supply(&g, Res::Bread), 2);
+    assert_eq!(supply(&g, Res::Bread), 4);
     assert_eq!(free(&g, Res::Grain), 0);
 }
 
@@ -607,7 +607,7 @@ fn gunpowder_comes_from_nitrate_and_wood() {
     g.players[1].supply_pct = 300;
     build(&mut g, Kind::Brickworks); // the works and the mill are built with brick
     let works = build(&mut g, Kind::SaltpeterWorks);
-    assert_eq!(g.players[1].supply[Res::Nitrate.idx()], 9, "3 nitrate, times 3");
+    assert_eq!(g.players[1].supply[Res::Nitrate.idx()], 18, "6 nitrate, times 3");
     let mill = build(&mut g, Kind::PowderMill);
     assert!(g.ents[mill as usize].fed);
     assert!(g.players[1].supply[Res::Gunpowder.idx()] >= 3);
@@ -671,11 +671,24 @@ fn steel_comes_from_iron_and_coal_and_makes_field_guns_possible() {
     build(&mut g, Kind::Pasture);
     assert!(g.unlocked(1, Kind::Factory));
     assert_eq!(g.short_of(1, Kind::FieldGun), None, "{}", census(&g, 1));
-    // A tenement holds steel: a townhouse grows into one only from the
-    // Gunpowder era on.
     assert_eq!(Kind::Townhouse.upgrade(), Some(Kind::Tenement));
     assert_eq!(Kind::Tenement.house_tier(), Some(3));
-    assert!(Kind::Tenement.stats().cost.iter().any(|&(r, _)| r == Res::Steel));
+    assert!(Kind::Apartment.stats().cost.iter().any(|&(r, _)| r == Res::Steel));
+}
+
+/// The houses that bring an era are grown in the era before it, so they
+/// can only be made of what that era has. (Tenements once needed steel,
+/// which only the Industrial era they bring makes: nobody got there.)
+#[test]
+fn every_house_is_made_of_what_the_era_before_it_has() {
+    let mut house = Some(Kind::Hut);
+    while let Some(k) = house {
+        let tier = k.house_tier().unwrap();
+        for &(r, _) in k.stats().cost {
+            assert!(tier == 0 || r.era() < tier, "{k:?} (brings era {tier}) needs {r:?}, of era {}", r.era());
+        }
+        house = k.upgrade();
+    }
 }
 
 /// How long a tick takes late in a game, natively: `cargo test --release

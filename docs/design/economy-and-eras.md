@@ -47,7 +47,9 @@ barracks stands, you have 1 wood free. If the barracks burns, 4 are free.
   next to a forest makes wood, a pasture on a horse deposit makes horses, an
   oil well on oil makes oil. Deposits never run out.
 - **Converters** borrow input slots and make output slots: a bakery borrows
-  2 grain and makes 2 bread. Converters form the production chains. If its
+  2 grain and makes 4 bread. (From the Medieval era on, every producer makes
+  twice what it first did: playtests needed far too many buildings. Ancient
+  producers are as they were.) Converters form the production chains. If its
   inputs aren't free, a converter stands idle and makes nothing.
 - **Service buildings** make a good from nothing but workers (for example a
   church making *worship*, if we add one). Optional.
@@ -146,7 +148,9 @@ so on. Each good has an era.
 
 - A house **upgrades** one tier when it is full, uses its maximum number of
   goods, and you have free slots for the upgrade's materials (a cottage
-  holds more wood and stone than a hut). Upgrading is automatic; a
+  holds more wood and stone than a hut). A house is made only of what the era
+  before its own has, since that's when it grows: a tenement (which brings
+  the Industrial era) takes more brick, not steel. Upgrading is automatic; a
   per-house toggle to hold it back is a nice-to-have.
 - A house **falls back** a tier when it gets fewer goods than the lower
   tier's maximum (a cottage below 3), and gives the extra materials back.

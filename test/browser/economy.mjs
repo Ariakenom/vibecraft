@@ -42,6 +42,9 @@ const keys = await pg.evaluate(() => {
   return [...$("cmd").querySelectorAll("button")].filter(b => /^Train/.test(b.getAttribute("aria-label"))).every(b => b.dataset.key);
 });
 check(keys, "a barracks and a range selected together: every unit has a hotkey");
+// Replays say which version of the game made them.
+const v = await pg.evaluate(() => { const v = Rec.object("test").version; return [v, v.protocol === NET.PROTOCOL && v.replay === REPLAY_FORMAT]; });
+check(v[1] && /^[0-9a-f]{12}$/.test(v[0].sim) && typeof v[0].base === "string", `replays carry the game's version (${JSON.stringify(v[0])})`);
 // The name box: empty it twice, a new random name each time.
 await pg.evaluate(() => { running = false; $("startScreen").hidden = false; });
 let prev = await pg.evaluate(() => myName);

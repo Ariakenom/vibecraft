@@ -24,6 +24,17 @@
 // All three show the game in OBSERVER MODE: the fog lifted (or seen through
 // one player's eyes), a scoreboard, and no commands.
 
+// This build (filled in by build.sh; null when the page runs unbuilt), and
+// the commit the server says it deployed (fetched at start, live site only).
+const BUILD_INFO = /*BUILD_INFO*/null;
+let deployedCommit = null;
+// (Only where a server writes version.txt: the live site, over https.)
+if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
+// Which version of the game made a replay: compare with `git log` to tell
+// whether today's game would play it the same (`sim` must match for that).
+function versionInfo() {
+  return Object.assign({ protocol: NET.PROTOCOL, replay: REPLAY_FORMAT, deployed: deployedCommit }, BUILD_INFO || { sim: null, base: null });
+}
 // (Format 2: the rules changed, builders stay on and maps are bigger, so
 // older replays would play out differently.)
 const REPLAY_FORMAT = 2, REPLAY_KEY = "vibecraft.replays", REPLAY_MAX = 6;
@@ -83,7 +94,7 @@ const Rec = {
     this.id = randomCode() + Date.now().toString(36);
     this.base = meta.base || 0;
     this.cmds = new Map(); this.keys = []; this.ticks = 0; this.seq = 0;
-    this.meta = Object.assign({ players: W.n_players(), difficulty: W.game_difficulty(), startTime: W.game_time(), me: ME, who: {} }, meta);
+    this.meta = Object.assign({ version: versionInfo(), players: W.n_players(), difficulty: W.game_difficulty(), startTime: W.game_time(), me: ME, who: {} }, meta);
     this.real = false; this.done = false; this.replay = null;
   },
   // A command on tick `k` (the source's count).
@@ -135,7 +146,7 @@ const Rec = {
       format: REPLAY_FORMAT, kind: "replay", id: this.id, saved: Date.now(),
       players: this.meta.players, difficulty: this.meta.difficulty, me: this.meta.me, who: this.meta.who, names: this.meta.names || {},
       mp: !!this.meta.mp, watched: !!this.meta.watched, startTime: this.meta.startTime,
-      ticks: this.ticks, result, log: this.keys.map(k => [k, this.cmds.get(k)]),
+      ticks: this.ticks, result, version: this.meta.version || versionInfo(), log: this.keys.map(k => [k, this.cmds.get(k)]),
     };
   },
   // The page is closing: keep the game as it stands, uncompressed (there's

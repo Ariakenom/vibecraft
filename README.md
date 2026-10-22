@@ -527,7 +527,7 @@ versions don't play together.
   Ten townhouses (full cottages with five goods, grown with brick) bring
   the Gunpowder era: saltpeter works and powder mills, carpenters,
   printers and the circus; musketeers, dragoons and cannon.
-  Ten tenements (full townhouses with seven goods, grown with steel) bring
+  Ten tenements (full townhouses with seven goods, grown with more brick) bring
   the Industrial era: coal mines, steel mills, explosives works,
   canneries, coal yards, presses and factories; riflemen, machine gunners
   and field guns.
@@ -545,6 +545,8 @@ versions don't play together.
   with a red ring on the ground for everyone, then destroys everything
   within 5 tiles, its owner's things too, and leaves a crater nothing can
   cross or build on.
+- **Production:** from the Medieval era on, producers make twice what they
+  first did (fewer buildings to the same town); Ancient ones are unchanged.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
