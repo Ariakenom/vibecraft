@@ -3973,7 +3973,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "ff5ee8db39d6", "base": "1635b8eeec"};
+const BUILD_INFO = {"sim": "ff5ee8db39d6", "base": "2aaf60ff91"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -5663,8 +5663,11 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${sel.some(i => E(i, F.kind) === K.Capitol) ? `${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}` : ""}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
   if (!force && sig === selKey) return;
+  // A button held down: rebuilding the panel now would swallow its click
+  // (the button under the pointer is replaced before it's released).
+  if (!force && cmdHeld) return;
   selKey = sig;
   const panel = $("sel");
   panel.replaceChildren();
@@ -5783,6 +5786,10 @@ function showTip(html) { const t = $("tip"); t.innerHTML = html; t.hidden = fals
 function hideTip() { $("tip").hidden = true; }
 
 let cmdKeys = {};
+let cmdHeld = false; // a pointer is down on the command buttons
+$("cmd").addEventListener("pointerdown", () => { cmdHeld = true; });
+window.addEventListener("pointerup", () => { cmdHeld = false; });
+window.addEventListener("pointercancel", () => { cmdHeld = false; });
 function renderCommands(sel) {
   const box = $("cmd");
   const tip = $("tip");
@@ -5808,12 +5815,16 @@ function renderCommands(sel) {
     if (pages.length > 1) {
       const turn = d => { buildPage = (buildPage + d + pages.length) % pages.length; selKey = ""; Sfx.ui("select"); };
       for (const e of pages) {
-        const b = cmdButton(`${ERA_NAMES[e]} buildings`, "", () => { buildPage = e; selKey = ""; Sfx.ui("select"); },
+        // Shift and the page's key (Shift+Q the Ancient page, Shift+E the
+        // Medieval one, …), or Tab and Shift+Tab to step through them.
+        const key = "⇧" + PAGE_KEYS[e];
+        const fn = () => { buildPage = e; selKey = ""; Sfx.ui("select"); };
+        const b = cmdButton(`${ERA_NAMES[e]} buildings`, key, fn,
           { glyph: ["I", "II", "III", "IV", "V", "VI"][e], locked: e > W.era(),
-            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Tab: next page, Shift+Tab: back.</p>` });
+            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${PAGE_KEYS[e]}, or Tab for the next page and Shift+Tab to go back.</p>` });
         b.classList.add("page");
         if (e === buildPage) b.classList.add("on");
-        box.append(b);
+        add(b, key, fn);
       }
       cmdKeys["tab"] = () => turn(1);
       cmdKeys["⇧tab"] = () => turn(-1);

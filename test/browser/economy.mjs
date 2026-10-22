@@ -50,6 +50,21 @@ const up = await pg.evaluate(() => {
   return b ? [b.getAttribute("aria-label"), b.classList.contains("locked"), !!cmdKeys["z"]] : null;
 });
 check(up && up[0] === "Upgrade to Cottage" && up[1] && up[2], `a hut has "Upgrade to Cottage" (Z), locked until it's ready (${up})`);
+// Era pages of the build menu: Shift and a key picks one; a click on a tab
+// works even when the panel would have been redrawn while it was held.
+await pg.evaluate(() => { W.debug_set_era(2); readWorld(); const c = findOwn(K.Capitol); setSelection([E(c, F.id)]); renderSelection(true); });
+await pg.keyboard.press("Shift+E");
+check(await pg.evaluate(() => buildPage) === 1, "Shift+E: the Medieval page");
+await pg.keyboard.press("Shift+Q");
+check(await pg.evaluate(() => buildPage) === 0, "Shift+Q: back to the Ancient page");
+const tab = await pg.$("#cmd button.page:nth-of-type(3)");
+const tb = await tab.boundingBox();
+await pg.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);
+await pg.mouse.down();
+await pg.evaluate(() => { selKey = "changed"; renderSelection(false); }); // something changed meanwhile
+await pg.mouse.up();
+await pg.evaluate(() => renderSelection(false));
+check(await pg.evaluate(() => buildPage) === 2, "clicking an era tab works even if the panel changed while it was held");
 // Replays say which version of the game made them.
 const v = await pg.evaluate(() => { const v = Rec.object("test").version; return [v, v.protocol === NET.PROTOCOL && v.replay === REPLAY_FORMAT]; });
 check(v[1] && /^[0-9a-f]{12}$/.test(v[0].sim) && typeof v[0].base === "string", `replays carry the game's version (${JSON.stringify(v[0])})`);

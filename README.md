@@ -573,8 +573,9 @@ versions don't play together.
 **Controls.**
 - **Camera:** WASD, arrows or the edges of the browser window move it; the wheel zooms;
   middle-drag rotates and tilts.
-- **Build:** the menu has a page per era (Tab for the next, Shift+Tab
-  back), and each page's buildings take Q, E, R, T, Y, U, I, O, F, G, C,
+- **Build:** the menu has a page per era (Shift+Q the Ancient page,
+  Shift+E Medieval, Shift+R Gunpowder, and so on; or Tab for the next,
+  Shift+Tab back), and each page's buildings take Q, E, R, T, Y, U, I, O, F, G, C,
   V in order. Ancient: Q hut, E farm, R lumber camp, T quarry, Y fishing
   hut, U hunting lodge, I orchard, O pasture, F barracks, G range, C
   stable, V tower. Del (twice) demolishes the selected buildings.
