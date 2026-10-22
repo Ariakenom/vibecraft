@@ -114,6 +114,8 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 
 /* Always room for three rows of five, whatever is selected, so the bar never changes size. */
 #cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 270px; }
+#cmd .cbtn.page { font: 400 16px var(--display); color: var(--muted); }
+#cmd .cbtn.page.on { color: var(--bronze); border-color: var(--bronze); background: #3d3020; }
 #cmd.dense { grid-template-columns: repeat(7, 40px); grid-auto-rows: 40px; gap: 4px; width: 304px; }
 #cmd.dense .cbtn canvas { width: 38px; height: 38px; }
 #cmd.denser { grid-template-columns: repeat(9, 34px); grid-auto-rows: 34px; gap: 3px; width: 330px; }
@@ -811,7 +813,7 @@ function panFor(x, y) {
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 16,   // 16: the Modern era, no Wonder (15: the Industrial era (14: ponds, wider fruit and game)) (13: the Gunpowder era) (12: the Medieval era) (11: people are units, campfire) (10: the Phase 3 AI and crews) (9: people, demolish; 8: slots; 7: surrender)
+  PROTOCOL: 16,   // 16: the Modern era, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
@@ -4691,18 +4693,28 @@ const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
 const PLIGHT = ["#bbb", "#8cb9f0", "#ec8a77", "#86d69a", "#f2d27f"];
 const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
-// Hotkeys avoid W, A, S and D, which move the camera. "⇧E" is Shift+E.
-// Medieval buildings show once the player has a cottage (`buildMenu`).
-const BUILD_MENU = [[K.Hut, "Q"], [K.Farm, "E"], [K.LumberCamp, "R"], [K.Quarry, "T"], [K.FishingHut, "Y"], [K.HuntingLodge, "U"], [K.Orchard, "I"],
-  [K.Pasture, "O"], [K.Barracks, "F"], [K.Range, "G"], [K.Stable, "C"], [K.Tower, "V"],
-  [K.SheepFarm, "J"], [K.Weaver, "⇧J"], [K.IronMine, "L"], [K.Brickworks, "N"], [K.Bakery, "⇧E"], [K.Brewery, "⇧N"], [K.SiegeWorkshop, "⇧F"],
-  [K.SaltpeterWorks, "⇧T"], [K.PowderMill, "⇧U"], [K.Carpenter, "⇧R"], [K.Printer, "⇧Y"], [K.Circus, "⇧C"],
-  [K.CoalMine, "⇧L"], [K.SteelMill, "⇧O"], [K.ExplosivesWorks, "⇧V"], [K.Cannery, "⇧I"], [K.CoalYard, "⇧Q"], [K.Press, "⇧G"], [K.Factory, "⇧B"],
-  // Out of letters: the Modern buildings are clicked (Z and X: Shift with the two left).
-  [K.OilWell, "⇧Z"], [K.PowerPlant, "⇧X"], [K.BauxiteMine, ""], [K.HaberBosch, ""], [K.RadioFactory, ""], [K.TankWorks, ""], [K.Airfield, ""]];
+// The build menu has a page per era: Tab goes to the next page, Shift+Tab
+// back. Each page hands out the same hotkeys in order (`PAGE_KEYS`, which
+// avoid W, A, S and D, the camera keys). Buildings in tech-tree order:
+const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Barracks, K.Range, K.Stable, K.Tower,
+  K.SheepFarm, K.Weaver, K.IronMine, K.Brickworks, K.Bakery, K.Brewery, K.SiegeWorkshop,
+  K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
+  K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
+  K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield];
+const PAGE_KEYS = "QERTYUIOFGCVBJLN";
+// Every building (for code that wants them all; keys are per page).
+const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
+let buildPage = 0;
+// The eras with a page: those reached, and the next once its first house stands.
+function buildPages() {
+  const last = Math.min(W.era_progress(2), W.era() + (W.era_progress(0) > 0 ? 1 : 0));
+  return Array.from({ length: last + 1 }, (_, e) => e);
+}
 function buildMenu() {
-  const soon = W.era_progress(0) > 0;
-  return BUILD_MENU.filter(([k]) => W.kind_era(k) <= W.era() || (soon && W.kind_era(k) === W.era() + 1));
+  const pages = buildPages();
+  buildPage = Math.min(buildPage, pages.length - 1);
+  const ks = BUILD_ORDER.filter(k => W.kind_era(k) === buildPage);
+  return ks.map((k, n) => [k, PAGE_KEYS[n] || ""]);
 }
 const TRAIN_KEYS = "QERTY";
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
@@ -5285,7 +5297,7 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");
@@ -5414,6 +5426,20 @@ function renderCommands(sel) {
   };
 
   if (kinds.has(K.Worker) || kinds.has(K.Capitol)) {
+    const pages = buildPages();
+    if (pages.length > 1) {
+      const turn = d => { buildPage = (buildPage + d + pages.length) % pages.length; selKey = ""; Sfx.ui("select"); };
+      for (const e of pages) {
+        const b = cmdButton(`${ERA_NAMES[e]} buildings`, "", () => { buildPage = e; selKey = ""; Sfx.ui("select"); },
+          { glyph: ["I", "II", "III", "IV", "V", "VI"][e], locked: e > W.era(),
+            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Tab: next page, Shift+Tab: back.</p>` });
+        b.classList.add("page");
+        if (e === buildPage) b.classList.add("on");
+        box.append(b);
+      }
+      cmdKeys["tab"] = () => turn(1);
+      cmdKeys["⇧tab"] = () => turn(-1);
+    }
     for (const [k, key] of buildMenu()) {
       const fn = () => startPlacing(k);
       const locked = isBld(k) && !W.unlocked(k);
@@ -5438,7 +5464,7 @@ function renderCommands(sel) {
       ? "<h4>Resume</h4><p>Hire workers again: free workers from the campfire come.</p>"
       : "<h4>Pause</h4><p>Its workers go back to the campfire. It keeps its slots but makes nothing.</p>" }), "Z", fn);
   }
-  box.classList.toggle("dense", box.children.length > 16 && box.children.length <= 22);
+  box.classList.toggle("dense", box.children.length > 15 && box.children.length <= 22);
   box.classList.toggle("denser", box.children.length > 22 && box.children.length <= 36);
   box.classList.toggle("densest", box.children.length > 36);
   const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
