@@ -4,7 +4,9 @@
 //! the **campfire** in front of the Capitol: they are the free people.
 //! - A producer needs workers standing at it (`Stats::workers`); without its
 //!   full crew there it makes nothing. Workers can be killed there.
-//! - A foundation needs builders: workers who walk to it and are used up.
+//! - A foundation needs builders: workers who walk to it and build it while
+//!   they stand there. When it's done they become its crew (as many as it
+//!   needs), and the rest go back to the campfire.
 //! - Training a soldier turns a free worker into one: they walk from the
 //!   campfire to the barracks, and training starts when they get there.
 //! Free workers go where they're needed by themselves (`recruit`), nearest
@@ -124,6 +126,7 @@ impl Game {
         // 1. Crews: workers with a Work order, and which of them are there.
         let mut crew = vec![0u8; self.ents.len()];
         let mut hired = vec![0u8; self.ents.len()];
+        let mut building = vec![0u8; self.ents.len()]; // builders standing at each foundation
         let mut people = vec![0u32; n];
         let mut free = vec![0u32; n];
         let mut working = vec![0u32; n];
@@ -150,6 +153,12 @@ impl Game {
                         crew[b as usize] = crew[b as usize].saturating_add(1);
                     }
                 }
+            } else if let Order::Build(b) = e.order {
+                if let Some(t) = self.ents.get(b as usize).filter(|t| t.alive && t.owner == e.owner && t.built < 1.0) {
+                    if t.edge_dist(e.x, e.y) <= AT_WORK {
+                        building[b as usize] = building[b as usize].saturating_add(1);
+                    }
+                }
             } else if self.is_free_worker(e) {
                 free[o] += 1;
             }
@@ -162,6 +171,9 @@ impl Game {
             let st = e.kind.stats();
             e.crew = crew[e.id as usize];
             e.hired = hired[e.id as usize];
+            if e.is_building() && e.built < 1.0 {
+                e.builders_in = building[e.id as usize];
+            }
             e.crewed = e.built >= 1.0 && e.crew >= st.workers;
             if e.crewed && st.consumes.is_empty() {
                 for &(r, k) in st.produces {
@@ -518,7 +530,9 @@ impl Game {
                 }
                 let st = b.kind.stats();
                 if b.built < 1.0 {
-                    let need = st.builders.saturating_sub(b.builders_in + wants[i].builders_coming);
+                    // (Builders keep their order while they build, so the
+                    // ones there are among those coming.)
+                    let need = st.builders.saturating_sub(wants[i].builders_coming);
                     jobs.extend((0..need).map(|_| (i, Order::Build(i as u32))));
                 }
                 let need = (b.queue.len() as u8).saturating_sub(b.recruits + wants[i].recruits_coming);
@@ -582,25 +596,33 @@ impl Game {
         }
     }
 
-    /// A builder walks to a foundation. On arrival, if it still needs
-    /// builders, they're used up there (`builders_in` counts them);
-    /// otherwise they go back to the campfire.
+    /// A builder walks to a foundation and builds it, standing at its edge
+    /// (`resolve` counts who's there into `builders_in`). Once it's done,
+    /// they go to work there if it needs a crew, or back to the campfire.
     pub(crate) fn do_build(&mut self, i: usize, target: u32) {
         let owner = self.ents[i].owner;
-        let needed = self.ents.get(target as usize).is_some_and(|t| t.alive && t.owner == owner && t.built < 1.0 && t.builders_in < t.kind.stats().builders);
-        if !needed {
+        let Some(t) = self.ents.get(target as usize).filter(|t| t.alive && t.owner == owner && t.is_building()) else {
             return self.go_home(i);
+        };
+        if t.built >= 1.0 {
+            let st = t.kind.stats();
+            if t.hiring && t.hired < st.workers {
+                self.ents[target as usize].hired += 1;
+                self.ents[i].set_order(Order::Work(target));
+            } else {
+                self.go_home(i);
+            }
+            return;
         }
-        let goal = self.ents[target as usize].goal(0.75);
+        let (bx, by) = (t.x, t.y);
+        let goal = t.goal(AT_WORK * 0.6);
         match self.travel(i, goal, 3.0) {
             Travel::Moving => {}
             Travel::Blocked => self.go_home(i),
             Travel::Arrived => {
-                let b = &mut self.ents[target as usize];
-                b.builders_in += 1;
-                let (bx, by) = (b.x, b.y);
-                self.push_event(Ev::Hammer, bx, by, 0.0);
-                self.vanish(i);
+                let e = &mut self.ents[i];
+                e.anim = Anim::Work;
+                e.facing = (by - e.y).atan2(bx - e.x);
             }
         }
     }

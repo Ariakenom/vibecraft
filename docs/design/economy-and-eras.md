@@ -108,8 +108,10 @@ still hurts.
 
 - A foundation needs a number of workers (1 for most, 3 for big ones,
   *first guess*). Free workers are sent by themselves, or you send them.
-  When enough have arrived, they are **used up** and the building rises
-  over its build time by itself.
+  While enough of them stand at it, the building rises over its build
+  time. When it's done they **become its crew** (as many as it needs), and
+  the rest go back to the campfire. (They used to be used up; changed after
+  playtesting.)
 - Workers can be killed on the way, so escorting them matters.
 - Repair: not in the first version.
 

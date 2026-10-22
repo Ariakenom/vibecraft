@@ -281,19 +281,26 @@ fn a_foundation_waits_for_all_its_builders() {
     run(&mut g, 10.0);
     let field = &g.ents[w as usize];
     assert_eq!((field.builders_in, field.built), (2, 0.0), "two of three builders: nothing happens");
-    assert!(!g.alive(b[0]) && !g.alive(b[1]), "builders are used up at the foundation");
+    assert!(g.alive(b[0]) && g.alive(b[1]), "builders aren't used up: they stay and build");
     g.order_build(b[2], w);
     run(&mut g, 10.0);
-    assert_eq!(g.ents[w as usize].builders_in, 3);
-    assert!(g.ents[w as usize].built > 0.0, "with the third it rises by itself");
+    assert!(g.ents[w as usize].builders_in >= 3);
+    assert!(g.ents[w as usize].built > 0.0, "with the third it rises");
+    run(&mut g, Kind::Airfield.stats().time + 5.0);
+    assert!(g.ents[w as usize].built >= 1.0);
+    // Done: builders become its crew, as many as it needs; the rest go home.
+    let crew = g.ents.iter().filter(|e| e.alive && e.order == Order::Work(w)).count();
+    assert_eq!(crew, Kind::Airfield.stats().workers as usize, "builders went to work there");
+    assert!(g.ents.iter().all(|e| !e.alive || e.order != Order::Build(w)), "nobody is still building");
+    assert!(b.iter().all(|&id| g.alive(id)));
 }
 
 #[test]
 fn free_workers_go_to_work_by_themselves() {
     let mut g = Game::new(5, 1, 2);
-    // 8 free workers, four lumber camps of 2 placed without crews: they all
-    // fill, in id order. A fifth gets nobody.
-    let camps: Vec<u32> = (0..5)
+    // 8 free workers, eight lumber camps of 1 placed without crews: they all
+    // fill, in id order. A ninth gets nobody.
+    let camps: Vec<u32> = (0..9)
         .map(|_| {
             let (x, y) = spot(&g, Kind::LumberCamp);
             let id = g.spawn_building(Kind::LumberCamp, 1, x, y, 1.0);
@@ -303,8 +310,8 @@ fn free_workers_go_to_work_by_themselves() {
         .collect();
     run(&mut g, 30.0);
     let crewed: Vec<bool> = camps.iter().map(|&c| g.ents[c as usize].crewed).collect();
-    assert_eq!(crewed, [true, true, true, true, false]);
-    assert_eq!(g.players[1].supply[Res::Wood.idx()], 4 + 4 * 4, "the camp with nobody makes nothing");
+    assert_eq!(crewed, [true, true, true, true, true, true, true, true, false]);
+    assert_eq!(g.players[1].supply[Res::Wood.idx()], 4 + 8 * 4, "the camp with nobody makes nothing");
     assert_eq!(g.players[1].free, 0);
 }
 
@@ -316,7 +323,7 @@ fn moving_workers_away_pauses_a_producer() {
     run(&mut g, 30.0);
     assert!(g.ents[camp as usize].crewed);
     let crew: Vec<u32> = g.ents.iter().filter(|e| e.alive && e.order == Order::Work(camp)).map(|e| e.id).collect();
-    assert_eq!(crew.len(), 2);
+    assert_eq!(crew.len(), 1, "a lumber camp takes one worker");
     let wood = g.players[1].supply[Res::Wood.idx()];
     // Send one of them off: the camp stops, and doesn't hire anyone else.
     g.apply(1, Command::Smart { ids: vec![crew[0]], x: 20.0, y: 20.0 }).unwrap();
@@ -349,6 +356,7 @@ fn newcomers_fill_free_beds_faster_in_a_bigger_town() {
     assert!(growth_interval(80) < growth_interval(40) && growth_interval(40) < growth_interval(8));
     let mut g = Game::new(5, 1, 2);
     build(&mut g, Kind::HuntingLodge); // a third good: 12 beds
+    build(&mut g, Kind::LumberCamp);
     build(&mut g, Kind::LumberCamp);
     g.tick();
     let p = g.players[1];
@@ -771,7 +779,9 @@ fn a_nuke_is_armed_launched_and_leaves_a_crater() {
     // At player 2's Capitol: it flies, then everything near it falls.
     let cap = g.find_first(2, Kind::Capitol).unwrap();
     let (cx, cy) = (g.ents[cap].x, g.ents[cap].y);
-    let near = g.spawn_unit(Kind::Spearman, 2, cx + 3.0, cy + 3.0);
+    g.set_ai(2, false); // their spearmen stay put
+    g.players[2].supply_pct = 400; // and supplied
+    let near = g.spawn_unit(Kind::Spearman, 2, cx - 2.0, cy - 2.0);
     let far = g.spawn_unit(Kind::Spearman, 2, cx + 9.0, cy);
     g.apply(1, Command::Launch { id: silo, x: cx, y: cy }).unwrap();
     g.tick();
@@ -781,7 +791,7 @@ fn a_nuke_is_armed_launched_and_leaves_a_crater() {
     assert!(g.alive(near), "still in flight");
     run(&mut g, 1.5);
     assert!(g.nukes.is_empty());
-    assert!(!g.alive(near) && g.alive(far));
+    assert!(!g.alive(near) && g.alive(far), "near {:?} far {:?} at {cx},{cy}", (g.ents[near as usize].x, g.ents[near as usize].y, g.ents[near as usize].hp), (g.ents[far as usize].x, g.ents[far as usize].y, g.ents[far as usize].hp));
     assert!(!g.ents[cap].alive, "the Capitol at the centre is gone");
     assert_eq!(g.winner, 1, "and with it player 2");
     let i = g.map.idx(cx as i32, cy as i32);

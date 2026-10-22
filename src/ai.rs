@@ -276,7 +276,7 @@ impl Game {
         // One project at a time: wait while a foundation still needs
         // builders. Far-off ones don't hold the town up: their builders may
         // be cut down on the way, again and again.
-        let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| (self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 22.0).collect();
+        let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| (self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 30.0).collect();
         let busy = near.iter().any(|&b| self.builders_missing(b) > 0) || near.len() >= 2;
         let p = self.players[me as usize];
         // Beds ahead of people: grow before the houses are full.
@@ -317,7 +317,7 @@ impl Game {
     fn builders_missing(&self, b: u32) -> u32 {
         let f = &self.ents[b as usize];
         let coming = self.ents.iter().filter(|e| e.alive && e.order == Order::Build(b)).count() as u32;
-        (f.kind.stats().builders as u32).saturating_sub(f.builders_in as u32 + coming)
+        (f.kind.stats().builders as u32).saturating_sub(coming) // (builders at work keep their order)
     }
 
     /// More beds. While some house lacks goods it could use, a producer of
@@ -419,7 +419,8 @@ impl Game {
         // Its builders and its crew, and some free workers kept back.
         let st = what.stats();
         let keep = if for_beds { 0 } else { KEEP_FREE };
-        if c.spare < st.builders as u32 + st.workers as u32 + keep {
+        // (Builders become its crew when it's done.)
+        if c.spare < (st.builders.max(st.workers)) as u32 + keep {
             return Step::Waiting;
         }
         if !self.ai_place(what, c) {
@@ -451,13 +452,13 @@ impl Game {
                     self.find_spot(me, kind, x, y, 1, 3, &c.reach)
                 })
             }
-            Some(_) => self.find_spot(me, kind, bx, by, 3, 24, &c.reach),
+            Some(_) => self.find_spot(me, kind, bx, by, 3, 32, &c.reach),
             // Further out as the town fills up, leaving the ground next to
             // deposits to the producers that need it (if there's room).
             None => {
                 let s = kind.stats().size;
                 let clear = |tx: i32, ty: i32| !self.next_to_deposit(tx, ty, s);
-                self.find_spot_where(me, kind, bx, by, 5, 36, &c.reach, &clear).or_else(|| self.find_spot(me, kind, bx, by, 5, 36, &c.reach))
+                self.find_spot_where(me, kind, bx, by, 5, 40, &c.reach, &clear).or_else(|| self.find_spot(me, kind, bx, by, 5, 40, &c.reach))
             }
         };
         let Some((tx, ty)) = spot else { return false };
@@ -465,7 +466,7 @@ impl Game {
         match self.place(me, kind, tx, ty, &[]) {
             Ok(id) => {
                 let st = kind.stats();
-                c.spare = c.spare.saturating_sub(st.workers as u32 + st.builders as u32);
+                c.spare = c.spare.saturating_sub(st.workers.max(st.builders) as u32);
                 c.unfinished.push(id);
                 c.have[kind as usize] += 1;
                 true

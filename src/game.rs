@@ -1266,7 +1266,8 @@ impl Game {
                     if self.ents[id as usize].is_building() {
                         continue;
                     }
-                    if self.ents[id as usize].kind.is_military() {
+                    // Anyone who can fight, workers too.
+                    if self.ents[id as usize].kind.stats().attack > 0.0 {
                         self.order_attack_move(id, x, y);
                     } else {
                         self.order_move(id, x, y);
@@ -1425,7 +1426,7 @@ impl Game {
     }
 
     fn do_attack_move(&mut self, i: usize, x: f32, y: f32) {
-        if self.ents[i].kind.is_military() && self.ents[i].scan <= 0.0 {
+        if self.ents[i].kind.stats().attack > 0.0 && self.ents[i].scan <= 0.0 {
             self.ents[i].scan = 0.4;
             let sight = self.ents[i].kind.stats().sight;
             if let Some(t) = self.nearest_enemy(i, sight) {

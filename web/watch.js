@@ -24,7 +24,9 @@
 // All three show the game in OBSERVER MODE: the fog lifted (or seen through
 // one player's eyes), a scoreboard, and no commands.
 
-const REPLAY_FORMAT = 1, REPLAY_KEY = "vibecraft.replays", REPLAY_MAX = 6;
+// (Format 2: the rules changed, builders stay on and maps are bigger, so
+// older replays would play out differently.)
+const REPLAY_FORMAT = 2, REPLAY_KEY = "vibecraft.replays", REPLAY_MAX = 6;
 const REPLAY_MIN_TICKS = 400;       // games shorter than 20 s aren't kept
 const KEYFRAME_EVERY = 1200;        // ticks between replay keyframes (1 minute)
 const WATCH = {

@@ -327,7 +327,7 @@ static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil
 
 // The Capitol makes a little of the basics by itself, with no workers, so a
 // game can start: two kinds of food fill the two starting huts.
-static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], ..building(1600.0, 9.0, &[], 60.0, 3) };
+static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], ..building(1600.0, 16.0, &[], 60.0, 3) };
 // Houses: beds depend on how many different goods they get. A hut that's
 // full and has all the goods it can use becomes a cottage by itself, if the
 // cottage's extra wood and stone are free (`Game::upgrade_houses`).
@@ -346,7 +346,7 @@ static TOWER: Stats = Stats { attack: 7.0, range: 7.0, cooldown: 1.5, ..building
 // use can always make more: there is no way to get stuck.
 //                                   hp     cost              makes           workers deposit                time size
 static FARM: Stats = extractor(250.0, &[(Wood, 1)], &[(Grain, 2)], 1, None, 12.0, 3);
-static LUMBER_CAMP: Stats = extractor(400.0, &[], &[(Wood, 4)], 2, Some(Dep::Forest), 15.0, 2);
+static LUMBER_CAMP: Stats = extractor(400.0, &[], &[(Wood, 4)], 1, Some(Dep::Forest), 15.0, 2);
 static QUARRY: Stats = extractor(500.0, &[(Wood, 2)], &[(Stone, 4)], 2, Some(Dep::Stone), 18.0, 2);
 static FISHING_HUT: Stats = extractor(300.0, &[(Wood, 1)], &[(Fish, 2)], 1, Some(Dep::Water), 12.0, 2);
 static HUNTING_LODGE: Stats = extractor(300.0, &[(Wood, 1)], &[(Meat, 2)], 1, Some(Dep::Game), 12.0, 2);
