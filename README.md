@@ -573,12 +573,14 @@ versions don't play together.
 **Controls.**
 - **Camera:** WASD, arrows or the edges of the browser window move it; the wheel zooms;
   middle-drag rotates and tilts.
-- **Build:** the menu has a page per era (Shift+Q the Ancient page,
-  Shift+E Medieval, Shift+R Gunpowder, and so on; or Tab for the next,
-  Shift+Tab back), and each page's buildings take Q, E, R, T, Y, U, I, O, F, G, C,
-  V in order. Ancient: Q hut, E farm, R lumber camp, T quarry, Y fishing
-  hut, U hunting lodge, I orchard, O pasture, F barracks, G range, C
-  stable, V tower. Del (twice) demolishes the selected buildings.
+- **Hotkey order:** Q, E, R, T, F, G, C, V, B, Y, U, I, O, J, L, N: the left
+  hand's keys first. Buildings, era pages and training all go by it.
+- **Build:** the menu has a page per era (Shift+Q Ancient, Shift+E
+  Medieval, Shift+R Gunpowder, Shift+T Industrial, Shift+F Modern, Shift+G
+  Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
+  take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
+  quarry, F fishing hut, G hunting lodge, C orchard, V pasture, B barracks,
+  Y range, U stable, I tower. Del (twice) demolishes the selected buildings.
 - **Missile silo:** Z arms a nuke, then Z again and a click launches it.
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
   oldest first (with several kinds of building selected, every unit still

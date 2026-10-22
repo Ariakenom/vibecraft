@@ -160,7 +160,7 @@ const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.Hunt
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
   K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield,
   K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo];
-const PAGE_KEYS = "QERTYUIOFGCVBJLN";
+const PAGE_KEYS = "QERTFGCVBYUIOJLN"; // the left hand's keys first (Y is a stretch)
 // Every building (for code that wants them all; keys are per page).
 const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
 let buildPage = 0;
@@ -175,7 +175,7 @@ function buildMenu() {
   const ks = BUILD_ORDER.filter(k => W.kind_era(k) === buildPage);
   return ks.map((k, n) => [k, PAGE_KEYS[n] || ""]);
 }
-const TRAIN_KEYS = "QERTYUIOFGCVBJLN"; // enough for every unit when several kinds of building are selected
+const TRAIN_KEYS = PAGE_KEYS; // enough for every unit when several kinds of building are selected
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet] };
