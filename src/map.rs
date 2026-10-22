@@ -10,6 +10,8 @@ pub const GRASS: u8 = 0;
 pub const WATER: u8 = 1;
 pub const SAND: u8 = 2;
 pub const HILL: u8 = 3;
+/// Where a nuke fell: blocked for good.
+pub const CRATER: u8 = 4;
 
 /// One tile of a deposit: a tree of a forest, a rock of a stone outcrop, a
 /// fruit bush, grazing horses or game. Extractors are built next to them.
@@ -136,6 +138,7 @@ enum Feat {
     Coal,
     Oil,
     Bauxite,
+    Uranium,
 }
 
 /// A symmetry of the map: a way to turn it that lands it on itself.
@@ -228,7 +231,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // need three different foods to grow into cottages. The Medieval ones
     // (iron, clay, sheep hills) and saltpeter sit a little further out,
     // clear of the road to the middle.
-    let clusters: [(i32, i32, Feat, f32); 12] = [
+    let clusters: [(i32, i32, Feat, f32); 13] = [
         (-8, -9, Feat::Tree, 3.4),
         (6, -6, Feat::Fertile, 2.4),
         (9, 4, Feat::Horses, 1.6),
@@ -241,6 +244,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         (2, -19, Feat::Coal, 1.5),
         (16, 4, Feat::Oil, 1.3),
         (-6, -19, Feat::Bauxite, 1.4),
+        (18, -8, Feat::Uranium, 1.3),
     ];
     // Neutral deposits out on the map, in 80×80 coordinates (scaled to fit).
     let neutral: [(i32, i32, Feat, f32); 6] = [
@@ -252,7 +256,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         (36, 36, Feat::Stone, 1.5),
     ];
     let mut place = |cx: i32, cy: i32, f: Feat, r: f32| {
-        let ri = r.ceil() as i32 + 1;
+        let ri = r.ceil() as i32 + 2;
         for dy in -ri..=ri {
             for dx in -ri..=ri {
                 let (x, y) = (cx + dx, cy + dy);
@@ -260,13 +264,22 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                     continue;
                 }
                 let d = ((dx * dx + dy * dy) as f32).sqrt();
-                // Ground under and around a cluster: no deposit in a lake.
+                // Ground under and around a cluster: no deposit in a lake,
+                // nor buried in a forest, with room around it to build.
                 if d <= r + 1.0 {
                     for (px, py) in images(x, y) {
                         let i = (py * w + px) as usize;
                         if terrain[i] == WATER || terrain[i] == SAND {
                             terrain[i] = GRASS;
                             shade[i] = shade[i].max(110); // drawn as grass, not as the lake bed
+                        }
+                    }
+                }
+                if d <= r + 2.2 && f != Feat::Tree {
+                    for (px, py) in images(x, y) {
+                        let i = (py * w + px) as usize;
+                        if feat[i] == Feat::Tree {
+                            feat[i] = Feat::None;
                         }
                     }
                 }
@@ -347,6 +360,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 Feat::Coal => Dep::Coal,
                 Feat::Oil => Dep::Oil,
                 Feat::Bauxite => Dep::Bauxite,
+                Feat::Uranium => Dep::Uranium,
             };
             dep_at[i] = deps.len() as i32;
             blocked[i] = true;

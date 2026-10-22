@@ -576,7 +576,7 @@ function resourceModels() {
   }
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
     deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]),
-    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false) };
+    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false), uranium: rock(false) };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -606,7 +606,9 @@ function glbName(kind) {
     [K.Rifleman]: "Rifleman", [K.MachineGunner]: "MachineGunner", [K.FieldGun]: "FieldGun", [K.Tenement]: "Tenement", [K.CoalMine]: "CoalMine",
     [K.SteelMill]: "SteelMill", [K.ExplosivesWorks]: "ExplosivesWorks", [K.Cannery]: "Cannery", [K.CoalYard]: "CoalYard", [K.Press]: "Press", [K.Factory]: "Factory",
     [K.Infantry]: "Infantry", [K.Tank]: "Tank", [K.Fighter]: "Fighter", [K.Bomber]: "Bomber", [K.Apartment]: "Apartment", [K.OilWell]: "OilWell",
-    [K.BauxiteMine]: "BauxiteMine", [K.PowerPlant]: "PowerPlant", [K.HaberBosch]: "HaberBosch", [K.RadioFactory]: "RadioFactory", [K.TankWorks]: "TankWorks", [K.Airfield]: "Airfield" };
+    [K.BauxiteMine]: "BauxiteMine", [K.PowerPlant]: "PowerPlant", [K.HaberBosch]: "HaberBosch", [K.RadioFactory]: "RadioFactory", [K.TankWorks]: "TankWorks", [K.Airfield]: "Airfield",
+    [K.RocketArtillery]: "RocketArtillery", [K.Jet]: "Jet", [K.TowerBlock]: "TowerBlock", [K.UraniumMine]: "UraniumMine", [K.Reactor]: "Reactor",
+    [K.CarPlant]: "CarPlant", [K.TvPlant]: "TvPlant", [K.MissileSilo]: "MissileSilo" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
@@ -801,7 +803,7 @@ function initRenderer() {
 
   loadGlbModels();
   R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"]]) {
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"]]) {
     if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
   }
   buildSmoke();
@@ -931,7 +933,7 @@ function buildWorld() {
   };
   R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
     horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false),
-    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false), oil: mk(R3.resGeo.oil, n, false), bauxite: mk(R3.resGeo.bauxite, n, false) };
+    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false), oil: mk(R3.resGeo.oil, n, false), bauxite: mk(R3.resGeo.bauxite, n, false), uranium: mk(R3.resGeo.uranium, n, false) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -1583,7 +1585,7 @@ function render3d(alpha, now, dt) {
     if (o.tool) {
       let swing = 0;
       if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
-      else if (anim === 3) swing = kind === K.Archer ? 0.35 : kind === K.Cannon || kind === K.FieldGun || kind === K.Tank ? -Math.max(0, Math.sin(ph * 2.5) - 0.85) * 0.6 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
+      else if (anim === 3) swing = kind === K.Archer ? 0.35 : kind === K.Cannon || kind === K.FieldGun || kind === K.Tank || kind === K.RocketArtillery ? -Math.max(0, Math.sin(ph * 2.5) - 0.85) * 0.6 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
       o.tool.rotation.z = -swing - o.toolTilt;
       if (isAir(kind)) { o.tool.rotation.z = 0; o.tool.rotation.x = t * 40; } // the propeller
     }
@@ -1623,11 +1625,94 @@ function render3d(alpha, now, dt) {
   updateSmoke();
   updateCampfires(performance.now());
   updatePuffs(performance.now());
+  updateNukes(performance.now());
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
   const g = performance.now();
   renderScene();
   R3.gpuMs = performance.now() - g;
+}
+
+// --- The nuke ------------------------------------------------------------------
+// In flight: a missile on a high arc from its silo, trailing smoke, and a red
+// ring where it will fall, for everyone. When it lands (`nukeFlash`): a white
+// flash over the screen, a fireball that swells and fades, a column of smoke.
+// Craters: dark scorched discs, from the game's list, so saved games show them.
+function nukeMeshes() {
+  if (R3.nukeMesh) return;
+  const m = new Model();
+  m.add(cyl(0.12, 0.12, 1.1, 8), "#d8dde3", 0, 0, 0).add(cone(0.12, 0.35, 8), "#c8453a", 0, 0.72, 0);
+  for (let k = 0; k < 4; k++) m.add(box(0.03, 0.25, 0.22).rotateY(k * Math.PI / 2), "#3e4146", Math.cos(k * Math.PI / 2) * 0.1, -0.45, Math.sin(k * Math.PI / 2) * 0.1);
+  R3.nukeGeo = m.build();
+  R3.nukeMesh = [];
+  R3.nukeRings = [];
+  R3.craterMeshes = [];
+  R3.fireballs = [];
+}
+function updateNukes(now) {
+  if (!R3.scene || !W) return;
+  nukeMeshes();
+  const n = W.nuke_count();
+  while (R3.nukeMesh.length < n) {
+    const mesh = new THREE.Mesh(R3.nukeGeo, entMat); mesh.scale.setScalar(1.6); R3.scene.add(mesh); R3.nukeMesh.push(mesh);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(W.nuke_numbers(2) - 0.25, W.nuke_numbers(2), 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: "#ff3b2f", transparent: true, opacity: 0.7, depthWrite: false }));
+    R3.scene.add(ring); R3.nukeRings.push(ring);
+  }
+  for (let k = 0; k < R3.nukeMesh.length; k++) {
+    const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k];
+    mesh.visible = ring.visible = k < n;
+    if (k >= n) continue;
+    const tx = W.nuke_info(k, 0), ty = W.nuke_info(k, 1), sx = W.nuke_info(k, 2), sy = W.nuke_info(k, 3), p = W.nuke_info(k, 4);
+    const H = 10, at = q => [sx + (tx - sx) * q, sy + (ty - sy) * q, groundAt(sx + (tx - sx) * q, sy + (ty - sy) * q) + 4 * H * q * (1 - q)];
+    const [x, y, h] = at(p), [x2, y2, h2] = at(Math.min(1, p + 0.01));
+    mesh.position.set(x, h, y);
+    // Point it along its flight.
+    const dir = new THREE.Vector3(x2 - x, h2 - h, y2 - y).normalize();
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    ring.position.set(tx, groundAt(tx, ty) + 0.08, ty);
+    ring.material.opacity = 0.45 + 0.35 * Math.sin(now * 0.012);
+    if (frame % 3 === 0 && R3.puffs && R3.puffs.length < 64) R3.puffs.push({ x, y, h, t0: now, big: false, seed: Math.random() * 6.28 });
+  }
+  // Craters.
+  const c = W.crater_count();
+  while (R3.craterMeshes.length < c) {
+    const k = R3.craterMeshes.length, cx = W.crater_info(k, 0), cy = W.crater_info(k, 1);
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(new THREE.CircleGeometry(2.0, 40).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#2b241e" }))));
+    const scorch = new THREE.Mesh(new THREE.RingGeometry(2.0, 4.6, 48).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#3e3a2c", transparent: true, opacity: 0.6, depthWrite: false })));
+    scorch.position.y = 0.01; g.add(scorch);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.22, 6, 40).rotateX(Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#4a3e32" })));
+    g.add(rim);
+    g.position.set(cx, groundAt(cx, cy) + 0.05, cy);
+    R3.scene.add(g); R3.craterMeshes.push(g);
+  }
+  // Fireballs from `nukeFlash`.
+  R3.fireballs = R3.fireballs.filter(f => {
+    const a = (now - f.t0) / 4000;
+    if (a >= 1) { R3.scene.remove(f.mesh); return false; }
+    f.mesh.scale.setScalar(0.5 + Math.min(1, a * 3) * 4.5);
+    f.mesh.material.opacity = Math.max(0, 1 - a) * 0.9;
+    f.mesh.position.y = f.y0 + a * 3;
+    return true;
+  });
+}
+function nukeFlash(x, y) {
+  if (!R3.scene) return;
+  nukeMeshes();
+  const fl = $("flash");
+  if (fl) { fl.classList.remove("on"); void fl.offsetWidth; fl.classList.add("on"); }
+  const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), new THREE.MeshBasicMaterial({ color: "#ffd27a", transparent: true, opacity: 0.9 }));
+  const y0 = groundAt(x, y) + 1;
+  mesh.position.set(x, y0, y);
+  R3.scene.add(mesh);
+  R3.fireballs.push({ mesh, t0: performance.now(), y0 });
+  // A column of smoke and a ring of dust.
+  for (let k = 0; k < 12; k++) {
+    const a = k / 12 * Math.PI * 2;
+    gunSmoke(x + Math.cos(a) * 3, y + Math.sin(a) * 3, K.Cannon);
+  }
+  for (let k = 0; k < 8; k++) R3.puffs.push({ x, y, h: groundAt(x, y) + 1 + k * 0.9, t0: performance.now() + k * 120, big: true, seed: k });
 }
 
 // A shot from a firearm at (x, y): a puff of smoke there (see updatePuffs).
@@ -1640,13 +1725,15 @@ function updatePuffs(now) {
   const m = R3.puffMesh;
   if (!m) return;
   R3.puffs = R3.puffs.filter(p => now - p.t0 < 1600);
+  if (R3.puffs.length > 64) R3.puffs.splice(0, R3.puffs.length - 64);
   let n = 0;
   for (const p of R3.puffs) {
+    if (now < p.t0) continue;
     const age = (now - p.t0) / 1600, size = (p.big ? 0.42 : 0.2) * Math.sin(Math.min(1, age * 1.4) * Math.PI) ** 0.6;
     for (let k = 0; k < 3 && n < 192; k++) {
       const a = p.seed + k * 2.1, r = age * (p.big ? 0.6 : 0.3);
       const x = p.x + Math.cos(a) * r, z = p.y + Math.sin(a) * r;
-      _p.set(x, groundAt(x, z) + (p.big ? 0.5 : 0.7) + age * 0.6 + k * 0.08, z);
+      _p.set(x, (p.h != null ? p.h : groundAt(x, z) + (p.big ? 0.5 : 0.7)) + age * 0.6 + k * 0.08, z);
       _q.identity(); _s.setScalar(Math.max(0.001, size * (1 - k * 0.2)));
       _m4.compose(_p, _q, _s);
       m.setMatrixAt(n++, _m4);
@@ -1665,13 +1752,13 @@ function updateResources() {
   for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
-  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [], oil: [], bauxite: [] };
+  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [], oil: [], bauxite: [], uranium: [] };
   for (const m of Object.values(R3.res)) m.count = 0;
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
     // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game,
-    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal, 11 oil, 12 bauxite.
+    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal, 11 oil, 12 bauxite, 13 uranium.
     let mesh, scale;
     if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
@@ -1684,6 +1771,7 @@ function updateResources() {
     else if (kind === 10) { mesh = "coal"; scale = 0.8 + 0.3 * h2; }
     else if (kind === 11) { mesh = "oil"; scale = 0.85 + 0.2 * h2; }
     else if (kind === 12) { mesh = "bauxite"; scale = 0.8 + 0.3 * h2; }
+    else if (kind === 13) { mesh = "uranium"; scale = 0.8 + 0.3 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;
@@ -1724,8 +1812,8 @@ function updateArrows(alpha) {
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
-    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank;
-    if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter) continue; // bullets are too small to see
+    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank || shooter === K.RocketArtillery;
+    if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet) continue; // bullets are too small to see
     const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
@@ -1967,7 +2055,7 @@ function updateSmoke() {
     [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55],
     [K.Townhouse]: [0.35, 1.75, -0.2], [K.PowderMill]: [-0.45, 1.1, -0.45],
     [K.Tenement]: [0.4, 2.35, -0.2], [K.SteelMill]: [-0.9, 2.65, -0.8], [K.Factory]: [1.0, 2.3, -0.9], [K.Cannery]: [0.55, 1.55, -0.35],
-    [K.PowerPlant]: [0.9, 2.75, -0.7] };
+    [K.PowerPlant]: [0.9, 2.75, -0.7], [K.TowerBlock]: [0.35, 3.6, -0.25] };
   if (!R3.smoke || !GFX.smoke || frame % 10 !== 0) return;
   const list = [];
   for (const o of R3.objs.values()) {

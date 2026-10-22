@@ -425,19 +425,39 @@ unsupplied units are the newest; class counters.
   chaotic: removing the Wonder from the plan changed 1234's game). Save
   `VERSION` 10, protocol 16.
 
-## Phase 8: one era
+## Phase 8: the Atomic era and the nuke
 
-Content on top of the Phase 4 engine.
+**Status: done and merged to `main`** (October 2026). All six eras are in.
+- Tower Block (tier 5, 13 goods, 26 people), from a full apartment block
+  with 11 goods and 1 more steel and 1 aluminum. Ten bring the Atomic era
+  (`LAST_ERA` 5).
+- Uranium (ore near every base) → Uranium Mine; Reactor (uranium →
+  electricity 8); Car Plant (steel + oil → cars 3); TV Plant (aluminum +
+  electricity → TVs 3); Missile Silo. Rocket Artillery (Siege, range 13)
+  from the Factory; Jets (Air) from the Airfield.
+- **The nuke:** `Command::Arm` (code 11) starts arming in a silo
+  (`Entity::nuke` 1, `NUKE_ARM_TIME` 120 s, holding `NUKE_COST`: 2
+  uranium, 2 explosives); `Command::Launch` (code 12) sends it to any
+  spot: a `Nuke` in `Game::nukes` for `NUKE_FLIGHT` 20 s, with
+  `Ev::NukeLaunched` to everyone (siren, alert, red ring on the target).
+  It falls (`Game::detonate`): units within `NUKE_RADIUS` 5 die, buildings
+  take up to `NUKE_DAMAGE` 2400 (a Capitol at the centre falls), its
+  owner's things too. Tiles within 1.6 become `map::CRATER`, blocked for
+  good (reaping a building leaves them blocked); `Game::craters` keeps the
+  centres for drawing. The page draws the missile on an arc with a smoke
+  trail, a white flash, a fireball and a smoke column, and scorched
+  craters. The AI arms and launches at the nearest rival Capitol.
+- **Maps:** deposit clusters now clear trees from a ring around them
+  (uranium was buried in forest on some maps). With that, all 24 Normal
+  AIs in `ai_stats` reach the Medieval era (19 before).
+- **Build menu:** a page per era (Tab and Shift+Tab, era tabs I–VI), each
+  page with the same hotkeys in order: Patrik's call, October 22.
+- Tests: arming holds the slots and takes its time, launch frees them,
+  the blast kills near and spares far, the Capitol at the centre falls
+  and its owner loses, the crater is blocked. Save `VERSION` 11, protocol
+  17. `debug_set_nuke` (lib.rs) arms a silo for screenshots.
 
-Each phase is content on top of the Phase 4 engine: resources, deposits,
-buildings, units, models with fallbacks, sounds, AI plan entries and the
-house goods for that tier.
-
-| Phase | Era | New systems beyond content |
-|---|---|---|
-| 8 | Atomic | Missile silo and the Nuke: a targeted area attack with a long launch visible to everyone, a flash, and a crater that stays on the map. Reactor. |
-
-Balance pass after Phase 6, with timings from real games, aiming at about
+Balance pass still to do, with timings from real games, aiming at about
 15 minutes per era.
 
 ## Later

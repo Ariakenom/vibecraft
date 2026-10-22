@@ -31,7 +31,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 8: the Gunpowder era.
 /// 9: the Industrial era.
 /// 10: the Modern era; the Wonder is gone.
-const VERSION: u32 = 10;
+/// 11: the Atomic era: silos, nukes in flight, craters.
+const VERSION: u32 = 11;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -262,6 +263,7 @@ impl Game {
             w.u8(e.builders_in);
             w.u8(e.recruits);
             w.bool(e.hiring);
+            w.u8(e.nuke);
             w.u32(e.goods);
         }
 
@@ -289,6 +291,17 @@ impl Game {
             w.pt((p.sx, p.sy));
             w.kind(p.shooter);
             w.bool(p.at_building);
+        }
+        w.len(self.nukes.len());
+        for n in &self.nukes {
+            w.u8(n.owner);
+            for v in [n.sx, n.sy, n.x, n.y, n.left] {
+                w.f32(v);
+            }
+        }
+        w.len(self.craters.len());
+        for &c in &self.craters {
+            w.pt(c);
         }
 
         w.len(self.ais.len());
@@ -396,6 +409,7 @@ impl Game {
             e.builders_in = r.u8()?;
             e.recruits = r.u8()?;
             e.hiring = r.bool()?;
+            e.nuke = r.u8()?.min(2);
             e.goods = r.u32()?;
             ents.push(e);
         }
@@ -430,6 +444,13 @@ impl Game {
             p.at_building = r.bool()?;
             proj.push(p);
         }
+        let nnukes = r.len(21)?;
+        let mut nukes = Vec::with_capacity(nnukes);
+        for _ in 0..nnukes {
+            nukes.push(Nuke { owner: r.u8()?, sx: r.f32()?, sy: r.f32()?, x: r.f32()?, y: r.f32()?, left: r.f32()? });
+        }
+        let ncraters = r.len(8)?;
+        let craters = (0..ncraters).map(|_| r.pt()).collect::<Option<Vec<_>>>()?;
 
         let nais = r.len(1)?;
         if nais != nplayers {
@@ -488,6 +509,8 @@ impl Game {
 
         let mut g = Game::from_parts(seed, map, deps, ents, players, n_players, proj, fog, ais, local);
         g.explored = explored;
+        g.nukes = nukes;
+        g.craters = craters;
         g.time = time;
         g.state = state;
         g.winner = winner;

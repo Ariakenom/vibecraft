@@ -67,7 +67,7 @@ const KEEP_FREE: u32 = 2;
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 49] = [
+const PLAN: [(Kind, u32); 54] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -121,6 +121,12 @@ const PLAN: [(Kind, u32); 49] = [
     (Kind::Airfield, 1),
     (Kind::HaberBosch, 1),
     (Kind::PowerPlant, 2),
+    // Atomic: uranium, the reactor, cars and TVs, and the silo.
+    (Kind::UraniumMine, 1),
+    (Kind::Reactor, 1),
+    (Kind::CarPlant, 1),
+    (Kind::TvPlant, 1),
+    (Kind::MissileSilo, 1),
 ];
 
 /// A snapshot of what the AI owns, gathered once per think.
@@ -180,6 +186,24 @@ impl Game {
         self.ai_army(style, next, &mut c);
         self.ai_scout(&mut c);
         self.ai_fight(&c);
+        self.ai_nuke(me, c.home);
+    }
+
+    /// A silo: arm a nuke when its slots are free, and launch it at the
+    /// nearest rival Capitol.
+    fn ai_nuke(&mut self, me: u8, home: (f32, f32)) {
+        let Some(s) = self.find_first(me, Kind::MissileSilo) else { return };
+        let (id, state, built) = (self.ents[s].id, self.ents[s].nuke, self.ents[s].built);
+        if built < 1.0 {
+            return;
+        }
+        if state == 0 {
+            let _ = self.apply(me, Command::Arm { id });
+        } else if state == 2 {
+            if let Some((x, y)) = self.target_for(me, home.0, home.1) {
+                let _ = self.apply(me, Command::Launch { id, x, y });
+            }
+        }
     }
 
     /// Every tile a unit can walk to from (x, y), moving like the path

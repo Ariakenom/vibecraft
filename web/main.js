@@ -8,22 +8,23 @@ const PROJ_STRIDE = 10; // x, y, px, py, loosed from x, y, shooter kind, at a bu
 const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
-const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18,
+const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
   Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91,
   Tenement: 92, CoalMine: 93, SteelMill: 94, ExplosivesWorks: 95, Cannery: 96, CoalYard: 97, Press: 98, Factory: 99,
-  Apartment: 100, OilWell: 101, BauxiteMine: 102, PowerPlant: 103, HaberBosch: 104, RadioFactory: 105, TankWorks: 106, Airfield: 107 };
+  Apartment: 100, OilWell: 101, BauxiteMine: 102, PowerPlant: 103, HaberBosch: 104, RadioFactory: 105, TankWorks: 106, Airfield: 107,
+  TowerBlock: 108, UraniumMine: 109, Reactor: 110, CarPlant: 111, TvPlant: 112, MissileSilo: 113 };
 // Aircraft fly above everything (drawn high up; see defs.rs Kind::is_air).
-const isAir = k => k === K.Fighter || k === K.Bomber;
+const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
 const isGun = k => k === K.Musketeer || k === K.Dragoon || k === K.Cannon || k === K.Rifleman || k === K.MachineGunner || k === K.FieldGun ||
-  k === K.Infantry || k === K.Tank || k === K.Fighter;
+  k === K.Infantry || k === K.Tank || k === K.Fighter || k === K.Jet || k === K.RocketArtillery;
 // Big guns: a boom, a big puff, a shell you can see.
-const isBigGun = k => k === K.Cannon || k === K.FieldGun || k === K.Tank;
+const isBigGun = k => k === K.Cannon || k === K.FieldGun || k === K.Tank || k === K.RocketArtillery;
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
@@ -39,14 +40,17 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Cannery]: "Cannery", [K.CoalYard]: "Coal Yard", [K.Press]: "Press", [K.Factory]: "Factory",
   [K.Infantry]: "Infantry", [K.Tank]: "Tank", [K.Fighter]: "Fighter", [K.Bomber]: "Bomber",
   [K.Apartment]: "Apartment Block", [K.OilWell]: "Oil Well", [K.BauxiteMine]: "Bauxite Mine", [K.PowerPlant]: "Power Plant",
-  [K.HaberBosch]: "Haber–Bosch Plant", [K.RadioFactory]: "Radio Factory", [K.TankWorks]: "Tank Works", [K.Airfield]: "Airfield" };
+  [K.HaberBosch]: "Haber–Bosch Plant", [K.RadioFactory]: "Radio Factory", [K.TankWorks]: "Tank Works", [K.Airfield]: "Airfield",
+  [K.RocketArtillery]: "Rocket Artillery", [K.Jet]: "Jet", [K.TowerBlock]: "Tower Block", [K.UraniumMine]: "Uranium Mine",
+  [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and is used up doing it), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, it becomes a Cottage by itself if 1 more wood and 1 stone are free.",
   [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut. Full, with 5 goods, it becomes a Townhouse (from the Medieval era) if 1 more stone and 2 brick are free.",
   [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Below 5 goods it falls back to a cottage. Full, with 7 goods, it becomes a Tenement (from the Gunpowder era) if 1 more brick and 1 steel are free.",
   [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (18 people). Ten bring the Industrial era. Below 7 goods it falls back to a townhouse. Full, with 9 goods, it becomes an Apartment Block (from the Industrial era) if 1 more steel is free.",
-  [K.Apartment]: "A modern apartment block, grown from a full tenement with 9 goods. It uses up to 11 goods, electricity and radios too (22 people). Ten bring the Modern era. Below 9 goods it falls back to a tenement.",
+  [K.Apartment]: "A modern apartment block, grown from a full tenement with 9 goods. It uses up to 11 goods, electricity and radios too (22 people). Ten bring the Modern era. Below 9 goods it falls back to a tenement. Full, with 11 goods, it becomes a Tower Block (from the Modern era) if 1 more steel and 1 aluminum are free.",
+  [K.TowerBlock]: "A high-rise, grown from a full apartment block with 11 goods. It uses up to 13 goods, cars and TVs too (26 people). Ten bring the Atomic era. Below 11 goods it falls back to an apartment block.",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Swordsman]: "Armoured infantry. Like spearmen, deadly to riders, but tougher and harder-hitting. Costs iron.",
   [K.Crossbowman]: "Shoots further and harder than an archer. Strong against infantry, weak against riders. Costs iron.",
@@ -62,6 +66,8 @@ const DESC = {
   [K.Tank]: "Armour: tough, fast and hard-hitting, it runs down guns and gunners. Infantry beat it. Costs steel, oil and explosives.",
   [K.Fighter]: "Flies over everything. Shoots down aircraft, and strafes the ground a little. Costs aluminum and oil.",
   [K.Bomber]: "Flies over everything and bombs buildings to rubble. Can't hit aircraft: escort it with fighters. Costs aluminum, oil and explosives.",
+  [K.RocketArtillery]: "Fires salvoes of rockets from further than anything else can shoot. Flattens buildings; poor against people.",
+  [K.Jet]: "A faster, tougher fighter. Owns the air. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
   [K.Capitol]: "Your seat of power. Lose it and you lose the game.",
@@ -94,14 +100,19 @@ const DESC = {
   [K.Cannery]: "Cans fish and meat: canned food for tenements.",
   [K.CoalYard]: "Sells coal for heating, for tenements.",
   [K.Press]: "Prints newspapers, for tenements.",
-  [K.Factory]: "Builds field guns.",
+  [K.Factory]: "Builds field guns, and rocket artillery from the Atomic era.",
   [K.OilWell]: "Pumps oil from the oil field next to it.",
   [K.BauxiteMine]: "Mines bauxite next to it and smelts it into aluminum.",
   [K.PowerPlant]: "Burns coal to make electricity, for apartment blocks, radio factories and the Haber–Bosch plant.",
   [K.HaberBosch]: "Makes nitrate from coal and electricity: no saltpeter needed.",
   [K.RadioFactory]: "Makes radios from steel and electricity, for apartment blocks.",
   [K.TankWorks]: "Builds tanks.",
-  [K.Airfield]: "Builds fighters and bombers.",
+  [K.Airfield]: "Builds fighters, bombers and, from the Atomic era, jets.",
+  [K.UraniumMine]: "Mines uranium from the ore next to it.",
+  [K.Reactor]: "Makes a great deal of electricity from a little uranium.",
+  [K.CarPlant]: "Makes cars from steel and oil, for tower blocks.",
+  [K.TvPlant]: "Makes TVs from aluminum and electricity, for tower blocks.",
+  [K.MissileSilo]: "Arms a nuke (2 uranium and 2 explosives, held until it's launched; 2 minutes), then launches it anywhere on the map. Everyone sees it coming: 20 seconds later everything near where it lands is destroyed, and a crater stays.",
 };
 // The six eras, and the house each brings. Which kinds and resources
 // belong to which era comes from Rust (kind_era, res_era); so do the
@@ -114,7 +125,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
@@ -128,7 +139,8 @@ const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.Hunt
   K.SheepFarm, K.Weaver, K.IronMine, K.Brickworks, K.Bakery, K.Brewery, K.SiegeWorkshop,
   K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
-  K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield];
+  K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield,
+  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo];
 const PAGE_KEYS = "QERTYUIOFGCVBJLN";
 // Every building (for code that wants them all; keys are per page).
 const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
@@ -146,8 +158,8 @@ function buildMenu() {
 }
 const TRAIN_KEYS = "QERTY";
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
-  [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun],
-  [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber] };
+  [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
+  [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -183,6 +195,10 @@ const RES_ICON = [
   '<svg viewBox="0 0 16 16"><path d="M8 1.5C6 5 3.5 7.5 3.5 10.3a4.5 4.5 0 0 0 9 0C12.5 7.5 10 5 8 1.5z" fill="#1e1e22"/><path d="M6 10.5c0 1.3.8 2.2 2 2.4" stroke="#5c5c66" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M2 10.5l3-5h9l-3 5z" fill="#d7dde4"/><path d="M2 10.5h9V13H2z" fill="#a9b2bd"/><path d="M11 10.5l3-5V8l-3 5z" fill="#8a939e"/><path d="M5.5 7h7" stroke="#f4f7fa" stroke-width=".7"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M2 5.5h12v8.5H2z" fill="#8a5a33"/><path d="M3.5 7h5.5v5.5H3.5z" fill="#3a2c20"/><path d="M4 8h4.5M4 9.3h4.5M4 10.6h4.5M4 11.9h4.5" stroke="#6b5a44" stroke-width=".5"/><circle cx="11.5" cy="8.5" r="1.1" fill="#d8c8a4"/><circle cx="11.5" cy="11.5" r="1.1" fill="#d8c8a4"/><path d="M4 5.5l7-4" stroke="#5b6169"/></svg>',
+  // uranium, cars, TVs
+  '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="#2a2c20"/><circle cx="8" cy="8" r="1.4" fill="#9ed14a"/><path d="M8 6.2L5.6 2.1A6.5 6.5 0 0 1 10.4 2.1zM9.6 8.9l4.5.1a6.5 6.5 0 0 1-2.4 4.2zM6.4 8.9l-2.1 4.3A6.5 6.5 0 0 1 1.9 9z" fill="#9ed14a"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M1.5 11V8.5l2.5-.5 2-3h5l2.5 3H15v3z" fill="#c8453a"/><path d="M6.5 5.7h4l1.7 2.3H5z" fill="#9fc3d6"/><circle cx="4.5" cy="11.5" r="1.7" fill="#2a2a2a"/><circle cx="11.5" cy="11.5" r="1.7" fill="#2a2a2a"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M1.5 4h13v9h-13z" fill="#5b4a3a"/><path d="M3 5.5h8v6H3z" fill="#9fc3d6"/><circle cx="12.7" cy="7" r=".9" fill="#d8c8a4"/><circle cx="12.7" cy="10" r=".9" fill="#d8c8a4"/><path d="M5 4L3.5 1.5M11 4l1.5-2.5" stroke="#3e4146"/></svg>',
 ];
 const resIcon = r => RES_ICON[r] || `<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="#6d6455"/><text x="8" y="11" text-anchor="middle" font-size="8" fill="#efe6d1" font-family="sans-serif">${RES_NAMES[r][0].toUpperCase()}</text></svg>`;
 
@@ -261,6 +277,8 @@ let projBuf = new Float32Array(0), projCount = 0;
 let mouse = { x: 0, y: 0, inside: false };
 let drag = null, orbit = null;
 let placing = null, amode = false;
+// Aiming a nuke: the silo it launches from (attack-move's targeting mode).
+let aimSilo = null;
 let groups = {};
 let lastClick = { t: 0, x: 0, y: 0 };
 let lastAlert = null;
@@ -517,7 +535,7 @@ function drawMinimap() {
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
   // Then iron ore, clay and sheep hills (5, water, has no dots).
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a"], dot = Math.max(1.5, s);
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
@@ -701,7 +719,7 @@ function techCard(k) {
   const trainers = Object.keys(TRAINS).map(Number).filter(b => TRAINS[b].includes(k));
   const built = bld ? W.has_built(k) : false, open = bld ? W.unlocked(k) : trainers.some(b => W.has_built(b)) && W.kind_era(k) <= W.era();
   // Houses past the first grow from the one below; nobody builds them.
-  const grows = { [K.Cottage]: K.Hut, [K.Townhouse]: K.Cottage, [K.Tenement]: K.Townhouse, [K.Apartment]: K.Tenement }[k];
+  const grows = { [K.Cottage]: K.Hut, [K.Townhouse]: K.Cottage, [K.Tenement]: K.Townhouse, [K.Apartment]: K.Tenement, [K.TowerBlock]: K.Apartment }[k];
   card.className = "tcard " + (built ? "built" : open ? "open" : "locked");
   card.append(iconEl(k, ME, 40));
   const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
@@ -725,7 +743,7 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}`;
   if (!force && sig === selKey) return;
   selKey = sig;
   const panel = $("sel");
@@ -796,6 +814,10 @@ function singleInfo(panel, i) {
     if (owner === ME && (E(i, F.flags) & 256)) html += `<div class="statline bad">Short of ${takes.map(([r]) => RES_NAMES[r]).join(" and ")}: it makes nothing until enough is free.</div>`;
     else if (owner === ME && (E(i, F.flags) & 64)) html += `<div class="statline bad">Paused: it makes nothing and hires nobody. Press Resume, or send workers here with a right-click.</div>`;
     else if (E(i, F.flags) & 32) html += `<div class="statline bad">Waiting for workers: when someone is free at the campfire, they come.</div>`;
+  } else if (k === K.MissileSilo) {
+    const st = W.silo_state(id);
+    html += st === 1 ? `<div class="statline">Arming a nuke · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`
+      : st === 2 ? `<div class="statline">A nuke is armed: Launch (Z), then click a target.</div>` : `<div class="statline">Empty: Arm a nuke (Z).</div>`;
   } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
     html += `<div class="statline">Waiting for a recruit from the campfire.</div>`;
   }
@@ -895,6 +917,18 @@ function renderCommands(sel) {
   box.classList.toggle("dense", box.children.length > 15 && box.children.length <= 22);
   box.classList.toggle("denser", box.children.length > 22 && box.children.length <= 36);
   box.classList.toggle("densest", box.children.length > 36);
+  // A missile silo: arm a nuke, or launch the armed one (both Z).
+  const silo = mine.find(i => E(i, F.kind) === K.MissileSilo && !(E(i, F.flags) & 2));
+  if (silo != null && !hasUnits) {
+    const id = E(silo, F.id), st = W.silo_state(id);
+    if (st === 0) {
+      const fn = () => { const code = issue({ c: 11, ids: [id] }); if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("queued"); selKey = ""; };
+      add(cmdButton("Arm a nuke", "Z", fn, { glyph: "☢", tip: `<h4>Arm a nuke</h4><p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes.</p>` }), "Z", fn);
+    } else if (st === 2) {
+      const fn = () => { aimSilo = id; amode = true; placing = null; updateCursor(); };
+      add(cmdButton("Launch", "Z", fn, { glyph: "🚀", tip: `<h4>Launch the nuke</h4><p>Click where it should fall. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming.</p>` }), "Z", fn);
+    }
+  }
   const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
   if (doomed.length && !hasUnits) {
     const armed = demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000;
@@ -940,7 +974,7 @@ function houseTierLine(k, goods, residents, beds) {
   // Each tier: what it falls back to below, and what it grows into.
   const TIERS = { [K.Hut]: [null, 0, K.Cottage, "1 wood and 1 stone"], [K.Cottage]: [K.Hut, 3, K.Townhouse, "1 stone and 2 brick"],
     [K.Townhouse]: [K.Cottage, 5, K.Tenement, "1 brick and 1 steel"], [K.Tenement]: [K.Townhouse, 7, K.Apartment, "1 more steel"],
-    [K.Apartment]: [K.Tenement, 9, null, ""] };
+    [K.Apartment]: [K.Tenement, 9, K.TowerBlock, "1 more steel and 1 aluminum"], [K.TowerBlock]: [K.Apartment, 11, null, ""] };
   const t = TIERS[k];
   if (!t) return "";
   const [down, keep, up, mats] = t;
@@ -1042,13 +1076,21 @@ function startPlacing(k) {
   if (!canAfford(k)) { toast(explain(shortCode(k)), "bad"); Sfx.ui("error"); return; }
   placing = k; amode = false; updateCursor();
 }
-function setAmode(on) { amode = on; placing = null; updateCursor(); }
+function launchAt(w) {
+  if (w && aimSilo != null) {
+    const code = issue({ c: 12, ids: [aimSilo], x: w.x, y: w.y });
+    if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else marker(w, 2);
+  }
+  setAmode(false);
+}
+function setAmode(on) { amode = on; placing = null; if (!on) aimSilo = null; updateCursor(); }
 function updateCursor() {
   lastCursorCheck = 0; cursorCode = -1; // refresh the mouse cursor now
   view.classList.toggle("placing", placing != null);
   view.classList.toggle("amode", amode);
   const h = $("hint");
   if (placing != null) { h.hidden = false; h.textContent = `Place ${NAMES[placing]}: click to build, Shift-click for more, right-click to cancel`; }
+  else if (amode && aimSilo != null) { h.hidden = false; h.textContent = "Launch the nuke: click where it should fall, right-click to cancel"; }
   else if (amode) { h.hidden = false; h.textContent = "Attack-move: click a destination, right-click to cancel"; }
   else h.hidden = true;
 }
@@ -1107,6 +1149,7 @@ view.addEventListener("pointerdown", e => {
   }
   if (e.button !== 0) return;
   if (placing != null) { tryPlace(p, e.shiftKey); return; }
+  if (amode && aimSilo != null) { launchAt(screenToGround(p.x, p.y)); return; }
   if (amode) {
     const w = screenToGround(p.x, p.y);
     if (w) { issue({ c: 2, ids: myIds(false), x: w.x, y: w.y }); marker(w, 2); Sfx.ui("command", 2); }
@@ -1214,6 +1257,7 @@ function tryPlace(p, keep) {
 // Touch: tap your own things to select them; tap elsewhere to command.
 function tap(p) {
   if (placing != null) { tryPlace(p, false); return; }
+  if (amode && aimSilo != null) { launchAt(screenToGround(p.x, p.y)); return; }
   if (amode) { const w = screenToGround(p.x, p.y); if (w) { issue({ c: 2, ids: myIds(false), x: w.x, y: w.y }); marker(w, 2); } setAmode(false); return; }
   const hit = pickAt(p.x, p.y);
   if (!hit) return;
@@ -1313,7 +1357,7 @@ function scrollCamera(dt) {
 // ===========================================================================
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
 const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, Eliminated: 14,
-  Upgraded: 15, Downgraded: 16, EraReached: 17 };
+  Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1359,6 +1403,17 @@ function handleEvents() {
       case EV.Hammer: Sfx.at("hammer", x, y, 90); break;
       case EV.Eliminated:
         if (d !== ME) toast(`${PNAME[d]} has been eliminated.`, "good");
+        break;
+      case EV.NukeArmed: toast("A nuke is armed. Select the silo and press Z to launch it.", "good"); Sfx.ui("trained"); break;
+      case EV.NukeLaunched:
+        // Everyone is told, and shown where it will fall.
+        toast(d === ME ? "Nuke launched. It lands in 20 seconds." : `${PNAME[d]} has launched a nuke! It lands in 20 seconds: get out of the marked area.`, d === ME ? "good" : "bad");
+        Sfx.ui("siren");
+        lastAlert = { x, y, t: performance.now() };
+        break;
+      case EV.NukeDetonated:
+        Sfx.ui("nuke");
+        nukeFlash(x, y);
         break;
       case EV.Upgraded: {
         const era = W.era(), got = W.era_progress(0), need = W.era_progress(1);

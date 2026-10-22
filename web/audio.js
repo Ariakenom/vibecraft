@@ -116,6 +116,19 @@ const Sfx = (() => {
       noise(sfxBus, "highpass", jit(1800), 900, 0.7, v * 0.7, p, t, 0.001, 0.08);
       noise(sfxBus, "lowpass", jit(700), 150, 0.8, v * 0.5, p, t + 0.005, 0.003, 0.3);
       tone(sfxBus, "sine", 140, 55, v * 0.35, p, t, 0.001, 0.12); },
+    // An air-raid siren: a slow rising and falling wail.
+    siren() { const t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = "sawtooth";
+      o.frequency.setValueAtTime(300, t);
+      for (let k = 0; k < 3; k++) { o.frequency.linearRampToValueAtTime(900, t + k * 1.6 + 0.8); o.frequency.linearRampToValueAtTime(300, t + k * 1.6 + 1.6); }
+      const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 1400;
+      o.connect(f); f.connect(out(uiBus, 0.25, 0, t, 0.3, 4.6));
+      o.start(t); o.stop(t + 5); },
+    // The nuke: a crack, then a long, deep roar.
+    nuke() { const t = ac.currentTime;
+      noise(uiBus, "highpass", 2500, 800, 0.7, 0.9, 0, t, 0.001, 0.25);
+      tone(uiBus, "sine", 60, 22, 1.2, 0, t + 0.05, 0.05, 3.5);
+      noise(uiBus, "lowpass", 700, 50, 0.6, 1.2, 0, t + 0.05, 0.1, 5.5); },
     // A machine gun: a burst of five quick cracks.
     mg(v, p) { const t = ac.currentTime;
       for (let k = 0; k < 5; k++) {

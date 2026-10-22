@@ -454,8 +454,8 @@ versions don't play together.
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
-  `docs/plan/economy-and-eras-plan.md`); so far there are five: Ancient,
-  Medieval, Gunpowder, Industrial and Modern.
+  `docs/plan/economy-and-eras-plan.md`); all six are in: Ancient,
+  Medieval, Gunpowder, Industrial, Modern and Atomic.
 - **Resources are slots.** Nothing is gathered or stockpiled:
   producers make slots (a lumber camp by a forest makes 4 wood), and
   everything you have holds some while it exists, giving them back when
@@ -490,6 +490,13 @@ versions don't play together.
   water and buildings and only fighters, machine gunners, infantry, towers
   and the Capitol can hit them; bombers flatten buildings but need fighters
   to protect them.
+  Ten tower blocks (full apartment blocks with eleven goods) bring the
+  Atomic era: uranium mines, reactors, car and TV plants, rocket artillery,
+  jets, and the **missile silo**. A silo arms a nuke in two minutes
+  (holding 2 uranium and 2 explosives); launched, it flies for 20 seconds,
+  with a red ring on the ground for everyone, then destroys everything
+  within 5 tiles, its owner's things too, and leaves a crater nothing can
+  cross or build on.
 - **The computer** explores before it builds: it uses only deposits it has
   seen, so it sends its first soldier round the map. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
@@ -500,16 +507,12 @@ versions don't play together.
 **Controls.**
 - **Camera:** WASD, arrows or screen edges move it; the wheel zooms;
   middle-drag rotates and tilts.
-- **Build:** Q hut, E farm, R lumber camp, T quarry, Y fishing hut,
-  U hunting lodge, I orchard, O pasture, F barracks, G range, C stable,
-  V tower. Medieval: J sheep farm, Shift+J weaver, L iron mine,
-  N brickworks, Shift+E bakery, Shift+N brewery, Shift+F siege workshop.
-  Gunpowder: Shift+T saltpeter works, Shift+U powder mill, Shift+R
-  carpenter, Shift+Y printer, Shift+C circus. Industrial: Shift+L coal
-  mine, Shift+O steel mill, Shift+V explosives works, Shift+I cannery,
-  Shift+Q coal yard, Shift+G press, Shift+B factory. Modern: Shift+Z oil
-  well, Shift+X power plant; the rest are clicked.
-  Del (twice) demolishes the selected buildings.
+- **Build:** the menu has a page per era (Tab for the next, Shift+Tab
+  back), and each page's buildings take Q, E, R, T, Y, U, I, O, F, G, C,
+  V in order. Ancient: Q hut, E farm, R lumber camp, T quarry, Y fishing
+  hut, U hunting lodge, I orchard, O pasture, F barracks, G range, C
+  stable, V tower. Del (twice) demolishes the selected buildings.
+- **Missile silo:** Z arms a nuke, then Z again and a click launches it.
 - **Train:** Q, E, R, T for the units a building trains, oldest first.
 - **Other keys:**
   - Z attack-move, X stop

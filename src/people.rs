@@ -176,6 +176,12 @@ impl Game {
                     used[o][r.idx()] += k as u32;
                 }
             }
+            // A silo's nuke holds its slots from arming to launch.
+            if e.nuke > 0 {
+                for &(r, k) in NUKE_COST {
+                    used[o][r.idx()] += k as u32;
+                }
+            }
         }
         // 4. Converters, earlier eras first, then oldest first: each built
         //    one borrows its inputs if they're free (crewed or not: a

@@ -742,3 +742,49 @@ fn a_chain_of_converters_works_in_any_order() {
     assert!(g.ents[radios as usize].fed, "{}", census(&g, 1));
     assert!(g.players[1].supply[Res::Radios.idx()] >= 3);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8: the Atomic era and the nuke
+
+#[test]
+fn a_nuke_is_armed_launched_and_leaves_a_crater() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].era = 5;
+    g.players[1].supply_pct = 300;
+    for _ in 0..6 {
+        let (x, y) = spot(&g, Kind::Hut);
+        g.spawn_building(Kind::Hut, 1, x, y, 1.0);
+    }
+    empty_campfire(&mut g);
+    for k in [Kind::Brickworks, Kind::UraniumMine, Kind::SaltpeterWorks, Kind::CoalMine, Kind::ExplosivesWorks] {
+        build(&mut g, k);
+    }
+    let silo = build(&mut g, Kind::MissileSilo);
+    let uranium = free(&g, Res::Uranium);
+    // Arming holds the nuke's slots and takes its time.
+    g.apply(1, Command::Arm { id: silo }).unwrap();
+    g.tick();
+    assert_eq!(free(&g, Res::Uranium), uranium - 2);
+    assert_eq!(g.apply(1, Command::Launch { id: silo, x: 10.0, y: 10.0 }).err(), Some(CmdError::NoBuilding), "not armed yet");
+    run(&mut g, NUKE_ARM_TIME + 0.5);
+    assert_eq!(g.ents[silo as usize].nuke, 2);
+    // At player 2's Capitol: it flies, then everything near it falls.
+    let cap = g.find_first(2, Kind::Capitol).unwrap();
+    let (cx, cy) = (g.ents[cap].x, g.ents[cap].y);
+    let near = g.spawn_unit(Kind::Spearman, 2, cx + 3.0, cy + 3.0);
+    let far = g.spawn_unit(Kind::Spearman, 2, cx + 9.0, cy);
+    g.apply(1, Command::Launch { id: silo, x: cx, y: cy }).unwrap();
+    g.tick();
+    assert_eq!(free(&g, Res::Uranium), uranium, "launched: its slots come free");
+    assert_eq!(g.nukes.len(), 1);
+    run(&mut g, NUKE_FLIGHT - 1.0);
+    assert!(g.alive(near), "still in flight");
+    run(&mut g, 1.5);
+    assert!(g.nukes.is_empty());
+    assert!(!g.alive(near) && g.alive(far));
+    assert!(!g.ents[cap].alive, "the Capitol at the centre is gone");
+    assert_eq!(g.winner, 1, "and with it player 2");
+    let i = g.map.idx(cx as i32, cy as i32);
+    assert!(g.map.blocked[i] && g.map.terrain[i] == crate::map::CRATER);
+    assert_eq!(g.craters.len(), 1);
+}

@@ -1964,6 +1964,167 @@ def bauxite():
     return m
 
 
+# --- Atomic -------------------------------------------------------------------------------
+URANIUM_GREEN = "#9ed14a"
+
+def rocket_artillery():
+    """A truck carrying a rack of rockets. The rack is its tool (it kicks
+    when it fires); no skeleton."""
+    m = Model("RocketArtillery")
+    for x in (-0.25, 0.0, 0.3):
+        for z in (-0.17, 0.17):
+            m.cyl(0.08, 0.08, 0.06, "#1e1e22", x, 0.08, z, seg=10, rx=math.pi / 2, vary=0)
+    m.box(0.8, 0.08, 0.3, "#3a3d30", 0.0, 0.17, 0, vary=0)                # chassis
+    m.box(0.22, 0.22, 0.3, OLIVE, 0.3, 0.3, 0, bevel=0.02, vary=0)        # cab
+    m.box(0.02, 0.1, 0.24, GLASS, 0.41, 0.34, 0, vary=0)
+    m.box(0.12, 0.04, 0.14, TEAM, 0.3, 0.42, 0, vary=0)
+    m.box(0.45, 0.06, 0.3, OLIVE2, -0.15, 0.24, 0, vary=0)                # bed
+    t = Model("RocketArtillery.tool")  # the launcher: a box of rocket tubes, raised
+    t.box(0.5, 0.16, 0.26, OLIVE2, 0.12, 0.0, 0, rz=0.4, vary=0)
+    for r in range(2):
+        for c in range(4):
+            t.cyl(0.025, 0.025, 0.02, "#1e1e22", 0.355, 0.1 - r * 0.06 + 0.0, -0.09 + c * 0.06, seg=6, rz=-math.pi / 2 + 0.4, vary=0)
+    return dict(body=m, tool=t, tool_at=(-0.2, 0.3, 0.0), tool_bone="body", pivots={})
+
+def jet():
+    """A swept-wing jet fighter, nose +x. Its tool is the round intake cone,
+    so the game's spin doesn't show. No skeleton."""
+    m = Model("Jet")
+    m.smooth = True
+    sphere(m, 0.07, "#9aa1aa", 0.0, 0.0, 0, sx=5.0, sy=0.9, sz=1.0)
+    m.smooth = False
+    for z in (-1, 1):
+        m.box(0.3, 0.02, 0.36, "#9aa1aa", -0.05, -0.01, z * 0.2, ry=z * 0.6, vary=0)   # swept wings
+        m.box(0.1, 0.015, 0.14, "#9aa1aa", -0.3, 0.01, z * 0.08, ry=z * 0.6, vary=0)    # tailplanes
+        m.cyl(0.045, 0.045, 0.02, TEAM, -0.08, 0.005, z * 0.25, seg=12, vary=0)
+    m.box(0.16, 0.14, 0.015, TEAM, -0.3, 0.09, 0, rz=0.4, vary=0)          # fin
+    sphere(m, 0.04, GLASS, 0.14, 0.05, 0, sx=2.2, sy=0.9, sz=0.9, vary=0)  # canopy
+    m.cyl(0.05, 0.05, 0.04, "#2a2c30", -0.36, 0.0, 0, seg=10, rz=-math.pi / 2, vary=0)  # exhaust
+    t = Model("Jet.tool")
+    t.cyl(0.05, 0.0, 0.1, "#3e4146", 0.02, 0.0, 0, seg=10, rz=-math.pi / 2, vary=0)
+    return dict(body=m, tool=t, tool_at=(0.34, 0.0, 0.0), tool_bone="body", pivots={})
+
+def tower_block():
+    """An Atomic-era home: a high-rise of concrete and glass."""
+    m = Model("TowerBlock")
+    foundation(m, 2, col=CONCRETE)
+    m.box(1.2, 3.4, 1.1, "#c9c4b8", 0, 1.76, 0, vary=0.02)
+    for k in range(8):
+        y = 0.35 + k * 0.41
+        m.box(1.22, 0.24, 1.12, "#6d8fa6", 0, y, 0, vary=0.03)              # bands of windows
+    for x in (-0.6, 0.6):
+        for z in (-0.55, 0.55):
+            m.box(0.1, 3.4, 0.1, "#b9b5aa", x, 1.76, z, vary=0)             # corners
+    m.box(1.26, 0.1, 1.16, "#8a8478", 0, 3.5, 0, vary=0)
+    m.box(0.36, 0.3, 0.36, "#8a8478", -0.25, 3.7, 0.15, vary=0)            # lift housing
+    m.box(0.14, 0.35, 0.14, "#8a8478", 0.35, 3.7, -0.25, vary=0)           # chimney: smoke comes out at the top
+    m.cyl(0.012, 0.012, 0.45, "#3e4146", 0.2, 3.8, 0.3, seg=5, vary=0)     # TV aerial
+    for a in range(3):
+        m.box(0.2, 0.012, 0.012, "#3e4146", 0.2, 3.9 + a * 0.08, 0.3, ry=a * 0.5, vary=0)
+    door(m, 0, 0.555, w=0.36, h=0.36, y=0.06)
+    m.box(0.5, 0.15, 0.03, TEAM, 0, 0.55, 0.57, vary=0)
+    m.pole_flag(0.8, 0.75, 0.9)
+    return m
+
+def uranium_mine():
+    m = Model("UraniumMine")
+    foundation(m, 2, col="#6a6258")
+    m.box(0.7, 0.45, 0.6, "#a8a294", -0.3, 0.29, -0.3, vary=0.03)           # sealed building
+    m.box(0.72, 0.06, 0.62, "#5b5e52", -0.3, 0.54, -0.3, vary=0)
+    m.box(0.3, 0.3, 0.03, "#2a2c30", -0.3, 0.23, 0.01, vary=0)
+    m.cyl(0.08, 0.08, 0.02, "#f4c542", -0.3, 0.45, 0.02, seg=10, rx=math.pi / 2, vary=0)  # warning sign
+    m.cyl(0.03, 0.03, 0.022, "#1e1e22", -0.3, 0.45, 0.025, seg=8, rx=math.pi / 2, vary=0)
+    for x in (0.5, 0.7):
+        for z in (0.4, 0.6):
+            m.cyl(0.08, 0.08, 0.2, "#f4c542", x, 0.16, z, seg=10, vary=0)     # yellow drums
+            m.cyl(0.081, 0.081, 0.02, "#1e1e22", x, 0.2, z, seg=10, vary=0)
+    for x, z, r in ((0.45, -0.45, 0.2), (0.7, -0.25, 0.14)):
+        m.rock(r, "#5b5a3a", x, 0.05, z, flat=0.6, vary=0.08)
+    m.ball(0.04, URANIUM_GREEN, 0.5, 0.2, -0.4, sub=1, vary=0)
+    for k in range(3):
+        m.box(0.03, 0.03, 0.9, "#3e4146", -0.75 + k * 0.25, 0.08, 0.5, vary=0)  # fence posts / rails
+    m.pole_flag(-0.8, 0.7, 1.1)
+    return m
+
+def reactor():
+    """A nuclear power station: a domed containment and a cooling tower."""
+    m = Model("Reactor")
+    foundation(m, 3, col=CONCRETE)
+    m.cyl(0.55, 0.55, 0.8, "#d6d0c2", -0.5, 0.46, 0.2, seg=20, vary=0.01)    # containment
+    sphere(m, 0.55, "#d6d0c2", -0.5, 0.86, 0.2, sy=0.75, seg=20, rings=10, vary=0)
+    m.box(0.8, 0.5, 0.6, "#a8a294", 0.35, 0.31, 0.6, vary=0.02)               # turbine hall
+    m.cyl(0.5, 0.38, 1.6, "#c9c4b8", 0.7, 0.86, -0.6, seg=18, vary=0.02)      # cooling tower
+    m.cyl(0.39, 0.44, 0.3, "#c9c4b8", 0.7, 1.8, -0.6, seg=18, vary=0.02)
+    m.box(0.3, 0.12, 0.03, TEAM, 0.35, 0.45, 0.91, vary=0)
+    for k in range(3):
+        m.box(0.03, 0.6, 0.03, "#3e4146", -1.25, 0.36, -0.7 + k * 0.6, vary=0)
+        m.box(0.2, 0.02, 0.02, "#3e4146", -1.25, 0.64, -0.7 + k * 0.6, vary=0)
+    m.pole_flag(1.3, 1.25, 1.1)
+    return m
+
+def car_plant():
+    m = Model("CarPlant")
+    foundation(m, 2, col=CONCRETE)
+    m.box(1.3, 0.75, 0.9, "#b9b5aa", 0, 0.44, -0.2, vary=0.02)
+    for k in range(3):
+        m.box(0.44, 0.04, 0.92, "#6e7066", -0.44 + k * 0.44, 0.86, -0.2, rz=0.4, vary=0)  # sawtooth
+        m.box(0.02, 0.18, 0.92, GLASS, -0.24 + k * 0.44, 0.88, -0.2, vary=0)
+    m.box(0.6, 0.45, 0.03, "#3e4146", -0.2, 0.3, 0.255, vary=0)                # door
+    for k, col in enumerate(("#c8453a", "#4f7aa8", "#e8c45a")):               # new cars outside
+        x = -0.55 + k * 0.42
+        m.box(0.3, 0.08, 0.15, col, x, 0.13, 0.65, bevel=0.02, vary=0)
+        m.box(0.16, 0.07, 0.13, col, x - 0.02, 0.2, 0.65, vary=0)
+        m.box(0.12, 0.05, 0.135, GLASS, x - 0.02, 0.21, 0.65, vary=0)
+        for dx in (-0.09, 0.09):
+            for z in (-0.075, 0.075):
+                m.cyl(0.035, 0.035, 0.02, "#1e1e22", x + dx, 0.08, 0.65 + z, seg=8, rx=math.pi / 2, vary=0)
+    m.pole_flag(0.8, -0.7, 1.0)
+    return m
+
+def tv_plant():
+    m = Model("TvPlant")
+    foundation(m, 2, col=CONCRETE)
+    m.box(1.2, 0.8, 0.95, "#d6d0c2", 0, 0.46, -0.1, vary=0.02)
+    m.box(1.22, 0.06, 0.97, "#8a8478", 0, 0.88, -0.1, vary=0)
+    for x in (-0.38, 0.0, 0.38):
+        m.box(0.26, 0.2, 0.03, "#5d7a8c", x, 0.6, 0.385, vary=0.05)
+    door(m, 0, 0.385, w=0.28, h=0.32, y=0.06)
+    m.box(0.5, 0.36, 0.05, "#2a2c30", 0.25, 1.15, -0.1, vary=0)                # a big TV on the roof
+    m.box(0.42, 0.28, 0.02, "#7fd0f0", 0.25, 1.15, -0.07, vary=0)
+    m.box(0.04, 0.2, 0.04, "#3e4146", 0.25, 0.95, -0.1, vary=0)
+    for k in range(3):
+        crate(m, -0.55 + k * 0.2, 0.65, s=0.15)
+    m.pole_flag(-0.8, -0.7, 1.0)
+    return m
+
+def missile_silo():
+    """A concrete pad with blast doors, the nose of a missile showing, a
+    bunker and a radar dish."""
+    m = Model("MissileSilo")
+    foundation(m, 3, col=CONCRETE)
+    m.cyl(0.7, 0.75, 0.15, "#9a958a", -0.3, 0.12, 0.1, seg=20, vary=0.01)     # the silo collar
+    for z in (-1, 1):
+        m.box(0.62, 0.05, 0.6, "#5b5e52", -0.3, 0.22, 0.1 + z * 0.3, vary=0)    # blast doors, ajar
+    m.cyl(0.16, 0.0, 0.35, "#d8dde3", -0.3, 0.36, 0.1, seg=12, vary=0)        # the missile's nose
+    m.box(0.02, 0.4, 0.4, "#f4c542", 0.45, 0.06, 0.1, vary=0)                 # hazard stripes
+    m.box(0.6, 0.35, 0.5, "#8a8a7c", 0.75, 0.24, -0.75, vary=0.02)            # bunker
+    m.box(0.62, 0.05, 0.52, "#5b5e52", 0.75, 0.43, -0.75, vary=0)
+    m.box(0.03, 0.4, 0.03, "#3e4146", 0.9, 0.65, 0.8, vary=0)                 # radar mast
+    sphere(m, 0.22, "#c9ced5", 0.9, 0.9, 0.8, sx=0.3, sy=1.0, sz=1.0, vary=0)
+    m.box(0.3, 0.12, 0.03, TEAM, 0.75, 0.3, -0.49, vary=0)
+    m.pole_flag(-1.3, -1.2, 1.2)
+    return m
+
+def uranium_ore():
+    """Uranium ore: dark rock with sickly green-yellow flecks."""
+    m = Model("UraniumOre")
+    for x, z, r in [(0, 0, 0.27), (0.22, 0.13, 0.18), (-0.2, -0.12, 0.17)]:
+        m.rock(r, "#4a4a38", x, 0, z, vary=0.06)
+    for x, y, z in [(-0.22, 0.08, 0.15), (0.25, 0.08, -0.1), (0.1, 0.25, 0.12), (-0.05, 0.3, -0.08)]:
+        m.ball(0.04, URANIUM_GREEN, x, y, z, sub=0, jitter=0.2, vary=0.1)
+    return m
+
+
 def clear_scene():
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob, do_unlink=True)
@@ -2105,10 +2266,11 @@ def main():
                       cottage, sheep_farm, iron_mine, brickworks, bakery, weaver, brewery, siege_workshop,
                       townhouse, saltpeter_works, powder_mill, carpenter, printer, circus,
                       tenement, coal_mine, steel_mill, explosives_works, cannery, coal_yard, press, factory,
-                      apartment, oil_well, bauxite_mine, power_plant, haber_bosch, radio_factory, tank_works, airfield],
-        "resources": [pine, oak, bush, stone, gold, iron_ore, clay_pit, sheep_herd, saltpeter, coal_seam, oil_field, bauxite],
+                      apartment, oil_well, bauxite_mine, power_plant, haber_bosch, radio_factory, tank_works, airfield,
+                      tower_block, uranium_mine, reactor, car_plant, tv_plant, missile_silo],
+        "resources": [pine, oak, bush, stone, gold, iron_ore, clay_pit, sheep_herd, saltpeter, coal_seam, oil_field, bauxite, uranium_ore],
         "units": [citizen, spearman, archer, horseman, swordsman, crossbowman, knight, trebuchet, musketeer, dragoon, cannon,
-                  rifleman, machine_gunner, field_gun, infantry, tank, fighter, bomber],
+                  rifleman, machine_gunner, field_gun, infantry, tank, fighter, bomber, rocket_artillery, jet],
     }
     ao_dist = {"buildings": 0.5, "resources": 0.2, "units": 0.1}
     all_objs, pivots_all = [], []

@@ -362,6 +362,14 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
             8 => Command::Surrender,
             9 => Command::Demolish { ids },
             10 => Command::Hire { ids, on: arg != 0 },
+            11 => match ids.first() {
+                Some(&id) => Command::Arm { id },
+                None => return 0,
+            },
+            12 => match ids.first() {
+                Some(&id) => Command::Launch { id, x, y },
+                None => return 0,
+            },
             _ => return 0,
         };
         match w.game.apply(owner as u8, cmd) {
@@ -731,6 +739,56 @@ pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
     game(|g| {
         if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive) {
             e.hp = hp.clamp(0.0, e.kind.stats().hp);
+        }
+    })
+}
+
+/// A missile silo's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
+#[unsafe(no_mangle)]
+pub extern "C" fn silo_state(id: u32) -> i32 {
+    game(|g| g.ents.get(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo).map_or(-1, |e| e.nuke as i32))
+}
+/// Nukes in flight: how many, and the n-th's `which` (0 x, 1 y of its
+/// target, 2 x, 3 y of its silo, 4 how far along 0..1, 5 owner).
+#[unsafe(no_mangle)]
+pub extern "C" fn nuke_count() -> u32 {
+    game(|g| g.nukes.len() as u32)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn nuke_info(n: u32, which: u32) -> f32 {
+    game(|g| {
+        g.nukes.get(n as usize).map_or(0.0, |k| match which {
+            0 => k.x,
+            1 => k.y,
+            2 => k.sx,
+            3 => k.sy,
+            4 => 1.0 - k.left / defs::NUKE_FLIGHT,
+            _ => k.owner as f32,
+        })
+    })
+}
+/// Craters: how many, and the n-th's centre (`which` 0 x, 1 y).
+#[unsafe(no_mangle)]
+pub extern "C" fn crater_count() -> u32 {
+    game(|g| g.craters.len() as u32)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn crater_info(n: u32, which: u32) -> f32 {
+    game(|g| g.craters.get(n as usize).map_or(0.0, |c| if which == 0 { c.0 } else { c.1 }))
+}
+/// Seconds to arm a nuke and for it to fly, and its blast radius (`which` 0, 1, 2).
+#[unsafe(no_mangle)]
+pub extern "C" fn nuke_numbers(which: u32) -> f32 {
+    [defs::NUKE_ARM_TIME, defs::NUKE_FLIGHT, defs::NUKE_RADIUS][which.min(2) as usize]
+}
+
+/// Debug/testing: set a missile silo's nuke (0 none, 1 arming, 2 armed),
+/// without its cost. Changes the game outside of commands: never in multiplayer.
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_set_nuke(id: u32, state: u32) {
+    game(|g| {
+        if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo) {
+            e.nuke = state.min(2) as u8;
         }
     })
 }

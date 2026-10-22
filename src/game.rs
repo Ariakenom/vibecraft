@@ -69,6 +69,9 @@ pub enum Ev {
     Short = 12,   // the player holds more than they make, and units suffer (data = resource)
     // 13 was WonderBegun (the Wonder is gone).
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
+    NukeArmed = 18,  // one of the player's silos has a nuke ready
+    NukeLaunched = 19, // someone launched a nuke at (x, y) (data = owner); everyone hears
+    NukeDetonated = 20, // a nuke fell at (x, y) (data = owner)
     Upgraded = 15,   // one of the player's houses grew a tier (data = new kind)
     Downgraded = 16, // one of the player's houses fell back a tier (data = new kind)
     EraReached = 17, // a player entered an era (data = player * 16 + era)
@@ -171,6 +174,21 @@ pub struct Entity {
     /// Which goods this house gets, one bit per resource index. Its beds
     /// are `BEDS_PER_GOOD` for each.
     pub goods: u32,
+    // --- missile silos ---
+    /// 0 empty, 1 arming a nuke (progress in `progress`), 2 armed.
+    pub nuke: u8,
+}
+
+/// A nuke in flight, from the silo at (sx, sy) to (x, y). Everyone sees it.
+#[derive(Clone)]
+pub struct Nuke {
+    pub owner: u8,
+    pub sx: f32,
+    pub sy: f32,
+    pub x: f32,
+    pub y: f32,
+    /// Seconds until it lands.
+    pub left: f32,
 }
 
 impl Entity {
@@ -220,6 +238,7 @@ impl Entity {
             hiring: true,
             residents: 0,
             goods: 0,
+            nuke: 0,
         }
     }
 
@@ -380,6 +399,10 @@ pub enum Command {
     Demolish { ids: Vec<u32> },
     /// Pause producers (their workers go to the campfire) or resume them.
     Hire { ids: Vec<u32>, on: bool },
+    /// Start arming a nuke in a missile silo.
+    Arm { id: u32 },
+    /// Launch a silo's armed nuke at (x, y).
+    Launch { id: u32, x: f32, y: f32 },
 }
 
 pub enum Pick {
@@ -404,6 +427,9 @@ pub struct Game {
     pub players: Vec<Player>,
     pub n_players: u8,
     pub proj: Vec<Projectile>,
+    /// Nukes in flight, and where they fell (craters stay on the map).
+    pub nukes: Vec<Nuke>,
+    pub craters: Vec<(f32, f32)>,
     pub time: f32,
     /// Per tile, for the human player: 0 never seen, 1 explored, 2 visible now.
     pub fog: Vec<u8>,
@@ -482,6 +508,8 @@ impl Game {
             players,
             n_players,
             proj,
+            nukes: Vec::new(),
+            craters: Vec::new(),
             time: 0.0,
             fog,
             explored: vec![0; n],
@@ -769,6 +797,7 @@ impl Game {
         }
         self.separate();
         self.update_projectiles();
+        self.update_nukes();
         self.reap();
 
         self.fog_timer -= DT;
@@ -865,6 +894,19 @@ impl Game {
             }
         }
         let owner = self.ents[i].owner as usize;
+        // A silo arming its nuke.
+        if self.ents[i].nuke == 1 {
+            self.ents[i].progress += DT / NUKE_ARM_TIME;
+            if self.ents[i].progress >= 1.0 {
+                let e = &mut self.ents[i];
+                e.progress = 0.0;
+                e.nuke = 2;
+                let (x, y) = (e.x, e.y);
+                if owner == self.local as usize {
+                    self.push_event(Ev::NukeArmed, x, y, 0.0);
+                }
+            }
+        }
         // Training goes on while its recruit is inside.
         if let Some(&unit) = self.ents[i].queue.first() {
             if self.ents[i].recruits > 0 {
@@ -1264,6 +1306,16 @@ impl Game {
                     self.set_hiring(id, on);
                 }
             }
+            Command::Arm { id } => {
+                if own(self, &[id]).len() == 1 {
+                    self.arm_nuke(id)?;
+                }
+            }
+            Command::Launch { id, x, y } => {
+                if own(self, &[id]).len() == 1 {
+                    self.launch_nuke(id, x, y)?;
+                }
+            }
             Command::Surrender => self.surrender(owner),
             Command::Demolish { ids } => {
                 for id in own(self, &ids) {
@@ -1320,6 +1372,10 @@ impl Game {
             mix(e.queue.len() as u32);
             mix(e.builders_in as u32 | (e.recruits as u32) << 8 | (e.hiring as u32) << 16);
             mix(e.goods);
+            mix(e.nuke as u32);
+        }
+        for n in &self.nukes {
+            mix(n.left.to_bits());
         }
         for p in &self.players[1..] {
             for r in 0..N_RES {
@@ -1527,7 +1583,7 @@ impl Game {
                 for xx in tx..tx + s {
                     let j = self.map.idx(xx, yy);
                     self.map.bld_at[j] = -1;
-                    self.map.blocked[j] = false;
+                    self.map.blocked[j] = self.map.terrain[j] == map::CRATER; // craters stay blocked
                 }
             }
         }
@@ -1847,4 +1903,87 @@ impl Game {
         first as i32
     }
 
+}
+
+// ---------------------------------------------------------------------------
+// The nuke
+
+impl Game {
+    /// Start arming a nuke: it holds `NUKE_COST` from now until it's launched.
+    fn arm_nuke(&mut self, id: u32) -> Result<(), CmdError> {
+        let e = &self.ents[id as usize];
+        if !e.alive || e.kind != Kind::MissileSilo || e.built < 1.0 || e.nuke != 0 {
+            return Err(CmdError::NoBuilding);
+        }
+        let owner = e.owner;
+        self.pay(owner, NUKE_COST)?;
+        let e = &mut self.ents[id as usize];
+        e.nuke = 1;
+        e.progress = 0.0;
+        Ok(())
+    }
+
+    /// Launch an armed nuke at (x, y). Its slots come free at once.
+    fn launch_nuke(&mut self, id: u32, x: f32, y: f32) -> Result<(), CmdError> {
+        let e = &self.ents[id as usize];
+        if !e.alive || e.kind != Kind::MissileSilo || e.nuke != 2 {
+            return Err(CmdError::NoBuilding);
+        }
+        let (owner, sx, sy) = (e.owner, e.x, e.y);
+        let (x, y) = (x.clamp(0.0, self.map.w as f32), y.clamp(0.0, self.map.h as f32));
+        self.ents[id as usize].nuke = 0;
+        self.unpay(owner, NUKE_COST);
+        self.nukes.push(Nuke { owner, sx, sy, x, y, left: NUKE_FLIGHT });
+        self.push_event(Ev::NukeLaunched, x, y, owner as f32);
+        Ok(())
+    }
+
+    fn update_nukes(&mut self) {
+        let mut fell = Vec::new();
+        for n in self.nukes.iter_mut() {
+            n.left -= DT;
+            if n.left <= 0.0 {
+                fell.push((n.owner, n.x, n.y));
+            }
+        }
+        self.nukes.retain(|n| n.left > 0.0);
+        for (owner, x, y) in fell {
+            self.detonate(owner, x, y);
+        }
+    }
+
+    /// Everything near the blast suffers, the nuke's owner's things too:
+    /// units die, buildings take `NUKE_DAMAGE`, less with distance. The
+    /// ground at the middle becomes a crater nothing can cross or build on.
+    fn detonate(&mut self, owner: u8, x: f32, y: f32) {
+        for i in 0..self.ents.len() {
+            let e = &self.ents[i];
+            if !e.alive || e.owner == GAIA {
+                continue;
+            }
+            let d = e.edge_dist(x, y);
+            if d > NUKE_RADIUS {
+                continue;
+            }
+            let id = e.id;
+            let dmg = if e.is_building() { NUKE_DAMAGE * (1.0 - d / NUKE_RADIUS) } else { e.kind.stats().hp * 10.0 };
+            // The silo's owner is the attacker (alerts, fighting back).
+            let attacker = self.find_first(owner, Kind::MissileSilo).map_or(id, |s| self.ents[s].id);
+            self.damage(id, dmg, attacker);
+        }
+        let r = CRATER_RADIUS.ceil() as i32;
+        for ty in y as i32 - r..=y as i32 + r {
+            for tx in x as i32 - r..=x as i32 + r {
+                let (cx, cy) = (tx as f32 + 0.5, ty as f32 + 0.5);
+                if !self.map.inside(tx, ty) || (cx - x).hypot(cy - y) > CRATER_RADIUS {
+                    continue;
+                }
+                let i = self.map.idx(tx, ty);
+                self.map.terrain[i] = map::CRATER;
+                self.map.blocked[i] = true;
+            }
+        }
+        self.craters.push((x, y));
+        self.push_event(Ev::NukeDetonated, x, y, owner as f32);
+    }
 }
