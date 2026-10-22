@@ -413,6 +413,8 @@ const Watchers = {
   ready() { return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0).map(([t, e]) => [t, e.n, e.name]); },
   number(token) { const e = this.list.get(token); return e ? e.n : 0; },
   nameOf(token) { const e = this.list.get(token); return e ? e.name : ""; },
+  // How fast the game runs here (0: paused), so spectators play it back at that pace.
+  rate() { return Rec.done ? 1 : mp ? mp.pace() : paused ? 0 : speed; },
   // Is there a game here to watch?
   serving() { return !!room && !guestOf && Rec.real && !!Rec.id; },
   spend() {
@@ -437,7 +439,7 @@ const Watchers = {
       else if (this.spend()) {
         e.sent = now;
         const { ticks, upTo } = Rec.range(e.have, Rec.ticks, WATCH.FEED_BYTES);
-        room.emit("feed", { v: NET.PROTOCOL, to: t, game: Rec.id, from: e.have, upTo, ticks, over: Rec.done, n: e.n });
+        room.emit("feed", { v: NET.PROTOCOL, to: t, game: Rec.id, from: e.have, upTo, ticks, over: Rec.done, n: e.n, rate: this.rate() });
       }
     }
   },
@@ -500,6 +502,7 @@ class Watcher {
     this.ended = null;
     this.n = 0;          // which spectator I am, as the host counts us
     this.seat = null;    // { slot, T, seq0, gameId, host }: the host is handing me a seat
+    this.rate = 1;       // how fast the host's game runs (0: paused), from the feed
     r.on("feed", d => this.receive(d));
     r.on("seat", d => this.offered(d));
     r.onPeers(p => this.peers(p));
@@ -528,7 +531,7 @@ class Watcher {
       if (this.loaded) { if (!this.ended) { this.ended = "The host has left."; toast("The host has left the game.", "bad"); } }
       else return stopWatching("That game isn't open any more.");
     }
-    if (this.loaded) { $("netWait").hidden = !(now - this.lastHeard > 4000 && !observe.over); if (!$("netWait").hidden) $("netWait").textContent = "Waiting for the game…"; return; }
+    if (this.loaded) { this.showWait(); return; }
     const h = $("watchWait");
     h.hidden = false;
     $("watchWaitText").textContent = !this.host ? "Looking for the game…"
@@ -539,6 +542,10 @@ class Watcher {
   receive(d) {
     if (!this.room || !d || d.v !== NET.PROTOCOL || d.to !== myToken) return;
     this.lastHeard = performance.now();
+    if (typeof d.rate === "number" && d.rate >= 0 && d.rate <= 16 && d.rate !== this.rate) {
+      this.rate = d.rate;
+      if (this.loaded) { paceChanged(d.rate); this.showWait(); }
+    }
     if (Number.isInteger(d.n) && d.n > 0 && d.n !== this.n) { this.n = d.n; if (observe && observe.kind === "watch") $("obsLabel").textContent = `Spectating (you're Spectator ${d.n})`; }
     if (d.game === null) { if (!this.loaded) this.status(); return; }
     if (typeof d.game !== "string") return;
@@ -559,6 +566,13 @@ class Watcher {
       for (const e of d.ticks) if (Array.isArray(e) && Number.isInteger(e[0]) && e[0] >= this.k && Array.isArray(e[1])) this.cmds.set(e[0], e[1]);
       this.avail = Math.max(this.avail, d.upTo);
     }
+  }
+  // The card in the middle: paused, or not hearing from the host.
+  showWait() {
+    const h = $("netWait");
+    const lost = performance.now() - this.lastHeard > 4000, pausedHere = this.rate === 0 && this.k >= this.avail;
+    h.hidden = !observe || observe.over || !(lost || pausedHere);
+    if (!h.hidden) h.textContent = lost ? "Waiting for the game…" : `Paused by ${pnames[1] || "the host"}.`;
   }
   // The host is handing me a seat: run my copy up to the tick it changes
   // hands on, then play from there (takeSeat, in main.js).
@@ -585,6 +599,8 @@ class Watcher {
       Rec.real = true;
       ME = 0;
       startObserving("watch");
+      lastPace = this.rate;
+      if (this.rate !== 1 && this.rate !== 0) toast(`The game runs at ${this.rate}×.`);
       cam.x = MW / 2; cam.y = MH / 2; cam.dist = 40; clampCam();
       for (const id of ["startScreen", "endScreen", "watchWait", "loadScreen"]) $(id).hidden = true;
       acc = 0;
@@ -609,7 +625,9 @@ class Watcher {
     const behind = avail - this.k;
     // Keep a small buffer (a few ticks) so play is smooth; anything beyond
     // that is drained a little faster than real time.
-    acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : behind > 5 ? 1.25 : 1);
+    // At the host's speed (paused: just finish what's here), and faster to catch up.
+    const pace = this.rate || (behind > 0 ? 1 : 0);
+    acc += dt * 1000 * pace * (behind > 600 * pace ? 16 : behind > 200 * pace ? 8 : behind > 40 * pace ? 2 : behind > 5 * pace ? 1.25 : 1);
     let steps = 0;
     while (acc >= SIM_MS && this.k < avail && steps < 60) { this.step(); acc -= SIM_MS; steps++; }
     if (this.k >= avail) acc = Math.min(acc, SIM_MS);

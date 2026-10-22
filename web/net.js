@@ -258,6 +258,7 @@ class Server {
     this.guestClock = new Map();          // slot -> [their clock, when it came]: echoed so they can time the trip
     this.started = new Set();             // guests who have started the game
     for (const s of this.active) { this.lastSeq.set(s, 0); this.ack.set(s, -1); this.heard.set(s, performance.now()); }
+    this.left = new Set();                // slots whose player left (the computer has them, or soon will)
     this.joining = new Map();             // slot -> { token, T, seq0, at }: seats handed to spectators, not taken up yet
     this.late = {};                       // player -> commands that arrived after their tick was bundled
     this.lastSend = 0;
@@ -345,6 +346,8 @@ class Server {
     this.joining.delete(slot);
     if (!this.active.delete(slot)) return;
     Trace.event("drop", { slot });
+    this.left.add(slot);
+    if (this.local.hooks.left) this.local.hooks.left(slot);
     this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, 0, 0]]);
     this.updateWindow();
   }
@@ -360,6 +363,7 @@ class Server {
     const T = Math.ceil(this.now()) + 20;
     const offer = { slot, token, T, seq0: this.lastSeq.get(slot) || 0, at: performance.now() };
     this.joining.set(slot, offer);
+    this.left.delete(slot);
     this.tokens.set(slot, token);
     this.active.add(slot);
     this.started.add(slot);
@@ -406,7 +410,7 @@ class Server {
     const acks = {};
     for (const [s, q] of this.lastSeq) if (s !== this.local.me) acks[s] = q;
     // `upTo`: every tick up to here is final; those not listed had no commands.
-    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, rate: this.rate, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
+    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, rate: this.rate, left: [...this.left], w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
     Trace.msgOut(this.t.emit("frame", msg));
     this.lastSend = now;
   }
@@ -505,6 +509,7 @@ class Client {
     this.window = NET.WINDOW;
     this.offset = null;                  // guests: the host's tick at our time 0, as `rate` runs (ticks)
     this.rate = 1;                       // guests: the host's clock rate (0 paused), from the frames
+    this.leftSeen = new Set();           // guests: players the host said have left
     this.offsets = [];
     this.clockErr = null;                // guests: how far off our clock is, as the host measures it
     this.rtt = null; this.rttDev = 0;
@@ -613,6 +618,11 @@ class Client {
       else this.offset += (best - this.offset) * 0.1;
     }
     if (typeof d.w === "number") this.window = d.w;
+    // Who has left: told at once, even while the game is paused.
+    if (Array.isArray(d.left)) {
+      for (const s of d.left) if (Number.isInteger(s) && !this.leftSeen.has(s)) { this.leftSeen.add(s); if (this.hooks.left) this.hooks.left(s); }
+      for (const s of this.leftSeen) if (!d.left.includes(s)) this.leftSeen.delete(s);
+    }
     if (d.acks && typeof d.acks[this.me] === "number") this.taken = Math.max(this.taken, d.acks[this.me]);
     for (const e of Array.isArray(d.ticks) ? d.ticks : []) {
       if (Array.isArray(e) && typeof e[0] === "number" && e[0] > this.final && Array.isArray(e[1])) this.bundles.set(e[0], e[1]);

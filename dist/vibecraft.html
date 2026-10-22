@@ -1065,6 +1065,7 @@ class Server {
     this.guestClock = new Map();          // slot -> [their clock, when it came]: echoed so they can time the trip
     this.started = new Set();             // guests who have started the game
     for (const s of this.active) { this.lastSeq.set(s, 0); this.ack.set(s, -1); this.heard.set(s, performance.now()); }
+    this.left = new Set();                // slots whose player left (the computer has them, or soon will)
     this.joining = new Map();             // slot -> { token, T, seq0, at }: seats handed to spectators, not taken up yet
     this.late = {};                       // player -> commands that arrived after their tick was bundled
     this.lastSend = 0;
@@ -1152,6 +1153,8 @@ class Server {
     this.joining.delete(slot);
     if (!this.active.delete(slot)) return;
     Trace.event("drop", { slot });
+    this.left.add(slot);
+    if (this.local.hooks.left) this.local.hooks.left(slot);
     this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, 0, 0]]);
     this.updateWindow();
   }
@@ -1167,6 +1170,7 @@ class Server {
     const T = Math.ceil(this.now()) + 20;
     const offer = { slot, token, T, seq0: this.lastSeq.get(slot) || 0, at: performance.now() };
     this.joining.set(slot, offer);
+    this.left.delete(slot);
     this.tokens.set(slot, token);
     this.active.add(slot);
     this.started.add(slot);
@@ -1213,7 +1217,7 @@ class Server {
     const acks = {};
     for (const [s, q] of this.lastSeq) if (s !== this.local.me) acks[s] = q;
     // `upTo`: every tick up to here is final; those not listed had no commands.
-    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, rate: this.rate, w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
+    const msg = { v: NET.PROTOCOL, upTo, ticks, early, now: Math.round(this.now() * 100) / 100, rate: this.rate, left: [...this.left], w: this.window, acks, sum: this.local.latestSum(), ge, ce, late: this.late, end, t: Math.round(now) };
     Trace.msgOut(this.t.emit("frame", msg));
     this.lastSend = now;
   }
@@ -1312,6 +1316,7 @@ class Client {
     this.window = NET.WINDOW;
     this.offset = null;                  // guests: the host's tick at our time 0, as `rate` runs (ticks)
     this.rate = 1;                       // guests: the host's clock rate (0 paused), from the frames
+    this.leftSeen = new Set();           // guests: players the host said have left
     this.offsets = [];
     this.clockErr = null;                // guests: how far off our clock is, as the host measures it
     this.rtt = null; this.rttDev = 0;
@@ -1420,6 +1425,11 @@ class Client {
       else this.offset += (best - this.offset) * 0.1;
     }
     if (typeof d.w === "number") this.window = d.w;
+    // Who has left: told at once, even while the game is paused.
+    if (Array.isArray(d.left)) {
+      for (const s of d.left) if (Number.isInteger(s) && !this.leftSeen.has(s)) { this.leftSeen.add(s); if (this.hooks.left) this.hooks.left(s); }
+      for (const s of this.leftSeen) if (!d.left.includes(s)) this.leftSeen.delete(s);
+    }
     if (d.acks && typeof d.acks[this.me] === "number") this.taken = Math.max(this.taken, d.acks[this.me]);
     for (const e of Array.isArray(d.ticks) ? d.ticks : []) {
       if (Array.isArray(e) && typeof e[0] === "number" && e[0] > this.final && Array.isArray(e[1])) this.bundles.set(e[0], e[1]);
@@ -4307,6 +4317,8 @@ const Watchers = {
   ready() { return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0).map(([t, e]) => [t, e.n, e.name]); },
   number(token) { const e = this.list.get(token); return e ? e.n : 0; },
   nameOf(token) { const e = this.list.get(token); return e ? e.name : ""; },
+  // How fast the game runs here (0: paused), so spectators play it back at that pace.
+  rate() { return Rec.done ? 1 : mp ? mp.pace() : paused ? 0 : speed; },
   // Is there a game here to watch?
   serving() { return !!room && !guestOf && Rec.real && !!Rec.id; },
   spend() {
@@ -4331,7 +4343,7 @@ const Watchers = {
       else if (this.spend()) {
         e.sent = now;
         const { ticks, upTo } = Rec.range(e.have, Rec.ticks, WATCH.FEED_BYTES);
-        room.emit("feed", { v: NET.PROTOCOL, to: t, game: Rec.id, from: e.have, upTo, ticks, over: Rec.done, n: e.n });
+        room.emit("feed", { v: NET.PROTOCOL, to: t, game: Rec.id, from: e.have, upTo, ticks, over: Rec.done, n: e.n, rate: this.rate() });
       }
     }
   },
@@ -4394,6 +4406,7 @@ class Watcher {
     this.ended = null;
     this.n = 0;          // which spectator I am, as the host counts us
     this.seat = null;    // { slot, T, seq0, gameId, host }: the host is handing me a seat
+    this.rate = 1;       // how fast the host's game runs (0: paused), from the feed
     r.on("feed", d => this.receive(d));
     r.on("seat", d => this.offered(d));
     r.onPeers(p => this.peers(p));
@@ -4422,7 +4435,7 @@ class Watcher {
       if (this.loaded) { if (!this.ended) { this.ended = "The host has left."; toast("The host has left the game.", "bad"); } }
       else return stopWatching("That game isn't open any more.");
     }
-    if (this.loaded) { $("netWait").hidden = !(now - this.lastHeard > 4000 && !observe.over); if (!$("netWait").hidden) $("netWait").textContent = "Waiting for the game…"; return; }
+    if (this.loaded) { this.showWait(); return; }
     const h = $("watchWait");
     h.hidden = false;
     $("watchWaitText").textContent = !this.host ? "Looking for the game…"
@@ -4433,6 +4446,10 @@ class Watcher {
   receive(d) {
     if (!this.room || !d || d.v !== NET.PROTOCOL || d.to !== myToken) return;
     this.lastHeard = performance.now();
+    if (typeof d.rate === "number" && d.rate >= 0 && d.rate <= 16 && d.rate !== this.rate) {
+      this.rate = d.rate;
+      if (this.loaded) { paceChanged(d.rate); this.showWait(); }
+    }
     if (Number.isInteger(d.n) && d.n > 0 && d.n !== this.n) { this.n = d.n; if (observe && observe.kind === "watch") $("obsLabel").textContent = `Spectating (you're Spectator ${d.n})`; }
     if (d.game === null) { if (!this.loaded) this.status(); return; }
     if (typeof d.game !== "string") return;
@@ -4453,6 +4470,13 @@ class Watcher {
       for (const e of d.ticks) if (Array.isArray(e) && Number.isInteger(e[0]) && e[0] >= this.k && Array.isArray(e[1])) this.cmds.set(e[0], e[1]);
       this.avail = Math.max(this.avail, d.upTo);
     }
+  }
+  // The card in the middle: paused, or not hearing from the host.
+  showWait() {
+    const h = $("netWait");
+    const lost = performance.now() - this.lastHeard > 4000, pausedHere = this.rate === 0 && this.k >= this.avail;
+    h.hidden = !observe || observe.over || !(lost || pausedHere);
+    if (!h.hidden) h.textContent = lost ? "Waiting for the game…" : `Paused by ${pnames[1] || "the host"}.`;
   }
   // The host is handing me a seat: run my copy up to the tick it changes
   // hands on, then play from there (takeSeat, in main.js).
@@ -4479,6 +4503,8 @@ class Watcher {
       Rec.real = true;
       ME = 0;
       startObserving("watch");
+      lastPace = this.rate;
+      if (this.rate !== 1 && this.rate !== 0) toast(`The game runs at ${this.rate}×.`);
       cam.x = MW / 2; cam.y = MH / 2; cam.dist = 40; clampCam();
       for (const id of ["startScreen", "endScreen", "watchWait", "loadScreen"]) $(id).hidden = true;
       acc = 0;
@@ -4503,7 +4529,9 @@ class Watcher {
     const behind = avail - this.k;
     // Keep a small buffer (a few ticks) so play is smooth; anything beyond
     // that is drained a little faster than real time.
-    acc += dt * 1000 * (behind > 600 ? 16 : behind > 200 ? 8 : behind > 40 ? 2 : behind > 5 ? 1.25 : 1);
+    // At the host's speed (paused: just finish what's here), and faster to catch up.
+    const pace = this.rate || (behind > 0 ? 1 : 0);
+    acc += dt * 1000 * pace * (behind > 600 * pace ? 16 : behind > 200 * pace ? 8 : behind > 40 * pace ? 2 : behind > 5 * pace ? 1.25 : 1);
     let steps = 0;
     while (acc >= SIM_MS && this.k < avail && steps < 60) { this.step(); acc -= SIM_MS; steps++; }
     if (this.k >= avail) acc = Math.min(acc, SIM_MS);
@@ -5083,6 +5111,10 @@ const byId = {
 let resBuf = new Float32Array(0), resCount = 0;
 let projBuf = new Float32Array(0), projCount = 0;
 let mouse = { x: 0, y: 0, inside: false };
+// Where the pointer is in the whole browser window, for scrolling at its edges.
+const page = { x: 0, y: 0, inside: false };
+window.addEventListener("pointermove", e => { page.x = e.clientX; page.y = e.clientY; page.inside = true; }, { passive: true });
+window.addEventListener("pointerout", e => { if (!e.relatedTarget) page.inside = false; }); // left the window
 let drag = null, orbit = null;
 let placing = null, amode = false;
 // Aiming a nuke: the silo it launches from (attack-move's targeting mode).
@@ -5860,9 +5892,12 @@ const mpHooks = {
     return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
   },
   pace(rate) { paceChanged(rate); },
+  // Someone left: say so at once (the computer takes over on the next tick,
+  // which, while paused, may be a while).
+  left(slot) { announceLeft(slot); },
   system(cmd) {
     const who = Rec.meta && Rec.meta.who;
-    if (cmd[0] === 7) { toast(`${pnc(cmd[1]) || "A player"} left. The computer takes over their people.`); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
+    if (cmd[0] === 7) { announceLeft(cmd[1]); announced.delete(cmd[1]); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
     if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`${pnames[cmd[1]] || "A spectator"} takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
   },
   // A tick's commands in their final order: what replays and spectators get.
@@ -6139,7 +6174,7 @@ window.addEventListener("keydown", e => {
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
 });
 window.addEventListener("keyup", e => keys.delete(e.code));
-window.addEventListener("blur", () => { keys.clear(); mouse.inside = false; });
+window.addEventListener("blur", () => { keys.clear(); mouse.inside = false; page.inside = false; });
 
 function findOwn(kind) { for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === kind) return i; return null; }
 function focusSelection() {
@@ -6155,10 +6190,12 @@ function scrollCamera(dt) {
   if (keys.has("ArrowRight") || keys.has("KeyD")) dx++;
   if (keys.has("ArrowUp") || keys.has("KeyW")) dy--;
   if (keys.has("ArrowDown") || keys.has("KeyS")) dy++;
-  if (mouse.inside && !drag && !orbit && !touch && matchMedia("(pointer: fine)").matches) {
-    const m = 12;
-    if (mouse.x < m) dx--; if (mouse.x > view._w - m) dx++;
-    if (mouse.y < m) dy--; if (mouse.y > view._h - m) dy++;
+  // The edges of the browser window (over the top bar and panels too), not
+  // of the map view; not while a card covers the game.
+  if (page.inside && !drag && !orbit && !touch && matchMedia("(pointer: fine)").matches && !document.querySelector(".overlay:not([hidden])")) {
+    const m = 10, w = window.innerWidth, h = window.innerHeight;
+    if (page.x < m) dx--; if (page.x > w - m) dx++;
+    if (page.y < m) dy--; if (page.y > h - m) dy++;
   }
   if (!dx && !dy) return;
   const v = cam.dist * 1.1 * dt, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
@@ -7017,6 +7054,7 @@ function takeSeat(w) {
   client.hostToken = host;
   client.live = T + 1; client.final = client.got = T;
   client.seq = seq0; client.doneSeq = done;
+  for (let s = 1; s <= W.n_players(); s++) if (s !== slot && W.is_ai(s)) client.leftSeen.add(s); // old news
   W.mp_save(); // the confirmed copy: exactly the host's after tick T
   mp = client;
   simTick = client.live; lastPump = 0; stalledSince = 0;
@@ -7116,11 +7154,20 @@ function finishMultiplayer() {
   clearInterval(startTimer);
   if (mp) { Trace.event("end", {}); W.mp_end(); }
   mp = null;
-  paused = false; speed = 1; lastPace = 1; slowFor.clear();
+  paused = false; speed = 1; lastPace = 1; slowFor.clear(); announced.clear();
   $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
   $("speedBtn").textContent = "1×"; $("speedBtn").disabled = false;
   $("netBtn").hidden = true; $("netTrace").hidden = true;
   $("netWait").hidden = true;
+}
+
+// "X left", once per leaving, whichever comes first: the host's notice or
+// the computer taking over.
+const announced = new Set();
+function announceLeft(slot) {
+  if (announced.has(slot) || slot === ME) return;
+  announced.add(slot);
+  toast(`${pnc(slot) || "A player"} left. The computer takes over their people${mp && mp.pace() === 0 ? " when the game goes on" : ""}.`);
 }
 
 // ---- Pause and speed in multiplayer ----

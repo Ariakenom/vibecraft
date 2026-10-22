@@ -294,6 +294,10 @@ const byId = {
 let resBuf = new Float32Array(0), resCount = 0;
 let projBuf = new Float32Array(0), projCount = 0;
 let mouse = { x: 0, y: 0, inside: false };
+// Where the pointer is in the whole browser window, for scrolling at its edges.
+const page = { x: 0, y: 0, inside: false };
+window.addEventListener("pointermove", e => { page.x = e.clientX; page.y = e.clientY; page.inside = true; }, { passive: true });
+window.addEventListener("pointerout", e => { if (!e.relatedTarget) page.inside = false; }); // left the window
 let drag = null, orbit = null;
 let placing = null, amode = false;
 // Aiming a nuke: the silo it launches from (attack-move's targeting mode).
@@ -1071,9 +1075,12 @@ const mpHooks = {
     return kept.some(([id, k]) => now.has(id) && now.get(id) !== k) || now.size !== kept.length;
   },
   pace(rate) { paceChanged(rate); },
+  // Someone left: say so at once (the computer takes over on the next tick,
+  // which, while paused, may be a while).
+  left(slot) { announceLeft(slot); },
   system(cmd) {
     const who = Rec.meta && Rec.meta.who;
-    if (cmd[0] === 7) { toast(`${pnc(cmd[1]) || "A player"} left. The computer takes over their people.`); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
+    if (cmd[0] === 7) { announceLeft(cmd[1]); announced.delete(cmd[1]); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
     if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`${pnames[cmd[1]] || "A spectator"} takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
   },
   // A tick's commands in their final order: what replays and spectators get.
@@ -1350,7 +1357,7 @@ window.addEventListener("keydown", e => {
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
 });
 window.addEventListener("keyup", e => keys.delete(e.code));
-window.addEventListener("blur", () => { keys.clear(); mouse.inside = false; });
+window.addEventListener("blur", () => { keys.clear(); mouse.inside = false; page.inside = false; });
 
 function findOwn(kind) { for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === kind) return i; return null; }
 function focusSelection() {
@@ -1366,10 +1373,12 @@ function scrollCamera(dt) {
   if (keys.has("ArrowRight") || keys.has("KeyD")) dx++;
   if (keys.has("ArrowUp") || keys.has("KeyW")) dy--;
   if (keys.has("ArrowDown") || keys.has("KeyS")) dy++;
-  if (mouse.inside && !drag && !orbit && !touch && matchMedia("(pointer: fine)").matches) {
-    const m = 12;
-    if (mouse.x < m) dx--; if (mouse.x > view._w - m) dx++;
-    if (mouse.y < m) dy--; if (mouse.y > view._h - m) dy++;
+  // The edges of the browser window (over the top bar and panels too), not
+  // of the map view; not while a card covers the game.
+  if (page.inside && !drag && !orbit && !touch && matchMedia("(pointer: fine)").matches && !document.querySelector(".overlay:not([hidden])")) {
+    const m = 10, w = window.innerWidth, h = window.innerHeight;
+    if (page.x < m) dx--; if (page.x > w - m) dx++;
+    if (page.y < m) dy--; if (page.y > h - m) dy++;
   }
   if (!dx && !dy) return;
   const v = cam.dist * 1.1 * dt, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
@@ -2228,6 +2237,7 @@ function takeSeat(w) {
   client.hostToken = host;
   client.live = T + 1; client.final = client.got = T;
   client.seq = seq0; client.doneSeq = done;
+  for (let s = 1; s <= W.n_players(); s++) if (s !== slot && W.is_ai(s)) client.leftSeen.add(s); // old news
   W.mp_save(); // the confirmed copy: exactly the host's after tick T
   mp = client;
   simTick = client.live; lastPump = 0; stalledSince = 0;
@@ -2327,11 +2337,20 @@ function finishMultiplayer() {
   clearInterval(startTimer);
   if (mp) { Trace.event("end", {}); W.mp_end(); }
   mp = null;
-  paused = false; speed = 1; lastPace = 1; slowFor.clear();
+  paused = false; speed = 1; lastPace = 1; slowFor.clear(); announced.clear();
   $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
   $("speedBtn").textContent = "1×"; $("speedBtn").disabled = false;
   $("netBtn").hidden = true; $("netTrace").hidden = true;
   $("netWait").hidden = true;
+}
+
+// "X left", once per leaving, whichever comes first: the host's notice or
+// the computer taking over.
+const announced = new Set();
+function announceLeft(slot) {
+  if (announced.has(slot) || slot === ME) return;
+  announced.add(slot);
+  toast(`${pnc(slot) || "A player"} left. The computer takes over their people${mp && mp.pace() === 0 ? " when the game goes on" : ""}.`);
 }
 
 // ---- Pause and speed in multiplayer ----

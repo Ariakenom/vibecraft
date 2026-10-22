@@ -274,6 +274,8 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
   Drift ends the game for everyone; it means a determinism bug.
 - **Someone leaving.** The host notices them gone from the room, or silent
   for 20 s, and puts "the computer takes over" (command 7) into a bundle.
+  The frames also list who has left (`left`), so everyone is told at once,
+  even while the game is paused and that bundle is still to come.
 - **Seats changing hands.** In the menu during a game, the host can give a
   seat the computer plays (from the start, or since its player left) to a
   spectator (see Watching).
@@ -367,7 +369,8 @@ player's fog history is kept). The view is set with `set_view` in
   12 KB pieces because of the relay's message limit; made afresh when the
   last one is over 10 s old), then each tick's commands from there on. The
   watcher runs its own copy, a little behind the players, and catches up
-  faster if it falls behind. Nothing waits for spectators, and there's a
+  faster if it falls behind. The feed carries the game's speed (`rate`, 0
+  while paused), and the watcher plays at that speed. Nothing waits for spectators, and there's a
   budget (12 messages a second, 6 spectators per game) so they can't slow
   the game. A friend waiting in the lobby while the host plays gets "Watch
   their game". Spectators follow the host into the next game, and keep a
@@ -550,7 +553,7 @@ versions don't play together.
   get 96×96 with four-way symmetry, so every start is the same, just turned.
 
 **Controls.**
-- **Camera:** WASD, arrows or screen edges move it; the wheel zooms;
+- **Camera:** WASD, arrows or the edges of the browser window move it; the wheel zooms;
   middle-drag rotates and tilts.
 - **Build:** the menu has a page per era (Tab for the next, Shift+Tab
   back), and each page's buildings take Q, E, R, T, Y, U, I, O, F, G, C,

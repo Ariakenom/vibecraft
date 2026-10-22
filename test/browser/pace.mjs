@@ -8,24 +8,40 @@ await host.waitForFunction(() => roomCode && room);
 const code = await host.evaluate(() => roomCode);
 const guest = await open(b, "#" + code);
 await host.waitForFunction(() => seats.some(isFriend), null, { timeout: 20000 });
+const guest2 = await open(b, "#" + code);
+await host.waitForFunction(() => seats.filter(isFriend).length === 2, null, { timeout: 20000 });
 // Keep every message shown, to check them after they've faded.
-for (const pg of [host, guest]) await pg.evaluate(() => { window.toastLog = []; const t = window.toast; window.toast = (m, k) => { toastLog.push(m); return t(m, k); }; });
+for (const pg of [host, guest, guest2]) await pg.evaluate(() => { window.toastLog = []; const t = window.toast; window.toast = (m, k) => { toastLog.push(m); return t(m, k); }; });
 const told = (pg, re) => pg.evaluate(s => toastLog.some(m => new RegExp(s).test(m)), re);
 await host.evaluate(() => beginGame());
 await guest.waitForFunction(() => mp && running && mp.offset !== null, null, { timeout: 30000 });
+await guest2.waitForFunction(() => mp && running && mp.offset !== null, null, { timeout: 30000 });
+// Screen edges: the top edge of the window (over the top bar) moves the view.
+{
+  const y0 = await host.evaluate(() => cam.y);
+  await host.mouse.move(640, 2); await sleep(600);
+  const y1 = await host.evaluate(() => cam.y);
+  await host.mouse.move(640, 400); await sleep(300);
+  const y2 = await host.evaluate(() => cam.y); await sleep(400);
+  check(y1 !== y0 && await host.evaluate(y => cam.y === y, y2), "the pointer at the window's top edge (on the top bar) scrolls the view; away from it, it stops");
+}
+const spec = await open(b, "#watch-" + code);
+await spec.evaluate(() => { window.toastLog = []; const t = window.toast; window.toast = (m, k) => { toastLog.push(m); return t(m, k); }; });
+await spec.waitForFunction(() => watcher && watcher.loaded, null, { timeout: 30000 });
 check(await host.evaluate(() => !$("pauseBtn").hidden && !$("speedBtn").hidden) && await guest.evaluate(() => $("pauseBtn").hidden && $("speedBtn").hidden), "the host has pause and speed; the guest doesn't");
 await guest.keyboard.press("p");
 await sleep(500);
 check(await host.evaluate(() => mp.pace() === 1) && await told(guest, "Only the host"), "a guest's P does nothing (and says so)");
 
 // Ticks per second on a page, measured over `ms`.
-const rateOf = async (pg, ms = 2000) => { const a = await pg.evaluate(() => mp.live); await sleep(ms); return (await pg.evaluate(() => mp.live) - a) * 1000 / ms; };
+const rateOf = async (pg, ms = 2000) => { const at = () => pg.evaluate(() => mp ? mp.live : watcher.k); const a = await at(); await sleep(ms); return (await at() - a) * 1000 / ms; };
 await host.click("#speedBtn"); await host.click("#speedBtn");
 await guest.waitForFunction(() => mp.pace() === 2, null, { timeout: 5000 });
 check(await guest.evaluate(() => !$("speedBtn").hidden && $("speedBtn").disabled && $("speedBtn").textContent === "2×") && await told(guest, "speed to 2×"), "the host sets 2×: the guest sees it");
-await sleep(1500);
-const [hr, gr] = await Promise.all([rateOf(host), rateOf(guest)]);
+await sleep(3000);
+const [hr, gr, sr] = await Promise.all([rateOf(host), rateOf(guest), rateOf(spec, 4000)]);
 check(hr > 34 && hr < 46 && gr > 34 && gr < 46, `both run at about 40 ticks a second (host ${hr.toFixed(1)}, guest ${gr.toFixed(1)})`);
+check(sr > 34 && sr < 46 && await told(spec, "speed to 2×"), `the spectator follows at the same pace (${sr.toFixed(1)}), and is told`);
 
 await host.keyboard.press("p");
 await guest.waitForFunction(() => mp.pace() === 0, null, { timeout: 5000 });
@@ -34,11 +50,21 @@ const [h0, g0] = [await host.evaluate(() => mp.live), await guest.evaluate(() =>
 await sleep(1500);
 const [h1, g1] = [await host.evaluate(() => mp.live), await guest.evaluate(() => mp.live)];
 check(h1 === h0 && g1 === g0, `paused: nobody's game moves (host ${h0}→${h1}, guest ${g0}→${g1})`);
+await spec.waitForFunction(() => !$("netWait").hidden && /Paused by/.test($("netWait").textContent) && toastLog.some(m => /paused the game/.test(m)), null, { timeout: 8000 });
+await sleep(500);
+const s0 = await spec.evaluate(() => watcher.k); await sleep(1000);
+check(await spec.evaluate(k => watcher.k === k, s0) && await told(spec, "paused the game"), "the spectator's view stops too, saying it's paused");
+// A player leaves while it's paused: everyone hears at once.
+await guest2.context().close();
+await host.waitForFunction(() => toastLog.some(m => / left\. The computer takes over .* when the game goes on/.test(m)), null, { timeout: 10000 });
+await guest.waitForFunction(() => toastLog.some(m => / left\. The computer takes over/.test(m)), null, { timeout: 10000 });
+check(true, "a player leaves while paused: the host and the others are told at once");
 check(await guest.evaluate(() => !$("netWait").hidden && /Paused by/.test($("netWait").textContent)) && await host.evaluate(() => /Press P to resume/.test($("netWait").textContent) && $("pauseBtn").textContent === "Resume"), "both are told it's paused");
 // Orders given while paused go through once it runs again.
 await guest.evaluate(() => { readWorld(); const ids = []; for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === 0) ids.push(E(i, F.id)); issue({ c: 1, ids: ids.slice(0, 2), x: 30, y: 30 }); });
 await host.keyboard.press("p");
 await guest.waitForFunction(() => mp.pace() === 2 && $("netWait").hidden, null, { timeout: 5000 });
+await spec.waitForFunction(() => toastLog.some(m => /resumed the game/.test(m)), null, { timeout: 8000 });
 check(await told(guest, "resumed the game at 2×"), "resumed, at the speed it was");
 await sleep(3000);
 const sums = await Promise.all([host, guest].map(pg => pg.evaluate(() => [...mp.sums])));
@@ -62,6 +88,7 @@ check(await told(guest, "can't keep up"), "the guest is told too");
 await host.click("#speedBtn"); // 2× -> 1×
 await guest.waitForFunction(() => mp.pace() === 1, null, { timeout: 15000 });
 check(true, "the host goes back to 1×");
-for (const [pg, n] of [[host, "host"], [guest, "guest"]]) check(pg.errors.length === 0, `no page errors (${n})`);
+check(await host.evaluate(() => toastLog.filter(m => / left\./.test(m)).length === 1), "...and only once (not again when the computer takes over)");
+for (const [pg, n] of [[host, "host"], [guest, "guest"], [spec, "spectator"]]) check(pg.errors.length === 0, `no page errors (${n})`);
 await b.close();
 process.exit(failed() ? 1 : 0);
