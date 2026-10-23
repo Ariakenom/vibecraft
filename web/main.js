@@ -22,10 +22,10 @@ const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
-const isGun = k => k === K.Musketeer || k === K.Dragoon || k === K.Cannon || k === K.Rifleman || k === K.MachineGunner || k === K.FieldGun ||
+const isGun = k => k === K.AirDefense || k === K.Musketeer || k === K.Dragoon || k === K.Cannon || k === K.Rifleman || k === K.MachineGunner || k === K.FieldGun ||
   k === K.Infantry || k === K.Tank || k === K.Fighter || k === K.Jet || k === K.RocketArtillery;
 // Big guns: a boom, a big puff, a shell you can see.
-const isBigGun = k => k === K.Cannon || k === K.FieldGun || k === K.Tank || k === K.RocketArtillery;
+const isBigGun = k => k === K.AirDefense || k === K.Cannon || k === K.FieldGun || k === K.Tank || k === K.RocketArtillery;
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
@@ -117,7 +117,7 @@ const DESC = {
   [K.Sawmill]: "Saws wood in bulk from a forest next to it: as much as two lumber camps, with two workers. Needs no wood to build.",
   [K.Stoneworks]: "Cuts stone in bulk from rock next to it: more than two quarries, with two workers.",
   [K.Kiln]: "Fires bricks in bulk from the clay next to it: more than three brickworks, with two workers. Needs no wood.",
-  [K.AirDefense]: "Anti-aircraft guns with a long reach. It shoots down any nuke falling within 10 tiles of it, then needs 90 seconds to reload. It can't hit anything on the ground.",
+  [K.AirDefense]: "A surface-to-air missile battery. Every 5 seconds it fires a missile that brings down any aircraft in one hit, out to 10 tiles. It shoots down any nuke falling within 10 tiles of it, then needs 90 seconds to reload. It can't hit anything on the ground.",
   [K.MissileSilo]: "Arms a nuke (2 uranium and 2 explosives, held until it's launched; 2 minutes), then launches it anywhere on the map. Everyone sees it coming, and is told when a silo is built and when it starts arming: 20 seconds after launch everything within 15 tiles of where it lands is destroyed, and a crater stays. An enemy Air Defense near the target shoots it down.",
 };
 // The six eras, and the house each brings. Which kinds and resources
@@ -624,7 +624,17 @@ function setupTopBar(shown = []) {
   pop.onclick = () => { resTipFor = resTipFor === PEOPLE_TIP ? -1 : PEOPLE_TIP; renderResTip(); };
   const era = document.createElement("button"); era.className = "era"; era.title = "Tech tree (K)";
   era.onclick = toggleTech;
-  bar.append(pop, ...chips, era); // people first, on the left
+  // A thin line between one era's resources and the next era's.
+  const parts = [];
+  chips.forEach((c, n) => {
+    const e = W.res_era(+c.dataset.r);
+    if (n > 0 && e !== W.res_era(+chips[n - 1].dataset.r)) {
+      const d = document.createElement("span"); d.className = "era-div"; d.title = `${ERA_NAMES[e]} resources`; d.setAttribute("aria-hidden", "true");
+      parts.push(d);
+    }
+    parts.push(c);
+  });
+  bar.append(pop, ...parts, era); // people first, on the left
   topBar = { chips, pop, era, key: shown.join(",") };
 }
 let topBar = null, resTipFor = -1;

@@ -788,6 +788,11 @@ function initRenderer() {
   R3.stones = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.13, 0), withFow(new THREE.MeshLambertMaterial({ color: "#7d766c" })), 64);
   R3.stones.frustumCulled = false;
   scene.add(R3.stones);
+  // Missiles from air defenses: a white body with a dark nose.
+  const mg = new THREE.CylinderGeometry(0.05, 0.05, 0.55, 8).rotateZ(Math.PI / 2);
+  R3.missiles = new THREE.InstancedMesh(mg, withFow(new THREE.MeshLambertMaterial({ color: "#f2f1ea", emissive: "#3a3020" })), 32);
+  R3.missiles.frustumCulled = false;
+  scene.add(R3.missiles);
   // Powder smoke: white puffs that swell, drift up and shrink away.
   R3.puffMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial({ color: "#e8e6e0" })), 192);
   R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
@@ -1705,13 +1710,22 @@ function updateNukes(now) {
   }
   // Craters.
   const c = W.crater_count();
+  // Fewer craters than drawn (a replay starting, or jumping back), or not
+  // where they're drawn (another game): take those marks away.
+  for (let k = 0; k < R3.craterMeshes.length; k++) {
+    const g = R3.craterMeshes[k];
+    if (k >= c || g.position.x !== W.crater_info(k, 0) || g.position.z !== W.crater_info(k, 1)) {
+      for (const m of R3.craterMeshes.splice(k)) { R3.scene.remove(m); m.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+      break;
+    }
+  }
   while (R3.craterMeshes.length < c) {
     const k = R3.craterMeshes.length, cx = W.crater_info(k, 0), cy = W.crater_info(k, 1);
     const g = new THREE.Group();
-    g.add(new THREE.Mesh(new THREE.CircleGeometry(2.0, 40).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#2b241e" }))));
-    const scorch = new THREE.Mesh(new THREE.RingGeometry(2.0, 4.6, 48).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#3e3a2c", transparent: true, opacity: 0.6, depthWrite: false })));
+    g.add(new THREE.Mesh(new THREE.CircleGeometry(2.6, 40).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#2b241e" }))));
+    const scorch = new THREE.Mesh(new THREE.RingGeometry(2.6, 9.0, 48).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#3e3a2c", transparent: true, opacity: 0.6, depthWrite: false })));
     scorch.position.y = 0.01; g.add(scorch);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.22, 6, 40).rotateX(Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#4a3e32" })));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(2.6, 0.25, 6, 40).rotateX(Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#4a3e32" })));
     g.add(rim);
     g.position.set(cx, groundAt(cx, cy) + 0.05, cy);
     R3.scene.add(g); R3.craterMeshes.push(g);
@@ -1885,8 +1899,8 @@ function updateResources() {
 // are worked out here from how far along the way they are.
 const _e = new THREE.Euler();
 function updateArrows(alpha) {
-  const a = R3.arrows, st = R3.stones, S = PROJ_STRIDE;
-  let na = 0, ns = 0;
+  const a = R3.arrows, st = R3.stones, ms = R3.missiles, S = PROJ_STRIDE;
+  let na = 0, ns = 0, nm = 0;
   for (let i = 0; i < Math.min(projCount, 256); i++) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
@@ -1899,15 +1913,16 @@ function updateArrows(alpha) {
     // The bow: ahead of the shooter, at the height it holds it.
     const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank || shooter === K.RocketArtillery;
     if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet) continue; // bullets are too small to see
-    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
+    const missile = shooter === K.AirDefense;
+    const fromH = missile ? 0.7 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
-    const toH = atBuilding ? 0.9 : 0.55;
+    const toH = missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
     // How far along: distance flown over that plus the distance still to go.
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
+    const arc = missile ? total * 0.25 : shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
@@ -1915,10 +1930,15 @@ function updateArrows(alpha) {
     _q.setFromEuler(_e.set(0, -Math.atan2(dy, dx), pitch, "YZX"));
     _s.setScalar(1);
     _m4.compose(_p, _q, _s);
-    if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
+    if (missile) {
+      if (nm < 32) ms.setMatrixAt(nm++, _m4);
+      // A trail of smoke behind it.
+      if (GFX.smoke && Math.random() < 0.5 && R3.puffs.length < 150) R3.puffs.push({ x: _p.x - dx * 0.3, y: _p.z - dy * 0.3, h: _p.y, t0: performance.now(), big: false, seed: Math.random() * 6.28 });
+    } else if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
     else a.setMatrixAt(na++, _m4);
   }
-  a.count = na; st.count = ns;
+  a.count = na; st.count = ns; ms.count = nm;
+  ms.instanceMatrix.needsUpdate = true;
   a.instanceMatrix.needsUpdate = true;
   st.instanceMatrix.needsUpdate = true;
 }

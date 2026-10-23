@@ -1147,3 +1147,20 @@ fn beds_grow_faster_with_more_goods() {
     assert_eq!(beds_for(5), 12);
     assert_eq!(beds_for(13), 36);
 }
+
+#[test]
+fn an_air_defense_missile_brings_down_any_aircraft() {
+    let mut g = town(5, 1, 2);
+    g.set_ai(2, false);
+    g.players[2].supply_pct = 1000;
+    let (x, y) = spot(&g, Kind::AirDefense);
+    g.spawn_building(Kind::AirDefense, 1, x, y, 1.0);
+    let planes: Vec<u32> = [Kind::Bomber, Kind::Jet].iter().map(|&k| g.spawn_unit(k, 2, x as f32 + 6.0, y as f32 + 1.0)).collect();
+    let ground = g.spawn_unit(Kind::Spearman, 2, x as f32 + 3.0, y as f32);
+    run(&mut g, 2.0);
+    assert_eq!(planes.iter().filter(|&&p| !g.alive(p)).count(), 1, "one missile, one aircraft down");
+    run(&mut g, 6.0);
+    assert!(planes.iter().all(|&p| !g.alive(p)), "and the next");
+    let _ = ground;
+    assert!(!Kind::AirDefense.can_hit(Kind::Spearman), "it can't hit the ground");
+}

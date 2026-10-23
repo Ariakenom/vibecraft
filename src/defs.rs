@@ -424,9 +424,11 @@ static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum
 static SAWMILL: Stats = extractor(900.0, &[(Stone, 2), (Brick, 1)], &[(Wood, 16)], 2, Some(Dep::Forest), 30.0, 3);
 static STONEWORKS: Stats = extractor(1000.0, &[(Wood, 2), (Brick, 2)], &[(Stone, 14)], 2, Some(Dep::Stone), 30.0, 3);
 static KILN: Stats = extractor(900.0, &[(Stone, 4)], &[(Brick, 20)], 2, Some(Dep::Clay), 30.0, 3);
-// Modern: anti-aircraft guns, and the only defense against a nuke: one
-// falling within `AIR_DEFENSE_COVER` of it is shot down (`Game::launch`).
-static AIR_DEFENSE: Stats = Stats { attack: 28.0, range: AIR_DEFENSE_COVER, cooldown: 1.2, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
+// Modern: a surface-to-air missile battery, and the only defense against a
+// nuke: one falling within `AIR_DEFENSE_COVER` of it is shot down
+// (`Game::update_nukes`). Its missiles are slow to reload but bring down
+// any aircraft in one hit (a bomber has 260 health).
+static AIR_DEFENSE: Stats = Stats { attack: 320.0, range: AIR_DEFENSE_COVER, cooldown: 5.0, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
 static MISSILE_SILO: Stats = Stats { builders: 2, ..building(1500.0, 6.0, &[(Steel, 4), (Brick, 2)], 60.0, 3) };
 
 /// The nuke: a missile silo arms one (holding these slots while it waits),
