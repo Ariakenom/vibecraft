@@ -51,7 +51,11 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .res.lots .chip svg { width: 13px; height: 13px; }
 #top:has(.res.lots) { gap: 10px; }
 #top:has(.res.many) .brand { display: none; }
-#top:has(.res.many) #volume { display: none; }
+/* A crowded bar: the slider drops down under the sound button instead
+   (on hover, or while it has focus), and the menu has one too. */
+#top:has(.res.many) .vol { position: relative; }
+#top:has(.res.many) #volume { display: none; position: absolute; top: 100%; right: 0; margin-top: 4px; padding: 8px 10px; width: 120px; background: #1b1610f4; border: 1px solid var(--line); border-radius: 3px; z-index: 6; }
+#top:has(.res.many) .vol:hover #volume, #top:has(.res.many) .vol:focus-within #volume { display: block; }
 .res .era { background: transparent; border: 1px solid var(--line); border-radius: 3px; padding: 1px 9px; font: 400 14px var(--display); letter-spacing: .04em; color: var(--bronze); cursor: pointer; }
 .res .era:hover { border-color: var(--bronze); }
 #restip { position: absolute; top: calc(100% + 4px); width: 260px; background: #1b1610f4; border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; z-index: 6; font-size: 13px; line-height: 1.45; box-shadow: 0 8px 24px #0008; }
@@ -74,6 +78,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .vol { display: flex; align-items: center; gap: 8px; }
 #volume { width: 90px; accent-color: var(--bronze); cursor: pointer; }
 #volume.off { opacity: .45; }
+.menu-vol { align-items: center; gap: 12px; }
+.menu-vol input { width: 180px; accent-color: var(--bronze); cursor: pointer; }
+.menu-vol input.off { opacity: .45; }
 .tbtn[aria-pressed="true"] { background: var(--bronze); color: var(--ground); border-color: var(--bronze); }
 
 /* ---- map ---- */
@@ -429,6 +436,7 @@ body.observing #hint { display: none; }
         <span class="seg" id="rpSpeed" role="group" aria-label="Replay speed"><button data-s="1" aria-pressed="true">1×</button><button data-s="2" aria-pressed="false">2×</button><button data-s="4" aria-pressed="false">4×</button><button data-s="8" aria-pressed="false">8×</button></span>
         <input type="range" id="rpSeek" min="0" max="100" step="20" value="0" aria-label="Jump to">
         <span id="rpTime">0:00 / 0:00</span>
+        <button class="tbtn" id="rpDownload" title="Download this replay as a .vibecraft file">Download</button>
       </span>
       <button class="tbtn" id="obsExit">Exit replay</button>
     </div>
@@ -518,6 +526,7 @@ body.observing #hint { display: none; }
       <div class="row">
         <button class="go" id="againBtn">Play again</button>
         <button class="ghost" id="replayBtn" hidden>Watch the replay</button>
+        <button class="ghost" id="replayDlBtn" hidden title="A .vibecraft file you can keep, send, or open with Load from a file">Download the replay</button>
         <button class="ghost" id="toMenuBtn">Change difficulty</button>
       </div>
     </div>
@@ -548,6 +557,10 @@ body.observing #hint { display: none; }
       <div class="row">
         <button class="ghost" id="watchLinkBtn" title="Anyone with this link can watch the game live, seeing the whole map">Copy watch link</button>
         <button class="ghost danger" id="surrenderBtn">Surrender</button>
+      </div>
+      <div class="row menu-vol">
+        <label for="menuVolume">Volume</label>
+        <input type="range" id="menuVolume" min="0" max="100" step="1" aria-label="Volume">
       </div>
       <div id="gameSeats" class="game-seats" hidden>
         <ol class="seats" id="gameSeatList" aria-label="Seats"></ol>

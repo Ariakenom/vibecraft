@@ -167,6 +167,18 @@ impl Sym {
     }
 }
 
+/// The t-th point on the square ring of radius r around (0, 0) (8r points).
+fn ring_point(r: i32, t: i32) -> (i32, i32) {
+    let side = 2 * r;
+    let (s, o) = (t / side, t % side);
+    match s {
+        0 => (-r + o, -r),
+        1 => (r, -r + o),
+        2 => (r - o, r),
+        _ => (-r, r - o),
+    }
+}
+
 /// Build a fair map for `players` (2 to 4). Returns the map, its deposits,
 /// and one base centre tile per player.
 pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>) {
@@ -278,7 +290,32 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         (64, 58, Feat::Oil, 1.3),
         (16, 26, Feat::Bauxite, 1.4),
     ];
+    // A cluster that would sit in a lake moves to the nearest dry ground
+    // instead (playtest: deposits stood on islands of their own). Every
+    // image of a spot looks the same, so checking one is enough.
+    let dry = |terrain: &[u8], cx: i32, cy: i32, r: f32| {
+        let ri = r.ceil() as i32 + 2;
+        (-ri..=ri).all(|dy| {
+            (-ri..=ri).all(|dx| {
+                let (x, y) = (cx + dx, cy + dy);
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                d > r + 2.0 || (x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && !matches!(terrain[(y * w + x) as usize], WATER | SAND))
+            })
+        })
+    };
+    let on_land = |terrain: &[u8], cx: i32, cy: i32, r: f32| -> (i32, i32) {
+        for ring in 0..=10 {
+            for k in 0..(8 * ring).max(1) {
+                let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
+                if dry(terrain, cx + dx, cy + dy, r) {
+                    return (cx + dx, cy + dy);
+                }
+            }
+        }
+        (cx, cy)
+    };
     let mut place = |cx: i32, cy: i32, f: Feat, r: f32| {
+        let (cx, cy) = on_land(&terrain, cx, cy, r);
         let ri = r.ceil() as i32 + 2;
         for dy in -ri..=ri {
             for dx in -ri..=ri {
@@ -359,6 +396,32 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
 
+    // Tidy the shores: a tile of land with water nearly all round becomes
+    // water, and a tile of water with land nearly all round becomes land
+    // (sand). Such slivers can't be drawn as what they are. Every tile is
+    // decided from the same before-picture, so the map stays symmetric.
+    // Deposits and the town sites are left alone.
+    for _ in 0..2 {
+        let before = terrain.clone();
+        let near_town = |x: i32, y: i32| all_bases.iter().any(|&(bx, by)| (x as f32 + 0.5 - bx).abs() <= 5.0 && (y as f32 + 0.5 - by).abs() <= 5.0);
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let i = (y * w + x) as usize;
+                if feat[i] != Feat::None || near_town(x, y) {
+                    continue;
+                }
+                let wet = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().filter(|&&(dx, dy)| before[((y + dy) * w + x + dx) as usize] == WATER).count();
+                if before[i] != WATER && wet >= 6 {
+                    terrain[i] = WATER;
+                    shade[i] = shade[i].min(80);
+                } else if before[i] == WATER && wet <= 2 {
+                    terrain[i] = SAND;
+                    shade[i] = shade[i].max(92);
+                }
+            }
+        }
+    }
+
     // Turn features into deposits and mark blocked tiles.
     let mut deps = Vec::new();
     let mut blocked = vec![false; n];
@@ -394,4 +457,37 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
 
     let map = Map { w, h, terrain, shade, blocked, dep_at, bld_at: vec![-1; n] };
     (map, deps, bases)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deposits whose ground was water: an island of them in a lake.
+    fn islands(seed: u32, players: usize) -> usize {
+        let (m, deps, _) = generate(seed, players);
+        deps.iter()
+            .filter(|d| d.kind != Dep::Forest)
+            .filter(|d| {
+                let mut wet = 0;
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        let (x, y) = (d.tx + dx, d.ty + dy);
+                        if m.inside(x, y) && m.terrain[m.idx(x, y)] == WATER {
+                            wet += 1;
+                        }
+                    }
+                }
+                wet >= 6
+            })
+            .count()
+    }
+
+    /// Playtest: clay pits on an island in a lake. Deposits move to dry land.
+    #[test]
+    fn no_deposits_on_islands() {
+        for seed in 0..40 {
+            assert_eq!(islands(seed, 4) + islands(seed, 2), 0, "seed {seed}");
+        }
+    }
 }

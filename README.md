@@ -31,7 +31,8 @@ screen. Friends on your network use your computer's address, e.g.
 
 | File                 | What it does                                                    |
 |----------------------|-----------------------------------------------------------------|
-| src/defs.rs          | Unit and building kinds, stats, costs, tech requirements, bonuses, damage table |
+| src/defs.rs          | Unit and building kinds, stats, costs, tech requirements, limits, damage table |
+| src/econ.rs          | An economy calculator: the fewest buildings for each era and a silo (tests use it) |
 | src/map.rs           | Tile map and the symmetric map generator                        |
 | src/path.rs          | A* pathfinding                                                  |
 | src/game.rs          | The simulation: orders, movement, slots, building, combat, fog, victory |
@@ -182,6 +183,18 @@ To watch two computer players play, minute by minute:
 (also `VC_DIFF` 0–2 and `VC_PLAYERS` 2–4). It prints what each has and its
 people, beds and slots: the quickest way to see whether an economy change
 still plays.
+
+The fewest buildings each era step and an armed missile silo take, from
+the tables in `src/defs.rs` (the test fails if any kind is needed more than
+7 times):
+
+    cargo test --release econ -- --nocapture
+
+What happened in a downloaded replay (the end screen and the replay bar
+have Download): eras, Capitols and players lost, nukes, deaths by town,
+armies standing in someone else's town, refused orders:
+
+    node test/replay-report.mjs game.vibecraft [dist/vibecraft.html]
 
 The browser tests check the things that matter by checksum: a replay at
 any tick is the game at that tick, and a spectator's copy is the players'
@@ -496,21 +509,34 @@ versions don't play together.
 
 ## The game
 
-- **Winning:** destroy every rival Capitol. Lose your Capitol and
-  everything you own falls with it. (There was a Wonder victory; it was
-  removed in October 2026.)
+- **Winning:** destroy every rival Capitol. From the Medieval era a player
+  can found as many as they like (8 wood, 8 stone, 6 brick, 4 builders; the
+  first holds nothing). Losing one costs only that one; lose the last (a
+  foundation doesn't count) and you're out. The campfire burns at your
+  oldest Capitol.
+- **The start:** a Capitol (2 wood, 1 stone, 1 grain and 1 fruit by itself,
+  and 4 beds) and 2 workers. No houses: the first hut comes from the
+  Capitol's wood and food. (There was a
+  Wonder victory; it was removed in October 2026.)
+- **Seven of a kind, as a target.** The numbers are tuned so a town
+  needn't have more than 7 buildings of any one kind (`MAX_SAME`), apart
+  from farms, houses and Capitols. It isn't a rule for players (the computer
+  keeps to it). Later producers make far more: `src/econ.rs` works out the
+  fewest buildings that get a player to an armed missile silo (61, at most
+  4 of a kind).
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
   `docs/plan/economy-and-eras-plan.md`); all six are in: Ancient,
   Medieval, Gunpowder, Industrial, Modern and Atomic.
 - **Resources are slots.** Nothing is gathered or stockpiled:
-  producers make slots (a lumber camp by a forest makes 4 wood), and
+  producers make slots (a lumber camp by a forest makes 8 wood), and
   everything you have holds some while it exists, giving them back when
   it's gone. Lose a producer and you hold more than you make: your newest
   units that need it lose health until it fits again.
 - **People are workers you can see.** A hut gets 2 beds for each
-  different food it receives (up to 3 kinds). While there's a free bed, a
+  different food it receives (up to 3 kinds); bigger houses get 3 for each
+  good past the third (a tower block with 13 goods has 36). While there's a free bed, a
   newcomer appears at the campfire in front of the Capitol (faster as the
   town grows). Workers idle in the campfire circle are free; they walk off
   by themselves to build foundations, work producers and become soldiers.
@@ -522,8 +548,8 @@ versions don't play together.
   loses goods keeps its kind, with fewer beds. Ten cottages bring the Medieval era: iron
   mines, brickworks, sheep farms and the converters (a bakery turns grain
   into bread, a weaver wool into clothes, a brewery grain into beer), which
-  hold their inputs while they stand; swordsmen, crossbowmen, knights and
-  trebuchets. Counters go by class: spears and swords beat riders, riders
+  hold their inputs while they stand; pastures and stables, horsemen,
+  swordsmen, crossbowmen, knights and trebuchets. Counters go by class: spears and swords beat riders, riders
   beat bows and crossbows, they beat foot soldiers; trebuchets smash
   buildings.
   Ten townhouses (full cottages with five goods, grown with brick) bring
@@ -542,15 +568,28 @@ versions don't play together.
   to protect them.
   Ten tower blocks (full apartment blocks with eleven goods) bring the
   Atomic era: uranium mines, reactors, car and TV plants, rocket artillery,
-  jets, and the **missile silo**. A silo arms a nuke in two minutes
-  (holding 2 uranium and 2 explosives); launched, it flies for 20 seconds,
-  with a red ring on the ground for everyone, then destroys everything
-  within 5 tiles, its owner's things too, and leaves a crater nothing can
-  cross or build on.
-- **Production:** from the Medieval era on, producers make twice what they
-  first did (fewer buildings to the same town); Ancient ones are unchanged.
+  jets, and the **missile silo**. Everyone is told when a silo is built,
+  when it starts arming and when the nuke is ready. A silo arms a nuke in
+  two minutes (holding 2 uranium and 2 explosives); launched, it flies for
+  20 seconds, with a red ring on the ground for everyone, then destroys
+  everything within 15 tiles, its owner's things too, and leaves a crater
+  nothing can cross or build on. An **Air Defense** (Modern) shoots at
+  aircraft and shoots down a nuke falling within 10 tiles of it, then
+  reloads for 90 seconds.
+- **Production:** later producers make more: Medieval ones about twice
+  what Ancient ones do, Industrial ones and later three to four times. The
+  basics come in bulk later: a Sawmill (Medieval), a Stone Works and a Kiln
+  (Gunpowder). Brickworks, sawmills and kilns need no wood, so a town using
+  every slot of wood can always build its way out.
+- **Area damage:** cannon, field guns, rocket artillery and bombers hurt
+  everything hostile around where they hit (half their attack at the
+  middle, less further out).
 - **The computer** explores before it builds: it uses only deposits it has
-  seen, so it sends its first soldier round the map. Easy, Normal and Hard
+  seen, so it sends its first soldier round the map (it doesn't stop to
+  fight on the way). It gathers each attack wave before it goes, clears
+  enemy soldiers out of its town, founds a second Capitol in the
+  Gunpowder era, and tears down a spare building when it's at the limit for
+  something it needs. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
   and its supply (80%, 100%, 130%).
 - **Maps:** two players get a 120×120 map with 180° symmetry; three or four
@@ -559,6 +598,8 @@ versions don't play together.
   base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
   More lie out on the map, the same for everyone: clay, iron, coal,
   saltpeter, sheep hills, oil and bauxite as well as the Ancient ones.
+  A deposit that would sit in a lake moves to the nearest dry land, and
+  slivers of land in water (and of water in land) are tidied away.
   The Capitol sees 16 tiles, enough for its own start.
 - **Fights:** units go for what fights back first (soldiers, then towers and
   the Capitol), then workers, then other buildings, and turn from a worker
@@ -575,13 +616,15 @@ versions don't play together.
   middle-drag rotates and tilts.
 - **Hotkey order:** Q, E, R, T, F, G, C, V, B, Y, U, I, O, J, L, N: the left
   hand's keys first. Buildings, era pages and training all go by it.
-- **Build:** the menu has a page per era (Shift+Q Ancient, Shift+E
-  Medieval, Shift+R Gunpowder, Shift+T Industrial, Shift+F Modern, Shift+G
+- **Build:** the menu has a page per era (Shift+E Ancient, Shift+R
+  Medieval, Shift+T Gunpowder, Shift+F Industrial, Shift+G Modern, Shift+C
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
-  quarry, F fishing hut, G hunting lodge, C orchard, V pasture, B barracks,
-  Y range, U stable, I tower. Del (twice) demolishes the selected buildings.
-- **Missile silo:** Z arms a nuke, then Z again and a click launches it.
+  quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
+  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del (twice) demolishes the
+  selected buildings, or disbands the selected units.
+- **Missile silo:** Z arms a nuke, then Z again and a click launches it
+  (a ring shows the blast, and blue rings the cover of enemy air defenses).
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
   oldest first (with several kinds of building selected, every unit still
   gets a key).

@@ -53,10 +53,10 @@ check(up && up[0] === "Upgrade to Cottage" && up[1] && up[2], `a hut has "Upgrad
 // Era pages of the build menu: Shift and a key picks one; a click on a tab
 // works even when the panel would have been redrawn while it was held.
 await pg.evaluate(() => { W.debug_set_era(2); readWorld(); const c = findOwn(K.Capitol); setSelection([E(c, F.id)]); renderSelection(true); });
+await pg.keyboard.press("Shift+R");
+check(await pg.evaluate(() => buildPage) === 1, "Shift+R: the Medieval page");
 await pg.keyboard.press("Shift+E");
-check(await pg.evaluate(() => buildPage) === 1, "Shift+E: the Medieval page");
-await pg.keyboard.press("Shift+Q");
-check(await pg.evaluate(() => buildPage) === 0, "Shift+Q: back to the Ancient page");
+check(await pg.evaluate(() => buildPage) === 0, "Shift+E: back to the Ancient page");
 const tab = await pg.$("#cmd button.page:nth-of-type(3)");
 const tb = await tab.boundingBox();
 await pg.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);
@@ -65,6 +65,27 @@ await pg.evaluate(() => { selKey = "changed"; renderSelection(false); }); // som
 await pg.mouse.up();
 await pg.evaluate(() => renderSelection(false));
 check(await pg.evaluate(() => buildPage) === 2, "clicking an era tab works even if the panel changed while it was held");
+// The Medieval page has the Sawmill and a second Capitol.
+const med = await pg.evaluate(() => { buildPage = 1; selKey = ""; renderSelection(true); return [...$("cmd").querySelectorAll("button")].map(b => b.getAttribute("aria-label")); });
+check(med.includes("Build Sawmill") && med.includes("Build Capitol"), `the Medieval page has a Sawmill and a Capitol (${med.filter(l => /Build/.test(l)).join(", ")})`);
+// Disband: select your own soldier, Shift+Q twice and it's gone.
+const sold = await pg.evaluate(() => {
+  readWorld(); const c = findOwn(K.Capitol);
+  const id = W.debug_spawn(K.Spearman, (E(c, F.x) | 0) + 3, (E(c, F.y) | 0) - 5); readWorld(); setSelection([id]); renderSelection(true);
+  const b = [...$("cmd").querySelectorAll("button")].find(b => b.getAttribute("aria-label") === "Disband");
+  return [id, b ? b.dataset.key : null];
+});
+check(sold[1] === "⇧Q", `a soldier has Disband (Shift+Q) (${sold[1]})`);
+await pg.keyboard.press("Shift+Q");
+await pg.evaluate(() => renderSelection(true));
+await pg.keyboard.press("Shift+Q");
+await pg.evaluate(() => { W.tick(); W.tick(); readWorld(); });
+check(await pg.evaluate(id => { for (let i = 0; i < entCount; i++) if (E(i, F.id) === id) return false; return true; }, sold[0]), "Shift+Q twice: it's gone");
+// Workers selected: Shift+Q is still Disband, not a build page.
+const wk = await pg.evaluate(() => { readWorld(); const ws = []; for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === K.Worker) ws.push(E(i, F.id)); setSelection(ws.slice(0, 1)); renderSelection(true); return [...$("cmd").querySelectorAll("button")].some(b => b.getAttribute("aria-label") === "Disband"); });
+check(wk, "workers have Disband too");
+// The volume slider is in the menu too (the top bar hides it when crowded).
+check(await pg.evaluate(() => !!$("menuVolume") && $("menuVolume").value === $("volume").value), "the menu has a volume slider, in step with the top bar's");
 // Replays say which version of the game made them.
 const v = await pg.evaluate(() => { const v = Rec.object("test").version; return [v, v.protocol === NET.PROTOCOL && v.replay === REPLAY_FORMAT]; });
 check(v[1] && /^[0-9a-f]{12}$/.test(v[0].sim) && typeof v[0].base === "string", `replays carry the game's version (${JSON.stringify(v[0])})`);
