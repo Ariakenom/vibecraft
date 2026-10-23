@@ -26,6 +26,29 @@ the design conversation; the conclusions are all here.
 
 ## Core rules
 
+### No more than seven of a kind
+
+Decided October 2026, after a 78-minute playtest in which the winner had
+47 lumber camps, 22 brickworks and 21 quarries. A player may have at most
+**7 buildings of one kind** (`MAX_SAME`), apart from farms (fields) and
+houses, which have no limit, and Capitols (`MAX_CAPITOLS`, 3).
+
+So that a whole town fits, scarcity runs the other way round from before:
+the basics are tight at the start and plentiful late.
+- Later producers make much more (see the tables in `src/defs.rs`).
+- The basics come in bulk later: a **Sawmill** (Medieval, 16 wood), a
+  **Stone Works** (Gunpowder, 14 stone) and a **Kiln** (Gunpowder, 20
+  brick), each with two workers.
+- Brickworks, sawmills and kilns need no wood, so a town using every slot
+  of wood from seven lumber camps can still build its way out (stone, then
+  brick, then a sawmill).
+- `src/econ.rs` works out the fewest buildings each era step takes, and an
+  armed missile silo; a test fails if any kind is needed more than seven
+  times. In October 2026 the silo takes 61 buildings, at most 4 of a kind
+  (it took 122, with 23 lumber camps, before), and 84 of its 220 people at
+  work.
+
+
 ### Slots
 
 Every resource is a number of **slots**. A player's **supply** of a resource
@@ -47,9 +70,9 @@ barracks stands, you have 1 wood free. If the barracks burns, 4 are free.
   next to a forest makes wood, a pasture on a horse deposit makes horses, an
   oil well on oil makes oil. Deposits never run out.
 - **Converters** borrow input slots and make output slots: a bakery borrows
-  2 grain and makes 4 bread. (From the Medieval era on, every producer makes
-  twice what it first did: playtests needed far too many buildings. Ancient
-  producers are as they were.) Converters form the production chains. If its
+  2 grain and makes 4 bread. (Later producers make more: Medieval ones about
+  twice what Ancient ones do, Industrial ones and later three to four
+  times. See *No more than seven of a kind*.) Converters form the production chains. If its
   inputs aren't free, a converter stands idle and makes nothing.
 - **Service buildings** make a good from nothing but workers (for example a
   church making *worship*, if we add one). Optional.
@@ -64,7 +87,9 @@ person is a **Worker** (or a soldier trained from one). Houses only count
 beds; nobody sits inside them.
 
 - **Houses** give beds. A house's **capacity** is 2 beds for each different
-  house good it receives (see *House goods*). Total beds = the sum over all
+  house good it receives, and one more for every good past the third (see
+  *House goods*): bigger houses grow more people per good, so people grow
+  more plentiful later rather than scarcer. Total beds = the sum over all
   houses. Everyone alive holds a bed: workers + soldiers ≤ beds.
 - **The campfire.** Each Capitol has a campfire in front of it with a
   marked circle around it (radius 3) where nothing can be built. Newcomers
@@ -133,16 +158,18 @@ so on. Each good has an era.
   already had before taking new ones, and takes the newest era's goods
   first (a cottage takes bread before grain, leaving grain to huts). In a
   shortage the furthest houses lose their last good first.
-- Capacity = 2 × goods used. A hut with 3 goods holds 6 people.
+- Capacity = 2 × goods used, plus 1 for each good past the third
+  (`beds_for`). A hut with 3 goods holds 6 people, a tower block with 13
+  holds 36.
 
 | Tier | House | Max goods | Max residents | Goods that unlock in this era |
 |---|---|---|---|---|
 | 0 Ancient | Hut | 3 | 6 | grain, fish, meat, fruit |
-| 1 Medieval | Cottage | 5 | 10 | bread, clothes, beer |
-| 2 Gunpowder | Townhouse | 7 | 14 | furniture, books, circus shows |
-| 3 Industrial | Tenement | 9 | 18 | canned food, heating, newspapers |
-| 4 Modern | Apartment | 11 | 22 | electricity, radios |
-| 5 Atomic | Tower block | 13 | 26 | cars, TVs |
+| 1 Medieval | Cottage | 5 | 12 | bread, clothes, beer |
+| 2 Gunpowder | Townhouse | 7 | 18 | furniture, books, circus shows |
+| 3 Industrial | Tenement | 9 | 24 | canned food, heating, newspapers |
+| 4 Modern | Apartment | 11 | 30 | electricity, radios |
+| 5 Atomic | Tower block | 13 | 36 | cars, TVs |
 
 ### House tiers and eras
 
@@ -266,6 +293,34 @@ buildings. Newer units have better numbers within their class.
 
 Plus the **Worker** (not trained; newcomers appear at the campfire) and the **Nuke**, launched from a
 Missile silo (uranium ×2, explosives ×2), as the Atomic era's big moment.
+
+**Area damage** (October 2026): cannon, field guns, rocket artillery and
+bombers hurt everything hostile within a tile or two of where they hit
+(`splash_radius`): half their attack at the middle, less further out.
+**Disbanding**: a player can remove their own units (Shift+Q or Delete,
+twice), which frees their slots and beds.
+
+### Capitols, nukes and air defense
+
+Decided October 2026: a nuke that lands on a Capitol shouldn't end a long
+game in one click, but taking a Capitol should still swing it toward the
+attacker, so games end.
+- From the Medieval era a player can **found more Capitols**, up to three
+  (8 wood, 8 stone, 6 brick, 4 builders, 2 minutes). Each makes the
+  Capitol's free basics. The first holds nothing; founded ones hold their
+  cost.
+- **Losing a Capitol takes its town**: everything of the owner's nearer to
+  it than to their other Capitols falls with it. Lose the last finished one
+  and you're out. The campfire burns at the oldest finished Capitol.
+- The **nuke's blast is 15 tiles** (it was 5): a near miss is no longer
+  harmless.
+- **Air Defense** (Modern): anti-aircraft guns with a 10-tile reach that
+  can't hit the ground. A nuke falling within 10 tiles of an enemy air
+  defense is shot down; the defense then reloads for 90 seconds. A second
+  nuke, or one aimed just outside its cover, gets through.
+- **Warnings**: everyone is told when a silo is built, when it starts
+  arming a nuke, when it's armed, when it's launched, and when one is shot
+  down.
 Every unit also costs one resident. About 21 units in all.
 
 **Navy waits until last**: it needs water maps and naval movement.
@@ -274,13 +329,14 @@ Every unit also costs one resident. About 21 units in all.
 
 - **Ancient:** Capitol, Hut, Lumber camp, Quarry, Farm, Fishing hut,
   Hunting lodge, Orchard, Pasture, Barracks, Range, Stable, Tower.
-- **Medieval:** Sheep farm, Weaver, Bakery, Brewery, Iron mine,
-  Brickworks, Siege workshop.
-- **Gunpowder:** Saltpeter works, Powder mill, Carpenter, Printer, Circus.
+- **Medieval:** Sawmill, Sheep farm, Weaver, Bakery, Brewery, Iron mine,
+  Brickworks, Siege workshop; more Capitols.
+- **Gunpowder:** Stone works, Kiln, Saltpeter works, Powder mill,
+  Carpenter, Printer, Circus.
 - **Industrial:** Coal mine, Steel mill, Explosives works, Cannery, Coal
   yard, Press, Factory (field guns).
 - **Modern:** Oil well, Bauxite mine, Power plant, Haber–Bosch plant, Radio
-  factory, Tank works, Airfield.
+  factory, Tank works, Airfield, Air defense.
 - **Atomic:** Uranium mine, Reactor, Car plant, TV plant, Missile silo.
 
 Settlement, Granary, Sawmill, Mason, Smithy, Market and Temple go away (drop

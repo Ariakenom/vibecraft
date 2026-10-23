@@ -8,6 +8,7 @@
 
 mod ai;
 mod defs;
+mod econ;
 mod game;
 mod map;
 mod path;
@@ -816,10 +817,17 @@ pub extern "C" fn crater_count() -> u32 {
 pub extern "C" fn crater_info(n: u32, which: u32) -> f32 {
     game(|g| g.craters.get(n as usize).map_or(0.0, |c| if which == 0 { c.0 } else { c.1 }))
 }
-/// Seconds to arm a nuke and for it to fly, and its blast radius (`which` 0, 1, 2).
+/// Player `p`'s home Capitol (the oldest finished one, where the campfire
+/// burns), as an entity id, or -1.
+#[unsafe(no_mangle)]
+pub extern "C" fn home_capitol(p: u32) -> i32 {
+    game(|g| g.home_capitol(p as u8).map_or(-1, |i| g.ents[i].id as i32))
+}
+/// Seconds to arm a nuke and for it to fly, its blast radius, and an air
+/// defense's reach and reload (`which` 0 to 4).
 #[unsafe(no_mangle)]
 pub extern "C" fn nuke_numbers(which: u32) -> f32 {
-    [defs::NUKE_ARM_TIME, defs::NUKE_FLIGHT, defs::NUKE_RADIUS][which.min(2) as usize]
+    [defs::NUKE_ARM_TIME, defs::NUKE_FLIGHT, defs::NUKE_RADIUS, defs::AIR_DEFENSE_COVER, defs::AIR_DEFENSE_RELOAD][which.min(4) as usize]
 }
 
 /// Debug/testing: set a missile silo's nuke (0 none, 1 arming, 2 armed),

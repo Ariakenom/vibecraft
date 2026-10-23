@@ -42,9 +42,10 @@ impl Game {
     // -----------------------------------------------------------------------
     // Where people are
 
-    /// Where `owner`'s campfire burns, if they still have a Capitol.
+    /// Where `owner`'s campfire burns, if they still have a Capitol: in
+    /// front of their oldest one.
     pub fn campfire(&self, owner: u8) -> Option<(f32, f32)> {
-        self.find_first(owner, Kind::Capitol).map(|c| (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD))
+        self.home_capitol(owner).map(|c| (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD))
     }
 
     /// A spot on the ring around the campfire for worker `id` to stand on.
@@ -180,8 +181,11 @@ impl Game {
                     supply[o][r.idx()] += k as u32;
                 }
             }
-            for &(r, k) in st.cost {
-                used[o][r.idx()] += k as u32;
+            // (The Capitol a player started with holds nothing.)
+            if !e.starting {
+                for &(r, k) in st.cost {
+                    used[o][r.idx()] += k as u32;
+                }
             }
             for q in &e.queue {
                 for &(r, k) in q.stats().cost {
@@ -378,7 +382,7 @@ impl Game {
     /// Houses of `owner`, nearest the Capitol first (ties by id): squared
     /// distance in whole tiles, so it's exact on every computer.
     pub(crate) fn houses_by_distance(&self, owner: u8) -> Vec<usize> {
-        let (cx, cy) = self.find_first(owner, Kind::Capitol).map_or((0, 0), |c| (self.ents[c].tx, self.ents[c].ty));
+        let (cx, cy) = self.home_capitol(owner).map_or((0, 0), |c| (self.ents[c].tx, self.ents[c].ty));
         let mut hs: Vec<(i32, usize)> = self
             .ents
             .iter()
@@ -720,6 +724,10 @@ impl Game {
             }
             if owner == self.local {
                 self.push_event(Ev::Built, bx, by, kind as u32 as f32);
+            }
+            // Everyone hears when a silo goes up.
+            if kind == Kind::MissileSilo {
+                self.push_event(Ev::SiloBuilt, bx, by, owner as f32);
             }
         } else if self.work_stroke(i) {
             let (bx, by) = (self.ents[i].x, self.ents[i].y);

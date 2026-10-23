@@ -233,6 +233,14 @@ pub enum Kind {
     CarPlant = 111,
     TvPlant = 112,
     MissileSilo = 113,
+    /// The basics in bulk, so they keep up with a big town (playtest: towns
+    /// needed dozens of lumber camps): a sawmill (Medieval), then a stone works
+    /// and a kiln (Gunpowder).
+    Sawmill = 114,
+    Stoneworks = 115,
+    /// Modern: shoots at aircraft, and shoots down nukes falling near it.
+    AirDefense = 116,
+    Kiln = 117,
 }
 
 /// Kinds numbered from here on are buildings.
@@ -326,8 +334,11 @@ static ROCKET_ARTILLERY: Stats = unit(200.0, 70.0, 13.0, 4.0, 2.2, 10.0, &[(Stee
 static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, so a
-// game can start: two kinds of food fill the two starting huts.
-static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], ..building(1600.0, 16.0, &[], 60.0, 3) };
+// game can start: two kinds of food fill the two starting huts. From the
+// Medieval era a player can found more (up to `MAX_CAPITOLS`); those hold
+// their cost like any building, the first one holds nothing. Losing one
+// takes down everything nearer to it than to the others.
+static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 3) };
 // Houses: beds depend on how many different goods they get. A hut that's
 // full and has all the goods it can use becomes a cottage by itself, if the
 // cottage's extra wood and stone are free (`Game::upgrade_houses`).
@@ -348,18 +359,23 @@ static TOWER: Stats = Stats { attack: 7.0, range: 7.0, cooldown: 1.5, ..building
 // use can always make more: there is no way to get stuck.
 //                                   hp     cost              makes           workers deposit                time size
 static FARM: Stats = extractor(250.0, &[(Wood, 1)], &[(Grain, 2)], 1, None, 12.0, 3);
-static LUMBER_CAMP: Stats = extractor(400.0, &[], &[(Wood, 4)], 1, Some(Dep::Forest), 15.0, 2);
-static QUARRY: Stats = extractor(500.0, &[(Wood, 2)], &[(Stone, 4)], 2, Some(Dep::Stone), 18.0, 2);
+static LUMBER_CAMP: Stats = extractor(400.0, &[], &[(Wood, 8)], 1, Some(Dep::Forest), 15.0, 2);
+static QUARRY: Stats = extractor(500.0, &[(Wood, 2)], &[(Stone, 6)], 2, Some(Dep::Stone), 18.0, 2);
 static FISHING_HUT: Stats = extractor(300.0, &[(Wood, 1)], &[(Fish, 2)], 1, Some(Dep::Water), 12.0, 2);
 static HUNTING_LODGE: Stats = extractor(300.0, &[(Wood, 1)], &[(Meat, 2)], 1, Some(Dep::Game), 12.0, 2);
 static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(Dep::Fertile), 12.0, 2);
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
-// From the Medieval era on, every producer makes twice what it first did
-// (playtest: towns needed far too many buildings). Ancient ones as before.
+// Later producers make more, so the basics are scarce at the start and
+// plentiful late (playtests: towns needed far too many buildings, and no
+// one kind may stand more than `MAX_SAME` times). Medieval ones make about
+// twice what Ancient ones do, Industrial ones and later three to four times.
 // Medieval extractors.
 static SHEEP_FARM: Stats = extractor(350.0, &[(Wood, 1)], &[(Wool, 4)], 1, Some(Dep::Hills), 14.0, 3);
-static IRON_MINE: Stats = extractor(500.0, &[(Wood, 2)], &[(Iron, 6)], 2, Some(Dep::Iron), 20.0, 2);
-static BRICKWORKS: Stats = extractor(450.0, &[(Wood, 1), (Stone, 1)], &[(Brick, 6)], 2, Some(Dep::Clay), 18.0, 2);
+static IRON_MINE: Stats = extractor(500.0, &[(Wood, 2)], &[(Iron, 8)], 2, Some(Dep::Iron), 20.0, 2);
+// No wood in a brickworks, sawmill or kiln: a town using every slot of
+// wood from as many lumber camps as it may have can still build its way
+// out (stone, then brick, then a sawmill).
+static BRICKWORKS: Stats = extractor(450.0, &[(Stone, 2)], &[(Brick, 6)], 2, Some(Dep::Clay), 18.0, 2);
 
 // Converters: they borrow their inputs, as long as they're free.
 //                                  hp     cost                       takes          makes          workers time
@@ -369,38 +385,47 @@ static BREWERY: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Grain, 2)]
 static SIEGE_WORKSHOP: Stats = building(800.0, 6.0, &[(Wood, 3), (Brick, 2)], 35.0, 3);
 
 // Gunpowder.
-static SALTPETER_WORKS: Stats = extractor(400.0, &[(Wood, 1), (Brick, 1)], &[(Nitrate, 6)], 2, Some(Dep::Nitrate), 18.0, 2);
-static POWDER_MILL: Stats = converter(450.0, &[(Wood, 2), (Brick, 1)], &[(Nitrate, 2), (Wood, 1)], &[(Gunpowder, 6)], 2, 20.0);
-static CARPENTER: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Wood, 2)], &[(Furniture, 4)], 1, 16.0);
-static PRINTER: Stats = converter(400.0, &[(Stone, 1), (Brick, 2)], &[(Wood, 2)], &[(Books, 4)], 1, 18.0);
+static SALTPETER_WORKS: Stats = extractor(400.0, &[(Wood, 1), (Brick, 1)], &[(Nitrate, 10)], 2, Some(Dep::Nitrate), 18.0, 2);
+static POWDER_MILL: Stats = converter(450.0, &[(Wood, 2), (Brick, 1)], &[(Nitrate, 2), (Wood, 1)], &[(Gunpowder, 10)], 2, 20.0);
+static CARPENTER: Stats = converter(400.0, &[(Wood, 1), (Brick, 1)], &[(Wood, 2)], &[(Furniture, 6)], 1, 16.0);
+static PRINTER: Stats = converter(400.0, &[(Stone, 1), (Brick, 2)], &[(Wood, 2)], &[(Books, 6)], 1, 18.0);
 // The circus: costly, and it borrows horses, but four houses get a show.
 static CIRCUS: Stats = Stats { produces: &[(Circus, 8)], consumes: &[(Horses, 2)], workers: 3, ..building(900.0, 5.0, &[(Wood, 4), (Stone, 3), (Brick, 3)], 40.0, 3) };
 
 // Industrial.
-static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 8)], 2, Some(Dep::Coal), 20.0, 2);
-static STEEL_MILL: Stats = Stats { produces: &[(Steel, 6)], consumes: &[(Iron, 2), (Coal, 2)], workers: 3, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
-static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 4)], 2, 25.0);
-static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 6)], 2, 22.0);
-static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 6)], 1, 16.0);
-static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 6)], 2, 22.0);
+static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 16)], 2, Some(Dep::Coal), 20.0, 2);
+static STEEL_MILL: Stats = Stats { produces: &[(Steel, 12)], consumes: &[(Iron, 2), (Coal, 2)], workers: 3, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
+static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 8)], 2, 25.0);
+static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 10)], 2, 22.0);
+static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 10)], 1, 16.0);
+static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 10)], 2, 22.0);
 static FACTORY: Stats = building(1100.0, 6.0, &[(Brick, 4), (Steel, 2)], 40.0, 3);
 
 // Modern. Power plants burn coal; the Haber–Bosch plant makes nitrate
 // from coal and electricity, for players with no saltpeter.
-static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 6)], 2, Some(Dep::Oil), 25.0, 2);
-static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 6)], 2, Some(Dep::Bauxite), 25.0, 2);
-static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 8)], consumes: &[(Coal, 2)], workers: 2, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
-static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 6)], 2, 30.0);
-static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 6)], 2, 25.0);
+static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 12)], 2, Some(Dep::Oil), 25.0, 2);
+static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 12)], 2, Some(Dep::Bauxite), 25.0, 2);
+static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 16)], consumes: &[(Coal, 2)], workers: 2, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
+static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 12)], 2, 30.0);
+static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 10)], 2, 25.0);
 static TANK_WORKS: Stats = building(1300.0, 6.0, &[(Brick, 3), (Steel, 3)], 40.0, 3);
 // A big job: three builders.
 static AIRFIELD: Stats = Stats { builders: 3, ..building(1200.0, 8.0, &[(Brick, 2), (Steel, 2), (Aluminum, 1)], 45.0, 4) };
 
 // Atomic. The reactor makes far more electricity than a coal plant.
-static URANIUM_MINE: Stats = extractor(700.0, &[(Steel, 2), (Brick, 1)], &[(Uranium, 4)], 2, Some(Dep::Uranium), 30.0, 2);
-static REACTOR: Stats = Stats { produces: &[(Electricity, 16)], consumes: &[(Uranium, 1)], workers: 3, builders: 2, ..building(1500.0, 4.0, &[(Steel, 4), (Brick, 3)], 50.0, 3) };
-static CAR_PLANT: Stats = converter(900.0, &[(Steel, 2), (Brick, 2)], &[(Steel, 1), (Oil, 1)], &[(Cars, 6)], 3, 30.0);
-static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum, 1), (Electricity, 1)], &[(Tvs, 6)], 2, 28.0);
+static URANIUM_MINE: Stats = extractor(700.0, &[(Steel, 2), (Brick, 1)], &[(Uranium, 8)], 2, Some(Dep::Uranium), 30.0, 2);
+static REACTOR: Stats = Stats { produces: &[(Electricity, 32)], consumes: &[(Uranium, 1)], workers: 3, builders: 2, ..building(1500.0, 4.0, &[(Steel, 4), (Brick, 3)], 50.0, 3) };
+static CAR_PLANT: Stats = converter(900.0, &[(Steel, 2), (Brick, 2)], &[(Steel, 1), (Oil, 1)], &[(Cars, 10)], 3, 30.0);
+static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum, 1), (Electricity, 1)], &[(Tvs, 10)], 2, 28.0);
+// The basics in bulk. A sawmill stands by a forest like a lumber camp, a
+// stone works by stone like a quarry, a kiln by clay like a brickworks, and
+// each makes as much as several of them with fewer hands.
+static SAWMILL: Stats = extractor(900.0, &[(Stone, 2), (Brick, 1)], &[(Wood, 16)], 2, Some(Dep::Forest), 30.0, 3);
+static STONEWORKS: Stats = extractor(1000.0, &[(Wood, 2), (Brick, 2)], &[(Stone, 14)], 2, Some(Dep::Stone), 30.0, 3);
+static KILN: Stats = extractor(900.0, &[(Stone, 4)], &[(Brick, 20)], 2, Some(Dep::Clay), 30.0, 3);
+// Modern: anti-aircraft guns, and the only defense against a nuke: one
+// falling within `AIR_DEFENSE_COVER` of it is shot down (`Game::launch`).
+static AIR_DEFENSE: Stats = Stats { attack: 28.0, range: AIR_DEFENSE_COVER, cooldown: 1.2, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
 static MISSILE_SILO: Stats = Stats { builders: 2, ..building(1500.0, 6.0, &[(Steel, 4), (Brick, 2)], 60.0, 3) };
 
 /// The nuke: a missile silo arms one (holding these slots while it waits),
@@ -411,9 +436,30 @@ pub const NUKE_ARM_TIME: f32 = 120.0;
 pub const NUKE_FLIGHT: f32 = 20.0;
 /// Everything within this many tiles of the blast takes damage (units die),
 /// buildings up to `NUKE_DAMAGE`, less further out. The crater stays.
-pub const NUKE_RADIUS: f32 = 5.0;
+pub const NUKE_RADIUS: f32 = 15.0;
 pub const NUKE_DAMAGE: f32 = 2400.0;
-pub const CRATER_RADIUS: f32 = 1.6;
+pub const CRATER_RADIUS: f32 = 2.4;
+/// An air defense shoots down any nuke falling this close to it (twice
+/// the first nuke's reach), then needs `AIR_DEFENSE_RELOAD` seconds before
+/// it can stop another. It also shoots at aircraft out to here.
+pub const AIR_DEFENSE_COVER: f32 = 10.0;
+pub const AIR_DEFENSE_RELOAD: f32 = 90.0;
+/// A player can have this many Capitols at once (the first one included).
+pub const MAX_CAPITOLS: usize = 3;
+
+/// Shells, rockets and bombs hurt everything hostile within this many
+/// tiles of where they land (0: just their target), with `SPLASH_SHARE` of
+/// their attack at the middle, less further out.
+pub fn splash_radius(k: Kind) -> f32 {
+    match k {
+        Kind::Cannon => 1.2,
+        Kind::FieldGun => 1.6,
+        Kind::RocketArtillery => 2.2,
+        Kind::Bomber => 2.0,
+        _ => 0.0,
+    }
+}
+pub const SPLASH_SHARE: f32 = 0.5;
 
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
@@ -428,10 +474,20 @@ pub fn growth_interval(beds: u32) -> f32 {
 }
 /// Beds a house gives for each different good it gets.
 pub const BEDS_PER_GOOD: u8 = 2;
+/// Beds in a house with this many different goods: `BEDS_PER_GOOD` each,
+/// and one more for every good past the third, so bigger houses grow more
+/// people per good (playtest: people ran short late in the game). A hut
+/// with 3 goods has 6, a cottage with 5 has 12, a tower block with 13, 36.
+pub fn beds_for(goods: u32) -> u8 {
+    (goods * BEDS_PER_GOOD as u32 + goods.saturating_sub(3)).min(u8::MAX as u32) as u8
+}
 /// How many different goods a house of this tier can use (3 for a hut).
 pub fn house_max_goods(tier: u8) -> u8 {
     3 + 2 * tier
 }
+/// No player may have more than this many buildings of one kind, apart
+/// from farms (fields), houses and Capitols (`MAX_CAPITOLS`).
+pub const MAX_SAME: usize = 7;
 /// A player enters the next era when this many of their houses have
 /// reached its tier (and keeps the era if they later drop back).
 pub const HOUSES_FOR_ERA: u32 = 10;
@@ -441,13 +497,13 @@ pub const LAST_ERA: u8 = 5;
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 69] = {
+    pub const ALL: [Kind; 73] = {
         use Kind::*;
         [
             Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture,
             Barracks, Range, Stable, Tower, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
             ExplosivesWorks, Cannery, CoalYard, Press, Factory, Infantry, Tank, Fighter, Bomber, Apartment, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
-            RocketArtillery, Jet, TowerBlock, UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo,
+            RocketArtillery, Jet, TowerBlock, UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
         ]
     };
 
@@ -529,6 +585,10 @@ impl Kind {
             CarPlant => &CAR_PLANT,
             TvPlant => &TV_PLANT,
             MissileSilo => &MISSILE_SILO,
+            Sawmill => &SAWMILL,
+            Stoneworks => &STONEWORKS,
+            AirDefense => &AIR_DEFENSE,
+            Kiln => &KILN,
         }
     }
 
@@ -561,12 +621,12 @@ impl Kind {
     /// Every buildable building, in tech-tree order (used by the UI and AI).
     /// Cottages aren't built: huts become cottages.
     #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 43] = {
+    pub const BUILDABLE: [Kind; 48] = {
         use Kind::*;
         [
-            Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
+            Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
             Carpenter, Printer, Circus, CoalMine, SteelMill, ExplosivesWorks, Cannery, CoalYard, Press, Factory, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
-            UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo,
+            UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
         ]
     };
 
@@ -610,10 +670,10 @@ impl Kind {
     pub fn era(self) -> u8 {
         use Kind::*;
         match self {
-            Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
-            Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
+            Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
+            Stoneworks | Kiln | Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
             Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
-            Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield => 4,
+            Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,
             RocketArtillery | Jet | TowerBlock | UraniumMine | Reactor | CarPlant | TvPlant | MissileSilo => 5,
             _ => 0,
         }
@@ -641,11 +701,15 @@ impl Kind {
     /// Can it shoot at aircraft? Fighters, machine guns, modern infantry,
     /// towers and the Capitol.
     pub fn hits_air(self) -> bool {
-        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Tower | Kind::Capitol)
+        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Tower | Kind::Capitol | Kind::AirDefense)
     }
 
     /// Can `self` attack `target` at all?
     pub fn can_hit(self, target: Kind) -> bool {
+        // Air defense shoots only at aircraft.
+        if self == Kind::AirDefense {
+            return target.is_air();
+        }
         !target.is_air() || self.hits_air()
     }
 

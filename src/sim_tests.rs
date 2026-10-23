@@ -5,6 +5,11 @@ use crate::defs::*;
 use crate::game::*;
 
 
+/// How many slots of `r` a `k` makes.
+pub fn makes(k: Kind, r: Res) -> u16 {
+    k.stats().produces.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n)
+}
+
 /// What a player has, for printing: kind name → count, people, slots.
 pub fn census(g: &Game, p: u8) -> String {
     let mut out = String::new();
@@ -146,7 +151,7 @@ fn extractors_need_their_deposit() {
     // Next to stone it works, and with its crew it makes stone.
     let stone = g.players[1].supply[Res::Stone.idx()];
     build(&mut g, Kind::Quarry);
-    assert_eq!(g.players[1].supply[Res::Stone.idx()], stone + 4);
+    assert_eq!(g.players[1].supply[Res::Stone.idx()], stone + makes(Kind::Quarry, Res::Stone));
 }
 
 #[test]
@@ -311,7 +316,7 @@ fn free_workers_go_to_work_by_themselves() {
     run(&mut g, 30.0);
     let crewed: Vec<bool> = camps.iter().map(|&c| g.ents[c as usize].crewed).collect();
     assert_eq!(crewed, [true, true, true, true, true, true, true, true, false]);
-    assert_eq!(g.players[1].supply[Res::Wood.idx()], 4 + 8 * 4, "the camp with nobody makes nothing");
+    assert_eq!(g.players[1].supply[Res::Wood.idx()], 4 + 8 * makes(Kind::LumberCamp, Res::Wood), "the camp with nobody makes nothing");
     assert_eq!(g.players[1].free, 0);
 }
 
@@ -329,7 +334,7 @@ fn moving_workers_away_pauses_a_producer() {
     g.apply(1, Command::Smart { ids: vec![crew[0]], x: 20.0, y: 20.0 }).unwrap();
     run(&mut g, 20.0);
     assert!(!g.ents[camp as usize].hiring && !g.ents[camp as usize].crewed);
-    assert_eq!(g.players[1].supply[Res::Wood.idx()], wood - 4);
+    assert_eq!(g.players[1].supply[Res::Wood.idx()], wood - makes(Kind::LumberCamp, Res::Wood));
     // Sending a worker back starts it hiring again: it fills up.
     g.apply(1, Command::Smart { ids: vec![crew[0]], x: g.ents[camp as usize].x, y: g.ents[camp as usize].y }).unwrap();
     run(&mut g, 30.0);
@@ -617,7 +622,7 @@ fn gunpowder_comes_from_nitrate_and_wood() {
     g.players[1].supply_pct = 300;
     build(&mut g, Kind::Brickworks); // the works and the mill are built with brick
     let works = build(&mut g, Kind::SaltpeterWorks);
-    assert_eq!(g.players[1].supply[Res::Nitrate.idx()], 18, "6 nitrate, times 3");
+    assert_eq!(g.players[1].supply[Res::Nitrate.idx()], 3 * makes(Kind::SaltpeterWorks, Res::Nitrate), "its nitrate, times 3");
     let mill = build(&mut g, Kind::PowderMill);
     assert!(g.ents[mill as usize].fed);
     assert!(g.players[1].supply[Res::Gunpowder.idx()] >= 3);
@@ -805,7 +810,10 @@ fn a_nuke_is_armed_launched_and_leaves_a_crater() {
     g.set_ai(2, false); // their spearmen stay put
     g.players[2].supply_pct = 400; // and supplied
     let near = g.spawn_unit(Kind::Spearman, 2, cx - 2.0, cy - 2.0);
-    let far = g.spawn_unit(Kind::Spearman, 2, cx + 9.0, cy);
+    // Just outside the blast, toward the middle of the map.
+    let (mx, my) = (g.map.w as f32 / 2.0 - cx, g.map.h as f32 / 2.0 - cy);
+    let m = mx.hypot(my);
+    let far = g.spawn_unit(Kind::Spearman, 2, cx + mx / m * (NUKE_RADIUS + 3.0), cy + my / m * (NUKE_RADIUS + 3.0));
     g.apply(1, Command::Launch { id: silo, x: cx, y: cy }).unwrap();
     g.tick();
     assert_eq!(free(&g, Res::Uranium), uranium, "launched: its slots come free");
@@ -953,4 +961,170 @@ fn musketeers_fight_each_other() {
     let b = g.spawn_unit(Kind::Musketeer, 2, 65.0, 60.0);
     run(&mut g, 6.0);
     assert!(g.ents[a as usize].hp < Kind::Musketeer.stats().hp || g.ents[b as usize].hp < Kind::Musketeer.stats().hp, "{:?} {:?}", g.ents[a as usize].order, g.ents[b as usize].order);
+}
+
+// ---------------------------------------------------------------------------
+// October 2026 playtest: fewer buildings, Capitols, nukes and air defense
+
+/// A spot for `kind` at least `far` tiles from player 1's Capitol.
+fn spot_away(g: &Game, kind: Kind, far: i32) -> (i32, i32) {
+    let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+    let (cx, cy) = (cap.tx, cap.ty);
+    for r in far..60 {
+        for y in cy - r..=cy + r {
+            for x in cx - r..=cx + r {
+                if (x - cx).abs().max((y - cy).abs()) == r && g.can_place(kind, x, y, 1, 1) {
+                    return (x, y);
+                }
+            }
+        }
+    }
+    panic!("no spot for {kind:?}");
+}
+
+#[test]
+fn no_more_than_seven_of_a_kind_but_fields_and_houses() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].supply_pct = 1000;
+    for _ in 0..MAX_SAME {
+        build(&mut g, Kind::FishingHut);
+    }
+    let (x, y) = spot(&g, Kind::FishingHut);
+    let r = g.apply(1, Command::Place { ids: vec![], kind: Kind::FishingHut, tx: x, ty: y });
+    assert_eq!(r.err(), Some(CmdError::TooMany));
+    for _ in 0..MAX_SAME + 1 {
+        let (x, y) = spot(&g, Kind::Farm);
+        g.apply(1, Command::Place { ids: vec![], kind: Kind::Farm, tx: x, ty: y }).expect("fields have no limit");
+    }
+    let (x, y) = spot(&g, Kind::Hut);
+    g.apply(1, Command::Place { ids: vec![], kind: Kind::Hut, tx: x, ty: y }).expect("houses have no limit");
+}
+
+#[test]
+fn a_second_capitol_holds_its_cost_and_losing_one_takes_its_town() {
+    let mut g = Game::new(5, 1, 2);
+    g.set_ai(2, false);
+    g.players[1].supply_pct = 1000;
+    build(&mut g, Kind::Brickworks);
+    let (x, y) = spot_away(&g, Kind::Capitol, 18);
+    assert_eq!(g.apply(1, Command::Place { ids: vec![], kind: Kind::Capitol, tx: x, ty: y }).err(), Some(CmdError::Era(1)), "not in the Ancient era");
+    g.players[1].era = 1;
+    let wood = free(&g, Res::Wood);
+    g.apply(1, Command::Place { ids: vec![], kind: Kind::Capitol, tx: x, ty: y }).unwrap();
+    let second = g.ents.len() - 1;
+    g.tick();
+    assert_eq!(free(&g, Res::Wood), wood - 8, "a founded Capitol holds its cost (the first holds nothing)");
+    // Finish it, and put a hut by each.
+    g.ents[second].built = 1.0;
+    g.ents[second].hp = Kind::Capitol.stats().hp;
+    let first = g.find_first(1, Kind::Capitol).unwrap();
+    let near_first = build(&mut g, Kind::Hut);
+    let (hx, hy) = (x + 4, y + 4);
+    assert!(g.can_place(Kind::Hut, hx, hy, 1, 0));
+    let near_second = g.spawn_building(Kind::Hut, 1, hx, hy, 1.0);
+    // The first one falls: its town goes with it, the other's stays, and
+    // the player is still in the game.
+    g.ents[first].hp = 0.0;
+    run(&mut g, 0.2);
+    assert!(!g.alive(near_first), "the first Capitol's town fell with it");
+    assert!(g.alive(near_second), "the second's town stands");
+    assert!(!g.players[1].defeated && g.state == 0);
+    assert_eq!(g.home_capitol(1), Some(second), "the campfire moves to the other");
+    // The last one falls: out.
+    g.ents[second].hp = 0.0;
+    run(&mut g, 0.2);
+    assert!(g.players[1].defeated);
+}
+
+#[test]
+fn an_unfinished_capitol_does_not_keep_you_in_the_game() {
+    let mut g = Game::new(5, 1, 2);
+    g.players[1].era = 1;
+    g.players[1].supply_pct = 1000;
+    build(&mut g, Kind::Brickworks);
+    let (x, y) = spot_away(&g, Kind::Capitol, 18);
+    g.apply(1, Command::Place { ids: vec![], kind: Kind::Capitol, tx: x, ty: y }).unwrap();
+    let first = g.find_first(1, Kind::Capitol).unwrap();
+    g.ents[first].hp = 0.0;
+    run(&mut g, 0.2);
+    assert!(g.players[1].defeated);
+}
+
+#[test]
+fn an_air_defense_shoots_down_a_nuke_falling_near_it() {
+    let mut g = Game::new(5, 1, 2);
+    g.set_ai(2, false);
+    let cap = g.find_first(2, Kind::Capitol).unwrap();
+    let (cx, cy) = (g.ents[cap].x, g.ents[cap].y);
+    // Player 2 has an air defense next to their Capitol.
+    let (tx, ty) = (g.ents[cap].tx, g.ents[cap].ty);
+    let mut def = None;
+    'find: for r in 4..12 {
+        for y in ty - r..=ty + r {
+            for x in tx - r..=tx + r {
+                if g.can_place(Kind::AirDefense, x, y, 2, 0) {
+                    def = Some(g.spawn_building(Kind::AirDefense, 2, x, y, 1.0));
+                    break 'find;
+                }
+            }
+        }
+    }
+    let def = def.unwrap();
+    let silo = g.spawn_building(Kind::MissileSilo, 1, 2, 2, 1.0);
+    g.ents[silo as usize].nuke = 2;
+    g.apply(1, Command::Launch { id: silo, x: cx, y: cy }).unwrap();
+    run(&mut g, NUKE_FLIGHT + 0.5);
+    assert!(g.alive(cap as u32) && g.craters.is_empty(), "shot down: no blast");
+    assert!(g.ents[def as usize].progress > 0.0, "and it's reloading");
+    // A second one while it reloads gets through.
+    g.ents[silo as usize].nuke = 2;
+    g.apply(1, Command::Launch { id: silo, x: cx, y: cy }).unwrap();
+    run(&mut g, NUKE_FLIGHT + 0.5);
+    assert_eq!(g.craters.len(), 1);
+    assert!(!g.alive(cap as u32));
+}
+
+#[test]
+fn shells_hurt_what_stands_around_their_target() {
+    let mut g = Game::new(5, 1, 2);
+    g.set_ai(2, false);
+    let a = g.spawn_unit(Kind::Spearman, 2, 40.0, 40.0);
+    let b = g.spawn_unit(Kind::Spearman, 2, 40.8, 40.0);
+    let far = g.spawn_unit(Kind::Spearman, 2, 44.0, 40.0);
+    let gun = g.spawn_unit(Kind::Cannon, 1, 32.0, 40.0);
+    g.players[1].supply_pct = 1000;
+    g.players[2].supply_pct = 1000;
+    g.apply(1, Command::Smart { ids: vec![gun], x: 40.0, y: 40.0 }).unwrap();
+    let hp = Kind::Spearman.stats().hp;
+    for _ in 0..20 * 8 {
+        g.tick();
+        if g.ents[a as usize].hp < hp {
+            break;
+        }
+    }
+    run(&mut g, 0.1);
+    assert!(g.ents[a as usize].hp < hp, "the target is hit");
+    assert!(g.ents[b as usize].hp < hp, "and the one next to it");
+    assert_eq!(g.ents[far as usize].hp, hp, "but not one further off");
+}
+
+#[test]
+fn your_own_units_can_be_disbanded() {
+    let mut g = Game::new(5, 1, 2);
+    let w = g.ents.iter().find(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker).unwrap().id;
+    let theirs = g.ents.iter().find(|e| e.alive && e.owner == 2 && e.kind == Kind::Worker).unwrap().id;
+    let people = g.players[1].people;
+    g.apply(1, Command::Demolish { ids: vec![w, theirs] }).unwrap();
+    g.tick();
+    assert!(!g.alive(w), "mine are gone");
+    assert!(g.alive(theirs), "theirs aren't mine to disband");
+    g.tick();
+    assert_eq!(g.players[1].people, people - 1);
+}
+
+#[test]
+fn beds_grow_faster_with_more_goods() {
+    assert_eq!(beds_for(3), 6);
+    assert_eq!(beds_for(5), 12);
+    assert_eq!(beds_for(13), 36);
 }

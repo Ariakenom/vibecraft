@@ -32,7 +32,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 9: the Industrial era.
 /// 10: the Modern era; the Wonder is gone.
 /// 11: the Atomic era: silos, nukes in flight, craters.
-const VERSION: u32 = 11;
+/// 12: Capitols can be founded (the first is marked); AI waves gather.
+const VERSION: u32 = 12;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -265,6 +266,7 @@ impl Game {
             w.bool(e.hiring);
             w.u8(e.nuke);
             w.u32(e.goods);
+            w.bool(e.starting);
         }
 
         w.len(self.players.len());
@@ -316,6 +318,8 @@ impl Game {
             w.u32(a.scout.unwrap_or(0));
             w.u8(a.scout_leg);
             w.bool(a.last_grew);
+            w.opt_pt(a.gather);
+            w.f32(a.gather_until);
         }
 
         w.f32(self.time);
@@ -411,6 +415,7 @@ impl Game {
             e.hiring = r.bool()?;
             e.nuke = r.u8()?.min(2);
             e.goods = r.u32()?;
+            e.starting = r.bool()?;
             ents.push(e);
         }
 
@@ -470,6 +475,8 @@ impl Game {
             a.scout = has_scout.then_some(scout);
             a.scout_leg = r.u8()?;
             a.last_grew = r.bool()?;
+            a.gather = r.opt_pt()?;
+            a.gather_until = r.f32()?;
             if a.scout.is_some_and(|s| s as usize >= ents.len()) {
                 return None;
             }
