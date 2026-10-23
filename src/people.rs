@@ -496,12 +496,16 @@ impl Game {
         }
     }
 
-    /// Who lives where, for the page: people fill houses nearest the
-    /// Capitol first. Nothing depends on it but the drawing and the house
-    /// tiers (a house is full when every bed is taken).
+    /// Who lives where, for the page: people fill the lowest tier of house
+    /// first (huts before cottages), so the houses that can grow next are
+    /// full and ready to; among the same tier, nearest the Capitol first.
+    /// Nothing depends on it but the drawing and the house tiers (a house
+    /// is full when every bed is taken).
     fn fill_houses(&mut self, owner: u8) {
         let mut left = self.players[owner as usize].people;
-        for i in self.houses_by_distance(owner) {
+        let mut order = self.houses_by_distance(owner);
+        order.sort_by_key(|&i| self.ents[i].kind.house_tier()); // stable: keeps the distance order within a tier
+        for i in order {
             let e = &mut self.ents[i];
             let n = left.min(e.beds() as u32);
             e.residents = n as u8;

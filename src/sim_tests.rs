@@ -1186,3 +1186,20 @@ fn cheat_mode_lets_people_build_anything_free() {
     let (x, y) = spot(&g, Kind::TankWorks);
     assert!(g.apply(1, Command::Place { ids: vec![], kind: Kind::TankWorks, tx: x, ty: y }).is_err());
 }
+
+#[test]
+fn the_lowest_houses_fill_first_so_they_can_grow() {
+    let mut g = town(5, 1, 2);
+    g.players[1].supply_pct = 300;
+    build(&mut g, Kind::HuntingLodge);
+    // The nearer hut becomes a cottage; the further one stays a hut.
+    let hs = houses(&g, 1);
+    let (near, far) = (hs[0], hs[1]);
+    g.ents[near].kind = Kind::Cottage;
+    g.resolve();
+    g.tick();
+    let (hut, cottage) = (&g.ents[far], &g.ents[near]);
+    assert!(g.players[1].people < hut.beds() as u32 + cottage.beds() as u32, "not enough people for both");
+    assert_eq!(hut.residents, hut.beds(), "the hut is full first, though it's further away");
+    assert!(cottage.residents < cottage.beds());
+}

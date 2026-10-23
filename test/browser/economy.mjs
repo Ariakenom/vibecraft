@@ -92,6 +92,17 @@ const ch = await pg.evaluate(() => { $("menuBtn").click(); const shown = !$("che
   return [shown, W.cheat(), buildPages().length, W.unlocked(K.MissileSilo), W.short_of(K.MissileSilo)]; });
 check(ch[0] && ch[1] === 1 && ch[2] === 6 && ch[3] === 1 && ch[4] < 0, `cheat mode: the switch, all six pages, a silo unlocked and free (${ch})`);
 await pg.evaluate(() => { $("cheatBtn").click(); });
+// Attack-move on the minimap: Z, then a click there.
+const mini1 = await pg.evaluate(() => {
+  readWorld(); const c = findOwn(K.Capitol);
+  const id = W.debug_spawn(K.Spearman, (E(c, F.x) | 0) + 4, (E(c, F.y) | 0) - 6); readWorld(); setSelection([id]); setAmode(true);
+  const r = mini.getBoundingClientRect();
+  mini.dispatchEvent(new PointerEvent("pointerdown", { button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, pointerId: 1, bubbles: true }));
+  W.tick(); readWorld();
+  for (let i = 0; i < entCount; i++) if (E(i, F.id) === id) return [E(i, F.order), amode];
+  return null;
+});
+check(mini1 && mini1[0] === 2 && !mini1[1], `Z and a click on the minimap: attack-moving there (${mini1})`);
 // Replays say which version of the game made them.
 const v = await pg.evaluate(() => { const v = Rec.object("test").version; return [v, v.protocol === NET.PROTOCOL && v.replay === REPLAY_FORMAT]; });
 check(v[1] && /^[0-9a-f]{12}$/.test(v[0].sim) && typeof v[0].base === "string", `replays carry the game's version (${JSON.stringify(v[0])})`);

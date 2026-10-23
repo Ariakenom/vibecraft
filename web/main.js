@@ -1389,7 +1389,14 @@ function miniMove(e) {
 mini.addEventListener("pointerdown", e => {
   if (!running) return;
   const w = miniMove(e);
-  if (e.button === 2) { rightClickAt(w); return; }
+  if (e.button === 2) { if (amode || placing != null) { placing = null; setAmode(false); return; } rightClickAt(w); return; }
+  // Attack-move (Z, then a click on the minimap), or a nuke's target.
+  if (e.button === 0 && amode && aimSilo != null) { launchAt(w); return; }
+  if (e.button === 0 && amode) {
+    issue({ c: 2, ids: myIds(false), x: w.x, y: w.y }); marker(w, 2); Sfx.ui("command", 2);
+    if (!e.shiftKey) setAmode(false);
+    return;
+  }
   miniDrag = true; mini.setPointerCapture(e.pointerId); centerOn(w.x, w.y);
 });
 mini.addEventListener("pointermove", e => { if (miniDrag) { const w = miniMove(e); centerOn(w.x, w.y); } });
