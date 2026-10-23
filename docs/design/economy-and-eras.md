@@ -363,10 +363,11 @@ fly over their target and drop their bombs.
 ## Start of a game (first guess)
 
 Capitol (makes 2 wood, 1 stone, 1 grain and 1 fruit by itself, no
-workers, and has 4 beds) and 2 workers at the campfire; no houses (October
-2026: the start had too much of everything). One worker builds a lumber
-camp (free) and works there; the Capitol's wood, grain and fruit make the
-first hut 4 beds.
+workers, and has 4 beds), and nobody: no workers, no houses (October 2026: the
+start had too much of everything). Four newcomers arrive over the first
+half minute to fill the Capitol's beds. The first builds a lumber camp
+(free) and works there; the Capitol's wood, grain and fruit make the first
+hut 4 beds.
 
 ## What it should feel like
 

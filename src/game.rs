@@ -15,9 +15,10 @@ pub const GAIA: u8 = 0;
 pub const PLAYER: u8 = 1;
 /// Up to four players. Player 0 is "nature" (gaia).
 pub const MAX_PLAYERS: usize = 4;
-/// Each player starts with this many workers at the campfire, no houses,
-/// and the Capitol's beds (`CAPITOL_BEDS`).
-const START_WORKERS: usize = 2;
+/// Each player starts with this many workers at the campfire (none: the
+/// Capitol's `CAPITOL_BEDS` fill with newcomers over the first half
+/// minute), and no houses.
+const START_WORKERS: usize = 0;
 const CELL: i32 = 4; // spatial-hash cell size in tiles
 
 /// What a unit is currently trying to do. Enums with data are one of Rust's

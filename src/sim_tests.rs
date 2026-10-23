@@ -6,7 +6,7 @@ use crate::game::*;
 
 
 /// A game with the start these tests were written for: two huts and eight
-/// workers each (a real game starts with two workers and no houses).
+/// workers each (a real game starts with nobody and no houses).
 pub fn town(seed: u32, difficulty: u32, players: u8) -> Game {
     let mut g = Game::new(seed, difficulty, players);
     for p in 1..=g.n_players {
@@ -15,7 +15,7 @@ pub fn town(seed: u32, difficulty: u32, players: u8) -> Game {
         for (hx, hy) in [(bx - 4, by + 1), (bx + 2, by - 4)] {
             g.spawn_building(Kind::Hut, p, hx, hy, 1.0);
         }
-        for _ in 0..6 {
+        for _ in 0..8 {
             g.spawn_worker(p, None);
         }
     }
@@ -114,9 +114,16 @@ fn a_new_game_starts_with_free_workers_and_nobody_short() {
         for p in 1..=players {
             let pl = &g.players[p as usize];
             assert!(Res::ALL.iter().all(|&r| pl.free(r) >= 0), "player {p} starts short");
-            assert_eq!((pl.people, pl.free, pl.beds), (2, 2, CAPITOL_BEDS), "player {p}: 2 people, free at the campfire, the Capitol's beds");
+            assert_eq!((pl.people, pl.beds), (0, CAPITOL_BEDS), "player {p}: nobody yet, the Capitol's beds");
             assert!(!g.ents.iter().any(|e| e.alive && e.owner == p && e.kind.house_tier().is_some()), "no houses");
         }
+        // Newcomers fill the Capitol's beds in the first minute.
+        let mut g = Game::new(9, 1, players);
+        for p in 1..=players {
+            g.set_ai(p, false);
+        }
+        run(&mut g, 60.0);
+        assert_eq!(g.players[1].people, CAPITOL_BEDS, "four newcomers");
     }
 }
 

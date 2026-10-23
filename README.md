@@ -515,8 +515,9 @@ versions don't play together.
   foundation doesn't count) and you're out. The campfire burns at your
   oldest Capitol.
 - **The start:** a Capitol (2 wood, 1 stone, 1 grain and 1 fruit by itself,
-  and 4 beds) and 2 workers. No houses: the first hut comes from the
-  Capitol's wood and food. (There was a
+  and 4 beds), nobody and no houses. Four newcomers arrive at the campfire
+  over the first half minute to fill the Capitol's beds: they build the
+  first lumber camp, and the first hut from the Capitol's wood and food. (There was a
   Wonder victory; it was removed in October 2026.)
 - **Seven of a kind, as a target.** The numbers are tuned so a town
   needn't have more than 7 buildings of any one kind (`MAX_SAME`), apart
