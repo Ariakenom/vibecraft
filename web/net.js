@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 22,   // 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 23,   // 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,

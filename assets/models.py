@@ -2125,6 +2125,124 @@ def uranium_ore():
     return m
 
 
+# --- October 2026: the basics in bulk, and air defense -------------------------
+# Each new model draws from its own seeded generator, so adding them doesn't
+# shift the random wobble of every model made after them.
+def own_seed(seed):
+    def wrap(mk):
+        def run():
+            state = random.getstate()
+            random.seed(seed)
+            try:
+                return mk()
+            finally:
+                random.setstate(state)
+        run.__name__ = mk.__name__
+        return run
+    return wrap
+
+@own_seed(114)
+def lumber_mill():
+    """A big timber mill (3x3): a long hall, a water wheel turning the saws,
+    a log pond and stacks of sawn planks."""
+    m = Model("Lumbermill")
+    foundation(m, 3)
+    timber_hall(m, 1.9, 0.75, 1.1, "#b49064", "#6b4d2d", "#5c4126", rows=5, windows=2, roof_h=0.5)
+    # the water wheel on the side, in a little channel
+    m.box(0.25, 0.08, 1.2, "#4f7f9a", 1.12, 0.05, 0.0, vary=0.02)
+    m.cyl(0.42, 0.42, 0.14, "#6b4d2d", 1.1, 0.48, 0.0, seg=16, rx=math.pi / 2, vary=0.02)
+    for k in range(8):
+        a = k * math.pi / 4
+        m.box(0.06, 0.18, 0.16, WOOD, 1.1 + math.cos(a) * 0.4, 0.48 + math.sin(a) * 0.4, 0.0, rz=a, vary=0.04)
+    m.cyl(0.06, 0.06, 0.3, IRON, 1.0, 0.48, 0.0, seg=8, rx=math.pi / 2, vary=0)
+    # logs waiting, and sawn planks in stacks
+    for i in range(4):
+        m.cyl(0.09, 0.09, 0.9, "#8c6238", -0.55 + i * 0.2, 0.1, 0.95, seg=8, rz=math.pi / 2, ry=math.pi / 2, vary=0.06)
+    for k in range(4):
+        for j in range(2):
+            m.box(0.7, 0.05, 0.14, "#d2ab74", -0.75 + j * 0.85, 0.08 + k * 0.06, -1.0, vary=0.05)
+    m.cyl(0.24, 0.24, 0.02, IRON, -0.2, 0.55, 0.57, seg=16, rx=math.pi / 2, vary=0)  # the big saw blade
+    m.pole_flag(-1.3, 1.2, 1.2)
+    return m
+
+@own_seed(115)
+def stoneworks():
+    """A stone works (3x3): a cutting shed, a big wooden crane, dressed
+    blocks in rows and a rubble heap."""
+    m = Model("Stoneworks")
+    foundation(m, 3, col=STONE)
+    timber_hall(m, 1.3, 0.62, 1.0, STONE3, "#6f6a62", "#625d56", rows=4, windows=1, roof_h=0.42)
+    m.box(1.3, 0.02, 1.0, "#6f6a62", 0.0, 0.05, 0.0, vary=0)
+    # rows of cut blocks
+    for i in range(3):
+        for j in range(3):
+            sz = 0.2 + 0.03 * ((i + j) % 2)
+            m.box(sz, sz * 0.75, sz, STONE if (i + j) % 2 else STONE3, 0.65 + i * 0.27, 0.08 + sz * 0.37, 0.55 + j * 0.27, ry=random.random() * 0.3, bevel=0.01, vary=0.05)
+    # a rubble heap
+    for k in range(6):
+        m.rock(0.12 + random.random() * 0.06, STONE2, -0.85 + random.random() * 0.4, 0.06, 0.75 + random.random() * 0.4)
+    # the crane: a mast, a jib and a block on the hook
+    m.box(0.07, 1.6, 0.07, WOOD, -0.95, 0.8, -0.85, vary=0)
+    for a in (0.0, 2.1, 4.2):
+        m.box(0.04, 0.9, 0.04, WOOD, -0.95 + math.cos(a) * 0.25, 0.4, -0.85 + math.sin(a) * 0.25, rx=math.sin(a) * 0.28, rz=-math.cos(a) * 0.28, vary=0)
+    m.box(1.2, 0.05, 0.05, WOOD, -0.45, 1.55, -0.85, rz=-0.12, vary=0)
+    m.cyl(0.008, 0.008, 0.6, "#c9b88f", 0.05, 1.18, -0.85, seg=3, vary=0)
+    m.box(0.22, 0.16, 0.22, STONE, 0.05, 0.82, -0.85, bevel=0.01, vary=0.05)
+    m.pole_flag(1.3, -1.25, 1.2)
+    return m
+
+@own_seed(117)
+def kiln():
+    """A brick kiln works (3x3): three bottle kilns, a drying shed and
+    stacks of brick."""
+    m = Model("Kiln")
+    foundation(m, 3)
+    for x, z, s in ((-0.75, -0.6, 1.0), (0.1, -0.75, 0.85), (0.85, -0.45, 0.9)):
+        # a bottle kiln: a wide body narrowing to a chimney
+        m.cyl(0.42 * s, 0.38 * s, 0.6 * s, BRICK, x, 0.36 * s, z, seg=16, vary=0.04)
+        m.cyl(0.36 * s, 0.14 * s, 0.55 * s, BRICK2, x, 0.93 * s, z, seg=16, vary=0.04)
+        m.cyl(0.14 * s, 0.13 * s, 0.35 * s, BRICK, x, 1.37 * s, z, seg=12, vary=0.04)
+        m.cyl(0.43 * s, 0.43 * s, 0.03, "#7a3020", x, 0.62 * s, z, seg=16, vary=0)
+        m.box(0.16, 0.18, 0.05, "#ff7a2a", x, 0.17, z + 0.4 * s, vary=0)  # the firing mouth
+    # the drying shed: an open roof on posts over rows of green brick
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            m.box(0.05, 0.5, 0.05, WOOD, -0.3 + sx * 0.55, 0.28, 0.75 + sz * 0.3, vary=0)
+    m.box(1.3, 0.05, 0.8, THATCH, -0.3, 0.55, 0.75, rx=0.08, vary=0.05)
+    for i in range(3):
+        for j in range(4):
+            m.box(0.18, 0.05, 0.08, CLAY, -0.75 + j * 0.3, 0.1 + i * 0.07, 0.75, vary=0.06)
+    for k in range(3):
+        for j in range(3):
+            m.box(0.22, 0.07, 0.11, BRICK if (j + k) % 2 else BRICK2, 0.75 + j * 0.0, 0.1 + k * 0.075, 0.55 + j * 0.12, vary=0.06)
+    m.pole_flag(1.3, 1.25, 1.2)
+    return m
+
+@own_seed(116)
+def air_defense():
+    """An anti-aircraft site (2x2): a sandbagged ring, a twin gun on a
+    turntable pointing up, a radar dish and an ammunition box."""
+    m = Model("AirDefense")
+    foundation(m, 2, col=CONCRETE)
+    # sandbags in a ring
+    for k in range(14):
+        a = k * math.pi * 2 / 14
+        m.box(0.22, 0.12, 0.12, "#b8a57a", math.cos(a) * 0.62, 0.12, math.sin(a) * 0.62, ry=-a, bevel=0.02, vary=0.06)
+        if k % 2 == 0:
+            m.box(0.2, 0.1, 0.11, "#a8956a", math.cos(a + 0.2) * 0.62, 0.23, math.sin(a + 0.2) * 0.62, ry=-a, bevel=0.02, vary=0.06)
+    # the turntable and twin barrels pointing up and away
+    m.cyl(0.26, 0.3, 0.16, OLIVE2, 0.0, 0.16, 0.0, seg=14, vary=0.02)
+    m.box(0.34, 0.24, 0.3, OLIVE, 0.0, 0.36, 0.0, vary=0.02)
+    m.box(0.3, 0.08, 0.06, TEAM, 0.0, 0.38, 0.16, vary=0)
+    for dz in (-0.07, 0.07):
+        m.cyl(0.03, 0.03, 0.75, "#3e4146", 0.2, 0.68, dz, seg=8, rz=-0.75, vary=0)
+    # radar dish on a mast
+    m.box(0.04, 0.6, 0.04, "#3e4146", -0.55, 0.36, -0.55, vary=0)
+    sphere(m, 0.2, "#c9ced5", -0.55, 0.72, -0.55, sx=1.0, sy=0.85, sz=0.3, vary=0)
+    m.box(0.26, 0.14, 0.16, OLIVE2, 0.5, 0.1, 0.45, vary=0.03)  # an ammunition box
+    m.pole_flag(-0.75, 0.7, 0.9)
+    return m
+
 def clear_scene():
     for ob in list(bpy.data.objects):
         bpy.data.objects.remove(ob, do_unlink=True)
@@ -2267,7 +2385,8 @@ def main():
                       townhouse, saltpeter_works, powder_mill, carpenter, printer, circus,
                       tenement, coal_mine, steel_mill, explosives_works, cannery, coal_yard, press, factory,
                       apartment, oil_well, bauxite_mine, power_plant, haber_bosch, radio_factory, tank_works, airfield,
-                      tower_block, uranium_mine, reactor, car_plant, tv_plant, missile_silo],
+                      tower_block, uranium_mine, reactor, car_plant, tv_plant, missile_silo,
+                      lumber_mill, stoneworks, kiln, air_defense],
         "resources": [pine, oak, bush, stone, gold, iron_ore, clay_pit, sheep_herd, saltpeter, coal_seam, oil_field, bauxite, uranium_ore],
         "units": [citizen, spearman, archer, horseman, swordsman, crossbowman, knight, trebuchet, musketeer, dragoon, cannon,
                   rifleman, machine_gunner, field_gun, infantry, tank, fighter, bomber, rocket_artillery, jet],

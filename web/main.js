@@ -15,7 +15,8 @@ const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossb
   Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91,
   Tenement: 92, CoalMine: 93, SteelMill: 94, ExplosivesWorks: 95, Cannery: 96, CoalYard: 97, Press: 98, Factory: 99,
   Apartment: 100, OilWell: 101, BauxiteMine: 102, PowerPlant: 103, HaberBosch: 104, RadioFactory: 105, TankWorks: 106, Airfield: 107,
-  TowerBlock: 108, UraniumMine: 109, Reactor: 110, CarPlant: 111, TvPlant: 112, MissileSilo: 113 };
+  TowerBlock: 108, UraniumMine: 109, Reactor: 110, CarPlant: 111, TvPlant: 112, MissileSilo: 113,
+  Sawmill: 114, Stoneworks: 115, AirDefense: 116, Kiln: 117 };
 // Aircraft fly above everything (drawn high up; see defs.rs Kind::is_air).
 const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
 // Mounted units: a horse under them (sounds, drawing).
@@ -42,15 +43,16 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Apartment]: "Apartment Block", [K.OilWell]: "Oil Well", [K.BauxiteMine]: "Bauxite Mine", [K.PowerPlant]: "Power Plant",
   [K.HaberBosch]: "Haber–Bosch Plant", [K.RadioFactory]: "Radio Factory", [K.TankWorks]: "Tank Works", [K.Airfield]: "Airfield",
   [K.RocketArtillery]: "Rocket Artillery", [K.Jet]: "Jet", [K.TowerBlock]: "Tower Block", [K.UraniumMine]: "Uranium Mine",
-  [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo" };
+  [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo",
+  [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
-  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone).",
-  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Full, with 5 goods, you can upgrade it to a Townhouse from the Medieval era (1 more stone and 2 brick).",
-  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Full, with 7 goods, you can upgrade it to a Tenement from the Gunpowder era (2 more brick).",
-  [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (18 people). Ten bring the Industrial era. Full, with 9 goods, you can upgrade it to an Apartment Block from the Industrial era (2 steel).",
-  [K.Apartment]: "A modern apartment block, grown from a full tenement with 9 goods. It uses up to 11 goods, electricity and radios too (22 people). Ten bring the Modern era. Full, with 11 goods, you can upgrade it to a Tower Block from the Modern era (1 more steel and 1 aluminum).",
-  [K.TowerBlock]: "A high-rise, grown from a full apartment block with 11 goods. It uses up to 13 goods, cars and TVs too (26 people). Ten bring the Atomic era.",
+  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
+  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (12 people). Ten cottages bring the Medieval era. Full, with 5 goods, you can upgrade it to a Townhouse from the Medieval era (1 more stone and 2 brick).",
+  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (18 people). Ten bring the Gunpowder era. Full, with 7 goods, you can upgrade it to a Tenement from the Gunpowder era (2 more brick).",
+  [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (24 people). Ten bring the Industrial era. Full, with 9 goods, you can upgrade it to an Apartment Block from the Industrial era (2 steel).",
+  [K.Apartment]: "A modern apartment block, grown from a full tenement with 9 goods. It uses up to 11 goods, electricity and radios too (30 people). Ten bring the Modern era. Full, with 11 goods, you can upgrade it to a Tower Block from the Modern era (1 more steel and 1 aluminum).",
+  [K.TowerBlock]: "A high-rise, grown from a full apartment block with 11 goods. It uses up to 13 goods, cars and TVs too (36 people). Ten bring the Atomic era.",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Swordsman]: "Armoured infantry. Like spearmen, deadly to riders, but tougher and harder-hitting. Costs iron.",
   [K.Crossbowman]: "Shoots further and harder than an archer. Strong against infantry, weak against riders. Costs iron.",
@@ -70,21 +72,21 @@ const DESC = {
   [K.Jet]: "A faster, tougher fighter. Owns the air. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
-  [K.Capitol]: "Your seat of power. Lose it and you lose the game.",
+  [K.Capitol]: "Your seat of power: it makes a little wood, stone, grain and fruit by itself, and shoots at enemies. From the Medieval era you can found up to 3 (8 wood, 8 stone, 6 brick, 4 builders). Lose one and everything nearer to it than to your others falls with it; lose the last and you're out.",
   [K.Barracks]: "Trains spearmen; swordsmen, musketeers and riflemen as the eras come.",
   [K.Range]: "Trains archers; crossbowmen from the Medieval era and machine gunners from the Industrial.",
   [K.Stable]: "Trains horsemen, knights from the Medieval era and dragoons from the Gunpowder era.",
   [K.Tower]: "Shoots at enemies in range.",
   [K.Farm]: "Grows grain anywhere on open ground.",
-  [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing, so you can always get more wood.",
-  [K.Quarry]: "Cuts stone from rock next to it.",
+  [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing. For more, a Sawmill from the Medieval era.",
+  [K.Quarry]: "Cuts stone from rock next to it. For more, a Stone Works from the Gunpowder era.",
   [K.FishingHut]: "Catches fish from the water next to it.",
   [K.HuntingLodge]: "Hunts the game grazing next to it.",
   [K.Orchard]: "Picks fruit from the wild bushes next to it.",
   [K.Pasture]: "Breeds horses from the wild herd next to it.",
   [K.SheepFarm]: "Raises sheep for wool on the hills next to it.",
   [K.IronMine]: "Digs iron from the ore next to it. Iron arms the Medieval army.",
-  [K.Brickworks]: "Fires bricks from the clay next to it.",
+  [K.Brickworks]: "Fires bricks from the clay next to it. Needs no wood. For more, a Kiln from the Gunpowder era.",
   [K.Bakery]: "Bakes bread from grain. It holds its grain while it stands, working or not.",
   [K.Weaver]: "Weaves clothes from wool. It holds its wool while it stands, working or not.",
   [K.Brewery]: "Brews beer from grain. It holds its grain while it stands, working or not.",
@@ -112,7 +114,11 @@ const DESC = {
   [K.Reactor]: "Makes a great deal of electricity from a little uranium.",
   [K.CarPlant]: "Makes cars from steel and oil, for tower blocks.",
   [K.TvPlant]: "Makes TVs from aluminum and electricity, for tower blocks.",
-  [K.MissileSilo]: "Arms a nuke (2 uranium and 2 explosives, held until it's launched; 2 minutes), then launches it anywhere on the map. Everyone sees it coming: 20 seconds later everything near where it lands is destroyed, and a crater stays.",
+  [K.Sawmill]: "Saws wood in bulk from a forest next to it: as much as two lumber camps, with two workers. Needs no wood to build.",
+  [K.Stoneworks]: "Cuts stone in bulk from rock next to it: more than two quarries, with two workers.",
+  [K.Kiln]: "Fires bricks in bulk from the clay next to it: more than three brickworks, with two workers. Needs no wood.",
+  [K.AirDefense]: "Anti-aircraft guns with a long reach. It shoots down any nuke falling within 10 tiles of it, then needs 90 seconds to reload. It can't hit anything on the ground.",
+  [K.MissileSilo]: "Arms a nuke (2 uranium and 2 explosives, held until it's launched; 2 minutes), then launches it anywhere on the map. Everyone sees it coming, and is told when a silo is built and when it starts arming: 20 seconds after launch everything within 15 tiles of where it lands is destroyed, and a crater stays. An enemy Air Defense near the target shoots it down.",
 };
 // The six eras, and the house each brings. Which kinds and resources
 // belong to which era comes from Rust (kind_era, res_era); so do the
@@ -155,10 +161,10 @@ function setNames(o) {
 // back. Each page hands out the same hotkeys in order (`PAGE_KEYS`, which
 // avoid W, A, S and D, the camera keys). Buildings in tech-tree order:
 const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Barracks, K.Range, K.Stable, K.Tower,
-  K.SheepFarm, K.Weaver, K.IronMine, K.Brickworks, K.Bakery, K.Brewery, K.SiegeWorkshop,
-  K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
+  K.Sawmill, K.SheepFarm, K.Weaver, K.IronMine, K.Brickworks, K.Bakery, K.Brewery, K.SiegeWorkshop, K.Capitol,
+  K.Stoneworks, K.Kiln, K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
-  K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield,
+  K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield, K.AirDefense,
   K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo];
 const PAGE_KEYS = "QERTFGCVBYUIOJLN"; // the left hand's keys first (Y is a stretch)
 // Every building (for code that wants them all; keys are per page).
@@ -685,7 +691,7 @@ function renderResTip() {
   if (W.housed(r)) html += line("In houses", `−${W.housed(r)}`, "neg");
   if (W.supply(r) !== made) html += line("Handicap", `${W.supply(r) - made >= 0 ? "+" : "−"}${Math.abs(W.supply(r) - made)}`);
   html += `<div class="row total"><span>Free</span><b>${free(r) - W.housed(r)}</b></div>`;
-  if (W.is_house_good(r)) html += `<p class="note">Houses want it: each house takes one, nearest the Capitol first, and gets 2 beds for it. Buildings and units come first: when it runs short, the furthest houses lose it.</p>`;
+  if (W.is_house_good(r)) html += `<p class="note">Houses want it: each house takes one, nearest the Capitol first, and gets 2 beds for it (3 past its third good). Buildings and units come first: when it runs short, the furthest houses lose it.</p>`;
   if (free(r) < 0) html += `<p class="bad">You hold more ${RES_NAMES[r]} than you make: your newest units that need it are losing health.</p>`;
   const p = producerOf(r);
   html += `<p class="note">Slots are borrowed, not spent: whatever holds them gives them back when it's gone.${p != null ? ` A ${NAMES[p]} makes more.` : ""}</p>`;
@@ -707,7 +713,7 @@ function renderPeopleTip(tip) {
   html += line("Beds", beds);
   html += all < beds
     ? `<p>There are free beds: someone new turns up at the campfire every ${W.people(5) ? `few` : ""} seconds, sooner in a bigger town.</p>`
-    : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of food: each kind is 2 more beds in every house that gets it.</p>`;
+    : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of goods: each kind is 2 more beds in every house that gets it (3 past the third).</p>`;
   html += `<p class="note">Free workers go to work, build and enlist by themselves. Training a soldier takes one from the campfire.</p>`;
   tip.innerHTML = html;
   const chip = topBar.pop.getBoundingClientRect(), app = $("app").getBoundingClientRect();
@@ -837,7 +843,7 @@ function singleInfo(panel, i) {
     // A house: which goods it has and which it wants; its beds.
     const goods = W.house_goods(id), { have, wants } = houseWants(k, goods);
     const icons = list => `<span class="cost inline">${list.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span>`;
-    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken · 2 beds for each good</div>`;
+    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken · 2 beds for each good, 3 past the third</div>`;
     if (owner === ME || observe) {
       html += `<div class="statline">Has ${have.length ? icons(have) : "nothing yet"}</div>`;
       html += wants.length ? `<div class="statline">Wants ${icons(wants)} <span class="muted">(any ${wants.length > 1 ? `${house_room(k, goods)} of these` : "one"})</span></div>` : `<div class="statline">Has every good a ${NAMES[k]} can use.</div>`;
@@ -927,13 +933,14 @@ function renderCommands(sel) {
     if (pages.length > 1) {
       const turn = d => { buildPage = (buildPage + d + pages.length) % pages.length; selKey = ""; Sfx.ui("select"); };
       for (const e of pages) {
-        // Shift and the page's key (Shift+Q the Ancient page, Shift+E the
-        // Medieval one, …), or Tab and Shift+Tab to step through them.
-        const key = "⇧" + PAGE_KEYS[e];
+        // Shift and the page's key (Shift+E the Medieval page, …), or Tab and
+        // Shift+Tab to step through them. Shift+Q is Delete, so the Ancient
+        // page is Shift+` (the key beside it).
+        const key = "⇧" + (e === 0 ? "`" : PAGE_KEYS[e]);
         const fn = () => { buildPage = e; selKey = ""; Sfx.ui("select"); };
         const b = cmdButton(`${ERA_NAMES[e]} buildings`, key, fn,
           { glyph: ["I", "II", "III", "IV", "V", "VI"][e], locked: e > W.era(),
-            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${PAGE_KEYS[e]}, or Tab for the next page and Shift+Tab to go back.</p>` });
+            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${e === 0 ? "`" : PAGE_KEYS[e]}, or Tab for the next page and Shift+Tab to go back.</p>` });
         b.classList.add("page");
         if (e === buildPage) b.classList.add("on");
         add(b, key, fn);
@@ -977,7 +984,7 @@ function renderCommands(sel) {
       add(cmdButton("Arm a nuke", "Z", fn, { glyph: "☢", tip: `<h4>Arm a nuke</h4><p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes.</p>` }), "Z", fn);
     } else if (st === 2) {
       const fn = () => { aimSilo = id; amode = true; placing = null; updateCursor(); };
-      add(cmdButton("Launch", "Z", fn, { glyph: "🚀", tip: `<h4>Launch the nuke</h4><p>Click where it should fall. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming.</p>` }), "Z", fn);
+      add(cmdButton("Launch", "Z", fn, { glyph: "🚀", tip: `<h4>Launch the nuke</h4><p>Click where it should fall. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming. An enemy Air Defense within ${W.nuke_numbers(3)} tiles of the target shoots it down.</p>` }), "Z", fn);
     }
   }
   // Houses: upgrade the ones that are ready (it holds more materials, so
@@ -991,15 +998,21 @@ function renderCommands(sel) {
     add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
-  const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
-  if (doomed.length && !hasUnits) {
-    const armed = demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000;
+  // Demolish your buildings, or disband your units: Delete or Shift+Q, twice.
+  const doomed = mine.filter(i => E(i, F.kind) !== K.Capitol && isBld(E(i, F.kind)) === !hasUnits).map(i => E(i, F.id));
+  if (doomed.length) {
+    const key = doomed.join(","), armed = demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
+    const what = hasUnits ? "Disband" : "Demolish";
     const fn = () => {
-      if (demolishArm && demolishArm.key === doomed.join(",") && performance.now() - demolishArm.t < 4000) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
-      else { demolishArm = { key: doomed.join(","), t: performance.now() }; toast("Press Demolish again to tear it down"); }
+      if (demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
+      else { demolishArm = { key, t: performance.now() }; toast(hasUnits ? `Press ${what} again (Shift+Q) to disband ${doomed.length > 1 ? "them" : "it"}` : "Press Demolish again (Shift+Q) to tear it down"); }
       selKey = "";
     };
-    add(cmdButton(armed ? "Really demolish?" : "Demolish", "Del", fn, { glyph: armed ? "!" : "⌧", tip: "<h4>Demolish</h4><p>Tear it down. Its slots and workers come free; anyone in a house or a training queue is lost. Press twice.</p>" }), "Delete", fn);
+    const tip = hasUnits
+      ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
+      : "<h4>Demolish</h4><p>Tear it down. Its slots and workers come free; anyone in a house or a training queue is lost. Press twice (Shift+Q or Delete).</p>";
+    add(cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip }), "Delete", fn);
+    cmdKeys["⇧q"] = fn;
   }
   if (hasUnits) { // every unit, workers too
     const fn = () => setAmode(true);
@@ -1062,7 +1075,8 @@ function explain(code) {
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is free at the campfire to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
+    13: "Nobody is free at the campfire to train", 14: "Not yet: it needs every bed taken and all the goods it can use",
+    15: "You have as many of those as you may: 7 of a kind (3 Capitols; farms and houses have no limit)" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -1395,6 +1409,8 @@ window.addEventListener("keydown", e => {
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
   if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free at the campfire"); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
+  // (Shift+` types "~" or "½" depending on the layout: go by the key.)
+  if (e.shiftKey && e.code === "Backquote" && cmdKeys["⇧`"]) { cmdKeys["⇧`"](); e.preventDefault(); return; }
   const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
 });
@@ -1432,7 +1448,8 @@ function scrollCamera(dt) {
 // ===========================================================================
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
 const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, Eliminated: 14,
-  Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20 };
+  Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20,
+  CapitolLost: 21, NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1444,6 +1461,14 @@ function handleEvents() {
     if (observe) {
       if (type === EV.Eliminated) toast(`${pnc(d)} is out of the game.`);
       else if (type === EV.EraReached) toast(`${pnc(d >> 4)} has reached the ${ERA_NAMES[d & 15]} era.`);
+      else if (type === EV.CapitolLost) toast(`${pnc(d)} has lost a Capitol, and the town around it.`);
+      else if (type === EV.SiloBuilt) toast(`${pnc(d)} has built a missile silo.`);
+      else if (type === EV.NukeArming) toast(`${pnc(d)} is arming a nuke.`);
+      else if (type === EV.NukeArmed) toast(`${pnc(d)} has a nuke ready.`);
+      else if (type === EV.NukeLaunched) toast(`${pnc(d)} has launched a nuke!`);
+      else if (type === EV.NukeIntercepted) toast(`An air defense shot down ${pnc(d)}'s nuke.`);
+      if (type === EV.NukeDetonated) { Sfx.ui("nuke"); nukeFlash(x, y); }
+      if (type === EV.NukeLaunched || type === EV.NukeIntercepted) Sfx.ui("siren");
       if (type <= 4 || type >= 12) continue;
     }
     switch (type) {
@@ -1479,7 +1504,25 @@ function handleEvents() {
       case EV.Eliminated:
         if (d !== ME) toast(`${pnc(d)} has been eliminated.`, "good");
         break;
-      case EV.NukeArmed: toast("A nuke is armed. Select the silo and press Z to launch it.", "good"); Sfx.ui("trained"); break;
+      // Silos and nukes: everyone is told about everyone's.
+      case EV.SiloBuilt:
+        if (d !== ME) { toast(`Warning: ${pnc(d)} has built a missile silo.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
+        break;
+      case EV.NukeArming:
+        if (d !== ME) { toast(`Warning: ${pnc(d)} has started arming a nuke. It takes ${W.nuke_numbers(0) / 60} minutes. An Air Defense shoots one down.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
+        break;
+      case EV.NukeArmed:
+        if (d === ME) { toast("A nuke is armed. Select the silo and press Z to launch it.", "good"); Sfx.ui("trained"); }
+        else { toast(`Warning: ${pnc(d)} has a nuke ready to launch.`, "bad"); Sfx.ui("siren"); lastAlert = { x, y, t: performance.now() }; }
+        break;
+      case EV.NukeIntercepted:
+        toast(d === ME ? "Your nuke was shot down by an air defense." : `An air defense shot down ${pnc(d)}'s nuke.`, d === ME ? "bad" : "good");
+        Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon);
+        break;
+      case EV.CapitolLost:
+        toast(d === ME ? "You lost a Capitol, and everything nearer to it than to your other Capitols." : `${pnc(d)} has lost a Capitol, and the town around it.`, d === ME ? "bad" : "good");
+        if (d === ME) Sfx.ui("horn");
+        break;
       case EV.NukeLaunched:
         // Everyone is told, and shown where it will fall.
         toast(d === ME ? "Nuke launched. It lands in 20 seconds." : `${pnc(d)} has launched a nuke! It lands in 20 seconds: get out of the marked area.`, d === ME ? "good" : "bad");
@@ -1818,6 +1861,7 @@ function showEndStats(opts = {}) {
   $("againBtn").hidden = !!opts.watching;
   $("toMenuBtn").textContent = opts.watching ? "Stop watching" : "Change difficulty";
   $("replayBtn").hidden = !Rec.replay;
+  $("replayDlBtn").hidden = !Rec.replay;
   $("endScreen").hidden = false;
 }
 
@@ -2590,17 +2634,21 @@ window.addEventListener("pointerdown", () => Sfx.init(), { capture: true });
 window.addEventListener("keydown", () => Sfx.init(), { capture: true });
 function syncSoundBtn() {
   $("soundBtn").textContent = Sfx.muted ? "Sound off" : "Sound on";
-  $("volume").value = String(Math.round(Sfx.volume * 100));
-  $("volume").classList.toggle("off", Sfx.muted);
+  for (const id of ["volume", "menuVolume"]) {
+    $(id).value = String(Math.round(Sfx.volume * 100));
+    $(id).classList.toggle("off", Sfx.muted);
+  }
 }
 $("soundBtn").onclick = () => { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); };
-$("volume").addEventListener("input", e => {
-  Sfx.setVolume(e.target.value / 100);
-  if (Sfx.muted && Sfx.volume > 0) Sfx.setMuted(false); // dragging the slider means you want sound
-  syncSoundBtn();
-});
-// Let go of the slider and a short sound plays at the new level.
-$("volume").addEventListener("change", e => { Sfx.init(); Sfx.ui("queued"); e.target.blur(); });
+for (const id of ["volume", "menuVolume"]) {
+  $(id).addEventListener("input", e => {
+    Sfx.setVolume(e.target.value / 100);
+    if (Sfx.muted && Sfx.volume > 0) Sfx.setMuted(false); // dragging the slider means you want sound
+    syncSoundBtn();
+  });
+  // Let go of the slider and a short sound plays at the new level.
+  $(id).addEventListener("change", e => { Sfx.init(); Sfx.ui("queued"); e.target.blur(); });
+}
 syncSoundBtn();
 $("diff").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b || guestOf) return;
