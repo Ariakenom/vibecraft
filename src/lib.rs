@@ -355,6 +355,14 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
             }
             return 0;
         }
+        // The host's cheat switch (arg 1 on, 0 off), for every player a
+        // person plays. Like 7 and 13, only the host sends it (as owner 0).
+        if code == 15 {
+            if owner == 0 {
+                w.game.set_cheats(arg != 0);
+            }
+            return 0;
+        }
         if owner < 1 || owner > w.game.n_players as u32 {
             return 0;
         }
@@ -817,6 +825,17 @@ pub extern "C" fn crater_count() -> u32 {
 pub extern "C" fn crater_info(n: u32, which: u32) -> f32 {
     game(|g| g.craters.get(n as usize).map_or(0.0, |c| if which == 0 { c.0 } else { c.1 }))
 }
+/// 1 if the local player is in cheat mode.
+#[unsafe(no_mangle)]
+pub extern "C" fn cheat() -> u32 {
+    game(|g| g.cheat(g.local) as u32)
+}
+/// 1 if any player is in cheat mode (the host's switch is on).
+#[unsafe(no_mangle)]
+pub extern "C" fn cheats_on() -> u32 {
+    game(|g| g.players.iter().any(|p| p.cheat) as u32)
+}
+
 /// Player `p`'s home Capitol (the oldest finished one, where the campfire
 /// burns), as an entity id, or -1.
 #[unsafe(no_mangle)]

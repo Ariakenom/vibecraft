@@ -73,6 +73,17 @@ const k = Math.max(...sums[0].map(e => e[0]).filter(t => sums[1].some(e => e[0] 
 check(sums[0].find(e => e[0] === k)[1] === sums[1].find(e => e[0] === k)[1], `the games agree at tick ${k}, after speeding up and pausing`);
 check(await host.evaluate(() => [...Rec.cmds.values()].some(l => l.some(e => e[0] !== 1 && e[0] !== 0))), "the order given while paused reached the host");
 
+// Cheat mode: the host's switch reaches everyone; the guest has no switch.
+await host.evaluate(() => { $("menuBtn").click(); $("cheatBtn").click(); $("menuScreen").hidden = true; });
+await guest.waitForFunction(() => W.cheat() === 1, null, { timeout: 8000 });
+const chk = [await host.evaluate(() => W.cheat()), await told(guest, "Cheat mode on"), await told(host, "Cheat mode on")];
+check(chk[0] === 1 && chk[1] && chk[2], `the host turns cheat mode on: both can build anything, and are told (${chk})`);
+check(await guest.evaluate(() => { $("menuBtn").click(); const h = $("cheatBtn").hidden; $("menuScreen").hidden = true; return h; }), "the guest has no cheat switch");
+await sleep(1500);
+const sums2 = await Promise.all([host, guest].map(pg => pg.evaluate(() => [...mp.sums])));
+const k2 = Math.max(...sums2[0].map(e => e[0]).filter(t => sums2[1].some(e => e[0] === t)));
+check(sums2[0].find(e => e[0] === k2)[1] === sums2[1].find(e => e[0] === k2)[1], `the games agree at tick ${k2}, with cheats on`);
+
 // Save replay works online too.
 await guest.evaluate(() => { $("menuBtn").click(); });
 check(await guest.evaluate(() => !$("saveReplayBtn").hidden), "the menu has Save replay online");

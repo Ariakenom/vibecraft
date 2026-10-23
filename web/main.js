@@ -172,6 +172,7 @@ const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
 let buildPage = 0;
 // The eras with a page: those reached, and the next once its first house stands.
 function buildPages() {
+  if (W.cheat()) return [0, 1, 2, 3, 4, 5]; // cheat mode: every era's buildings
   const last = Math.min(W.era_progress(2), W.era() + (W.era_progress(0) > 0 ? 1 : 0));
   return Array.from({ length: last + 1 }, (_, e) => e);
 }
@@ -1122,7 +1123,7 @@ function issue(cmd) {
 // messages: multiplayer also uses this to replay commands.
 function applyCmd(owner, arr) {
   const [c, a, x, y] = arr, ids = arr.slice(4);
-  if ((c === 7 || c === 13) && owner !== 0) return 0; // only the host's system messages may do that
+  if ((c === 7 || c === 13 || c === 15) && owner !== 0) return 0; // only the host's system messages may do that
   const p = W.scratch_ptr() >>> 2, buf = new Uint32Array(mem.buffer);
   ids.forEach((id, n) => { buf[p + n] = id; });
   return W.command(owner, c, ids.length, x, y, a);
@@ -1156,6 +1157,7 @@ const mpHooks = {
   system(cmd) {
     const who = Rec.meta && Rec.meta.who;
     if (cmd[0] === 7) { announceLeft(cmd[1]); announced.delete(cmd[1]); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
+    if (cmd[0] === 15) cheatsToast(cmd[1]);
     if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`${pnames[cmd[1]] || "A spectator"} takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
   },
   // A tick's commands in their final order: what replays and spectators get.
@@ -1166,7 +1168,7 @@ function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
   if (!arr.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = arr[0] | 0;
-  if (c < 1 || c > 14) return null;
+  if (c < 1 || c > 15) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
 const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || isBld(E(i, F.kind)) === buildings)).map(i => E(i, F.id));
@@ -1466,7 +1468,7 @@ function scrollCamera(dt) {
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
 const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, Eliminated: 14,
   Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20,
-  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24 };
+  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24, Cheats: 25 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1520,6 +1522,7 @@ function handleEvents() {
       case EV.Eliminated:
         if (d !== ME) toast(`${pnc(d)} has been eliminated.`, "good");
         break;
+      case EV.Cheats: if (!mp) cheatsToast(d); break; // (online: when the host's command is confirmed)
       // Silos and nukes: everyone is told about everyone's.
       case EV.SiloBuilt:
         if (d !== ME) { toast(`Warning: ${pnc(d)} has built a missile silo.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
@@ -2696,6 +2699,19 @@ $("speedBtn").onclick = () => {
   speed = steps[(steps.indexOf(speed) + 1) % steps.length];
   $("speedBtn").textContent = `${speed}×`;
 };
+function cheatsToast(on) {
+  toast(on ? "Cheat mode on: every player a person plays can build and train anything, of any era, free." : "Cheat mode off.", "good");
+  selKey = "";
+}
+// The cheat switch: a system command from the host (owner 0), recorded for
+// replays and sent to everyone online like a seat changing hands.
+$("cheatBtn").onclick = () => {
+  const cmd = [15, W.cheats_on() ? 0 : 1, 0, 0];
+  if (mp && mp.server) mp.server.system(cmd);
+  else if (!mp) { applyCmd(0, cmd); Rec.add(simTick, [0, ++Rec.seq, ...cmd]); handleEvents(); }
+  $("cheatBtn").textContent = `Cheat mode: ${cmd[1] ? "on" : "off"}`;
+  selKey = "";
+};
 $("menuBtn").onclick = () => {
   if (!running) return;
   if (!paused && !mp && !watcher) togglePause();
@@ -2705,6 +2721,9 @@ $("menuBtn").onclick = () => {
   $("saveReplayBtn").hidden = !Rec.real || Rec.done || Replay.on;
   $("restartBtn").hidden = !!mp || !!observe;
   $("surrenderBtn").hidden = !playing;
+  // The host (or a single player) can switch cheat mode for every person.
+  $("cheatBtn").hidden = !!observe || !!(mp && !mp.server);
+  $("cheatBtn").textContent = `Cheat mode: ${W.cheats_on() ? "on" : "off"}`;
   delete $("surrenderBtn").dataset.sure; $("surrenderBtn").textContent = "Surrender";
   $("watchLinkBtn").hidden = !watchLink() || !!observe && observe.kind !== "out";
   $("quitBtn").textContent = watcher ? "Stop watching" : Replay.on ? "Exit replay" : mp ? "Leave game" : "New game";

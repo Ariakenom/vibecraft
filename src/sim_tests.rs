@@ -1164,3 +1164,25 @@ fn an_air_defense_missile_brings_down_any_aircraft() {
     let _ = ground;
     assert!(!Kind::AirDefense.can_hit(Kind::Spearman), "it can't hit the ground");
 }
+
+#[test]
+fn cheat_mode_lets_people_build_anything_free() {
+    let mut g = town(5, 1, 2);
+    // Player 2 is the computer: no cheats for it.
+    g.set_cheats(true);
+    assert!(g.cheat(1) && !g.cheat(2));
+    g.tick();
+    assert_eq!(free(&g, Res::Wood), g.players[1].supply[Res::Wood.idx()] as i32, "nothing holds slots");
+    let (x, y) = spot(&g, Kind::Airfield);
+    let wood = free(&g, Res::Wood);
+    g.apply(1, Command::Place { ids: vec![], kind: Kind::Airfield, tx: x, ty: y }).expect("any era, nothing needed first, free");
+    g.tick();
+    assert_eq!(free(&g, Res::Wood), wood);
+    let id = g.ents.len() as u32 - 1;
+    g.ents[id as usize].built = 1.0;
+    g.apply(1, Command::Train { ids: vec![id], kind: Kind::Jet }).expect("and train anything");
+    // Off again: back to the rules.
+    g.set_cheats(false);
+    let (x, y) = spot(&g, Kind::TankWorks);
+    assert!(g.apply(1, Command::Place { ids: vec![], kind: Kind::TankWorks, tx: x, ty: y }).is_err());
+}

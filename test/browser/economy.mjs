@@ -86,6 +86,12 @@ const wk = await pg.evaluate(() => { readWorld(); const ws = []; for (let i = 0;
 check(wk, "workers have Disband too");
 // The volume slider is in the menu too (the top bar hides it when crowded).
 check(await pg.evaluate(() => !!$("menuVolume") && $("menuVolume").value === $("volume").value), "the menu has a volume slider, in step with the top bar's");
+// Cheat mode, single player: every era's build page, nothing locked.
+const ch = await pg.evaluate(() => { $("menuBtn").click(); const shown = !$("cheatBtn").hidden; $("cheatBtn").click(); $("menuScreen").hidden = true;
+  readWorld(); const c = findOwn(K.Capitol); setSelection([E(c, F.id)]); selKey = ""; renderSelection(true);
+  return [shown, W.cheat(), buildPages().length, W.unlocked(K.MissileSilo), W.short_of(K.MissileSilo)]; });
+check(ch[0] && ch[1] === 1 && ch[2] === 6 && ch[3] === 1 && ch[4] < 0, `cheat mode: the switch, all six pages, a silo unlocked and free (${ch})`);
+await pg.evaluate(() => { $("cheatBtn").click(); });
 // Replays say which version of the game made them.
 const v = await pg.evaluate(() => { const v = Rec.object("test").version; return [v, v.protocol === NET.PROTOCOL && v.replay === REPLAY_FORMAT]; });
 check(v[1] && /^[0-9a-f]{12}$/.test(v[0].sim) && typeof v[0].base === "string", `replays carry the game's version (${JSON.stringify(v[0])})`);

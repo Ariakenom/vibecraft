@@ -79,6 +79,7 @@ pub enum Ev {
     NukeIntercepted = 22, // an air defense shot down a nuke at (x, y) (data = the nuke's owner)
     SiloBuilt = 23,  // someone finished a missile silo at (x, y) (data = owner); everyone hears
     NukeArming = 24, // someone started arming a nuke (data = owner); everyone hears
+    Cheats = 25,     // the host turned cheat mode on or off (data = 1 on); everyone hears
 }
 
 /// Why a command was refused. `code()` is the number JavaScript receives.
@@ -339,6 +340,10 @@ pub struct Player {
     pub soldiers: u32,
     /// Lost their Capitol: out of the game.
     pub defeated: bool,
+    /// Cheat mode (the host's switch, for people, not the computer): they
+    /// can build and train anything, of any era, and nothing they have
+    /// holds slots. Saved.
+    pub cheat: bool,
     /// Some of this player's units were unsupplied last tick. Only used to
     /// tell the player once when it starts.
     pub short: bool,
@@ -363,6 +368,7 @@ impl Player {
             working: 0,
             soldiers: 0,
             defeated: false,
+            cheat: false,
             short: false,
             trained: 0,
             lost: 0,
@@ -666,7 +672,7 @@ impl Game {
 
     /// Has `owner` reached `kind`'s era, with every building it requires in place?
     pub fn unlocked(&self, owner: u8, kind: Kind) -> bool {
-        kind.era() <= self.players[owner as usize].era && kind.requires().iter().all(|&k| self.has_built(owner, k))
+        self.cheat(owner) || kind.era() <= self.players[owner as usize].era && kind.requires().iter().all(|&k| self.has_built(owner, k))
     }
 
     /// How many of `owner`'s finished houses are past their era's tier:
@@ -676,12 +682,28 @@ impl Game {
         self.ents.iter().filter(|e| e.alive && e.owner == owner && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| t > era)).count() as u32
     }
 
+    /// Is `owner` in cheat mode?
+    pub fn cheat(&self, owner: u8) -> bool {
+        self.players.get(owner as usize).is_some_and(|p| p.cheat)
+    }
+
+    /// The host's cheat switch: every player a person plays (not the
+    /// computer) can build anything, free. Everyone hears.
+    pub fn set_cheats(&mut self, on: bool) {
+        for p in self.player_ids() {
+            let human = !self.ais[p as usize].on;
+            self.players[p as usize].cheat = on && human;
+        }
+        self.push_event(Ev::Cheats, 0.0, 0.0, on as u32 as f32);
+    }
+
     /// Hand a player slot to the computer (or take it back). In multiplayer
     /// this happens when someone leaves: their people carry on without them.
     pub fn set_ai(&mut self, player: u8, on: bool) {
         if let Some(ai) = self.ais.get_mut(player as usize) {
             ai.on = on && player >= 1;
             if on {
+                self.players[player as usize].cheat = false; // cheats are for people
                 self.players[player as usize].supply_pct = 100;
             }
         }
@@ -995,6 +1017,9 @@ impl Game {
     /// tick sees them taken.
     pub fn pay(&mut self, owner: u8, cost: Slots) -> Result<(), CmdError> {
         let p = &mut self.players[owner as usize];
+        if p.cheat {
+            return Ok(()); // nothing holds slots in cheat mode
+        }
         if let Some(&(r, _)) = cost.iter().find(|&&(r, k)| p.free(r) < k as i32) {
             return Err(CmdError::Short(r));
         }
@@ -1007,6 +1032,9 @@ impl Game {
     /// Give back slots taken this tick (a cancelled unit).
     pub(crate) fn unpay(&mut self, owner: u8, cost: Slots) {
         let p = &mut self.players[owner as usize];
+        if p.cheat {
+            return;
+        }
         for &(r, k) in cost {
             p.used[r.idx()] = p.used[r.idx()].saturating_sub(k);
         }
@@ -1015,6 +1043,9 @@ impl Game {
     /// The first resource `owner` lacks free slots of for `kind`, if any.
     pub fn short_of(&self, owner: u8, kind: Kind) -> Option<Res> {
         let p = &self.players[owner as usize];
+        if p.cheat {
+            return None;
+        }
         kind.stats().cost.iter().find(|&&(r, k)| p.free(r) < k as i32).map(|&(r, _)| r)
     }
 
@@ -1092,10 +1123,11 @@ impl Game {
         if !self.near_deposit(kind, tx, ty) {
             return Err(CmdError::NoDeposit(kind.stats().needs_deposit.unwrap_or(Dep::Forest)));
         }
-        if kind.era() > self.players[owner as usize].era {
+        let cheat = self.cheat(owner);
+        if kind.era() > self.players[owner as usize].era && !cheat {
             return Err(CmdError::Era(kind.era()));
         }
-        if let Some(&missing) = kind.requires().iter().find(|&&k| !self.has_built(owner, k)) {
+        if let Some(&missing) = kind.requires().iter().find(|&&k| !self.has_built(owner, k)).filter(|_| !cheat) {
             return Err(CmdError::Locked(missing));
         }
         self.pay(owner, kind.stats().cost)?;
@@ -1429,6 +1461,9 @@ impl Game {
             mix(e.builders_in as u32 | (e.recruits as u32) << 8 | (e.hiring as u32) << 16);
             mix(e.goods);
             mix(e.nuke as u32 | (e.starting as u32) << 8);
+        }
+        for p in &self.players[1..] {
+            mix(p.cheat as u32);
         }
         for n in &self.nukes {
             mix(n.left.to_bits());

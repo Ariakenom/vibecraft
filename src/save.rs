@@ -33,7 +33,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 10: the Modern era; the Wonder is gone.
 /// 11: the Atomic era: silos, nukes in flight, craters.
 /// 12: Capitols can be founded (the first is marked); AI waves gather.
-const VERSION: u32 = 12;
+/// 13: cheat mode.
+const VERSION: u32 = 13;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -275,6 +276,7 @@ impl Game {
             w.f32(p.arrive_timer);
             w.u8(p.era);
             w.bool(p.defeated);
+            w.bool(p.cheat);
             w.bool(p.short);
             w.u32(p.trained);
             w.u32(p.lost);
@@ -433,6 +435,7 @@ impl Game {
             p.arrive_timer = r.f32()?;
             p.era = r.u8()?.min(5);
             p.defeated = r.bool()?;
+            p.cheat = r.bool()?;
             p.short = r.bool()?;
             p.trained = r.u32()?;
             p.lost = r.u32()?;

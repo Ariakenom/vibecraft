@@ -167,6 +167,8 @@ impl Game {
         // 2–3. Supply from crewed producers; use by everything.
         let mut supply = vec![[0u32; N_RES]; n];
         let mut used = vec![[0u32; N_RES]; n];
+        // In cheat mode nothing a player has holds slots.
+        let cheat: Vec<bool> = self.players.iter().map(|p| p.cheat).collect();
         for e in self.ents.iter_mut().filter(|e| e.alive) {
             let o = e.owner as usize;
             let st = e.kind.stats();
@@ -182,6 +184,9 @@ impl Game {
                 }
             }
             // (The Capitol a player started with holds nothing.)
+            if cheat[o] {
+                continue;
+            }
             if !e.starting {
                 for &(r, k) in st.cost {
                     used[o][r.idx()] += k as u32;
@@ -285,15 +290,16 @@ impl Game {
             return Err(CmdError::NoBuilding);
         }
         let era = self.players[e.owner as usize].era;
+        let cheat = self.players[e.owner as usize].cheat;
         let to = next.house_tier().unwrap_or(0);
-        if to > era + 1 {
+        if to > era + 1 && !cheat {
             return Err(CmdError::Era(to - 1));
         }
         if e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
             return Err(CmdError::NotReady);
         }
         let p = &self.players[e.owner as usize];
-        for &(r, k) in next.stats().cost {
+        for &(r, k) in next.stats().cost.iter().filter(|_| !cheat) {
             let had = e.kind.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, k)| k);
             if p.free(r) < k as i32 - had as i32 {
                 return Err(CmdError::Short(r));
@@ -355,11 +361,13 @@ impl Game {
         e.kind = kind;
         let (owner, x, y) = (e.owner, e.x, e.y);
         let p = &mut self.players[owner as usize];
-        for &(r, k) in old.cost {
-            p.used[r.idx()] -= k;
-        }
-        for &(r, k) in new.cost {
-            p.used[r.idx()] += k;
+        if !p.cheat {
+            for &(r, k) in old.cost {
+                p.used[r.idx()] = p.used[r.idx()].saturating_sub(k);
+            }
+            for &(r, k) in new.cost {
+                p.used[r.idx()] += k;
+            }
         }
         if owner == self.local {
             self.push_event(if up { Ev::Upgraded } else { Ev::Downgraded }, x, y, kind as u32 as f32);
@@ -756,7 +764,7 @@ impl Game {
             return Err(CmdError::QueueFull);
         }
         let owner = b.owner;
-        if kind.era() > self.players[owner as usize].era {
+        if kind.era() > self.players[owner as usize].era && !self.cheat(owner) {
             return Err(CmdError::Era(kind.era()));
         }
         if self.unclaimed_workers(owner) == 0 {
