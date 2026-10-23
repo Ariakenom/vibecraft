@@ -72,10 +72,10 @@ const DESC = {
   [K.Jet]: "A faster, tougher fighter. Owns the air. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against spearmen, weak against horsemen.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
-  [K.Capitol]: "Your seat of power: it makes a little wood, stone, grain and fruit by itself, and shoots at enemies. From the Medieval era you can found up to 3 (8 wood, 8 stone, 6 brick, 4 builders). Lose one and everything nearer to it than to your others falls with it; lose the last and you're out.",
+  [K.Capitol]: "Your seat of power: it makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
   [K.Barracks]: "Trains spearmen; swordsmen, musketeers and riflemen as the eras come.",
   [K.Range]: "Trains archers; crossbowmen from the Medieval era and machine gunners from the Industrial.",
-  [K.Stable]: "Trains horsemen, knights from the Medieval era and dragoons from the Gunpowder era.",
+  [K.Stable]: "Trains horsemen and knights, and dragoons from the Gunpowder era.",
   [K.Tower]: "Shoots at enemies in range.",
   [K.Farm]: "Grows grain anywhere on open ground.",
   [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing. For more, a Sawmill from the Medieval era.",
@@ -933,14 +933,14 @@ function renderCommands(sel) {
     if (pages.length > 1) {
       const turn = d => { buildPage = (buildPage + d + pages.length) % pages.length; selKey = ""; Sfx.ui("select"); };
       for (const e of pages) {
-        // Shift and the page's key (Shift+E the Medieval page, …), or Tab and
-        // Shift+Tab to step through them. Shift+Q is Delete, so the Ancient
-        // page is Shift+` (the key beside it).
-        const key = "⇧" + (e === 0 ? "`" : PAGE_KEYS[e]);
+        // Shift and a key: Shift+E the Ancient page, Shift+R the Medieval
+        // one, … (the hotkeys after Q, which with Shift is Delete), or Tab and
+        // Shift+Tab to step through them.
+        const key = "⇧" + PAGE_KEYS[e + 1];
         const fn = () => { buildPage = e; selKey = ""; Sfx.ui("select"); };
         const b = cmdButton(`${ERA_NAMES[e]} buildings`, key, fn,
           { glyph: ["I", "II", "III", "IV", "V", "VI"][e], locked: e > W.era(),
-            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${e === 0 ? "`" : PAGE_KEYS[e]}, or Tab for the next page and Shift+Tab to go back.</p>` });
+            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${PAGE_KEYS[e + 1]}, or Tab for the next page and Shift+Tab to go back.</p>` });
         b.classList.add("page");
         if (e === buildPage) b.classList.add("on");
         add(b, key, fn);
@@ -1075,8 +1075,7 @@ function explain(code) {
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is free at the campfire to train", 14: "Not yet: it needs every bed taken and all the goods it can use",
-    15: "You have as many of those as you may: 7 of a kind (3 Capitols; farms and houses have no limit)" }[code] || "Can't do that";
+    13: "Nobody is free at the campfire to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -1409,8 +1408,6 @@ window.addEventListener("keydown", e => {
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
   if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free at the campfire"); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
-  // (Shift+` types "~" or "½" depending on the layout: go by the key.)
-  if (e.shiftKey && e.code === "Backquote" && cmdKeys["⇧`"]) { cmdKeys["⇧`"](); e.preventDefault(); return; }
   const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
 });
@@ -1449,7 +1446,7 @@ function scrollCamera(dt) {
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
 const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, Eliminated: 14,
   Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20,
-  CapitolLost: 21, NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24 };
+  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1461,7 +1458,6 @@ function handleEvents() {
     if (observe) {
       if (type === EV.Eliminated) toast(`${pnc(d)} is out of the game.`);
       else if (type === EV.EraReached) toast(`${pnc(d >> 4)} has reached the ${ERA_NAMES[d & 15]} era.`);
-      else if (type === EV.CapitolLost) toast(`${pnc(d)} has lost a Capitol, and the town around it.`);
       else if (type === EV.SiloBuilt) toast(`${pnc(d)} has built a missile silo.`);
       else if (type === EV.NukeArming) toast(`${pnc(d)} is arming a nuke.`);
       else if (type === EV.NukeArmed) toast(`${pnc(d)} has a nuke ready.`);
@@ -1518,10 +1514,6 @@ function handleEvents() {
       case EV.NukeIntercepted:
         toast(d === ME ? "Your nuke was shot down by an air defense." : `An air defense shot down ${pnc(d)}'s nuke.`, d === ME ? "bad" : "good");
         Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon);
-        break;
-      case EV.CapitolLost:
-        toast(d === ME ? "You lost a Capitol, and everything nearer to it than to your other Capitols." : `${pnc(d)} has lost a Capitol, and the town around it.`, d === ME ? "bad" : "good");
-        if (d === ME) Sfx.ui("horn");
         break;
       case EV.NukeLaunched:
         // Everyone is told, and shown where it will fall.

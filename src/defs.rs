@@ -333,12 +333,13 @@ static BOMBER: Stats = unit(260.0, 140.0, 1.0, 4.0, 4.0, 9.0, &[(Aluminum, 2), (
 static ROCKET_ARTILLERY: Stats = unit(200.0, 70.0, 13.0, 4.0, 2.2, 10.0, &[(Steel, 2), (Oil, 1), (Explosives, 2)], 36.0);
 static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
 
-// The Capitol makes a little of the basics by itself, with no workers, so a
-// game can start: two kinds of food fill the two starting huts. From the
-// Medieval era a player can found more (up to `MAX_CAPITOLS`); those hold
-// their cost like any building, the first one holds nothing. Losing one
-// takes down everything nearer to it than to the others.
-static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 4), (Stone, 2), (Grain, 2), (Fruit, 2)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 3) };
+// The Capitol makes a little of the basics by itself, with no workers, and
+// has `CAPITOL_BEDS` beds, so a game can start with two workers and no
+// houses: the first hut's wood and food come from it. From the Medieval era
+// a player can found more, as many as they like; those hold their cost like
+// any building, the first one holds nothing. A player is out only when the
+// last one falls.
+static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 2), (Stone, 1), (Grain, 1), (Fruit, 1)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 3) };
 // Houses: beds depend on how many different goods they get. A hut that's
 // full and has all the goods it can use becomes a cottage by itself, if the
 // cottage's extra wood and stone are free (`Game::upgrade_houses`).
@@ -367,7 +368,7 @@ static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(De
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
 // Later producers make more, so the basics are scarce at the start and
 // plentiful late (playtests: towns needed far too many buildings, and no
-// one kind may stand more than `MAX_SAME` times). Medieval ones make about
+// one kind should be needed more than `MAX_SAME` times). Medieval ones make about
 // twice what Ancient ones do, Industrial ones and later three to four times.
 // Medieval extractors.
 static SHEEP_FARM: Stats = extractor(350.0, &[(Wood, 1)], &[(Wool, 4)], 1, Some(Dep::Hills), 14.0, 3);
@@ -444,8 +445,9 @@ pub const CRATER_RADIUS: f32 = 2.4;
 /// it can stop another. It also shoots at aircraft out to here.
 pub const AIR_DEFENSE_COVER: f32 = 10.0;
 pub const AIR_DEFENSE_RELOAD: f32 = 90.0;
-/// A player can have this many Capitols at once (the first one included).
-pub const MAX_CAPITOLS: usize = 3;
+/// Beds in every finished Capitol: room for the two workers a game starts
+/// with, and two newcomers.
+pub const CAPITOL_BEDS: u32 = 4;
 
 /// Shells, rockets and bombs hurt everything hostile within this many
 /// tiles of where they land (0: just their target), with `SPLASH_SHARE` of
@@ -485,8 +487,9 @@ pub fn beds_for(goods: u32) -> u8 {
 pub fn house_max_goods(tier: u8) -> u8 {
     3 + 2 * tier
 }
-/// No player may have more than this many buildings of one kind, apart
-/// from farms (fields), houses and Capitols (`MAX_CAPITOLS`).
+/// The balance target: a town shouldn't need more than this many buildings
+/// of one kind, apart from farms (fields), houses and Capitols. Not a rule:
+/// `econ.rs` checks the numbers against it, and the computer keeps to it.
 pub const MAX_SAME: usize = 7;
 /// A player enters the next era when this many of their houses have
 /// reached its tier (and keeps the era if they later drop back).
@@ -670,7 +673,7 @@ impl Kind {
     pub fn era(self) -> u8 {
         use Kind::*;
         match self {
-            Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
+            Horseman | Stable | Pasture | Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
             Stoneworks | Kiln | Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
             Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
             Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,

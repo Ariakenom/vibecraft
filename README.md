@@ -510,16 +510,20 @@ versions don't play together.
 ## The game
 
 - **Winning:** destroy every rival Capitol. From the Medieval era a player
-  can found up to three (8 wood, 8 stone, 6 brick, 4 builders; the first
-  holds nothing). Lose one and everything of yours nearer to it than to your
-  other Capitols falls with it; lose the last (a foundation doesn't count)
-  and you're out. The campfire burns at your oldest Capitol. (There was a
+  can found as many as they like (8 wood, 8 stone, 6 brick, 4 builders; the
+  first holds nothing). Losing one costs only that one; lose the last (a
+  foundation doesn't count) and you're out. The campfire burns at your
+  oldest Capitol.
+- **The start:** a Capitol (2 wood, 1 stone, 1 grain and 1 fruit by itself,
+  and 4 beds) and 2 workers. No houses: the first hut comes from the
+  Capitol's wood and food. (There was a
   Wonder victory; it was removed in October 2026.)
-- **No more than seven of a kind.** A player may have at most 7 buildings
-  of any one kind (`MAX_SAME`), apart from farms and houses (no limit) and
-  Capitols (3). Later producers make far more, so a whole town fits: see
-  `src/econ.rs`, which works out the fewest buildings that get a player to
-  an armed missile silo (61, at most 4 of a kind).
+- **Seven of a kind, as a target.** The numbers are tuned so a town
+  needn't have more than 7 buildings of any one kind (`MAX_SAME`), apart
+  from farms, houses and Capitols. It isn't a rule for players (the computer
+  keeps to it). Later producers make far more: `src/econ.rs` works out the
+  fewest buildings that get a player to an armed missile silo (61, at most
+  4 of a kind).
 - **Progress comes from buildings, not research.** Each building unlocks
   others. Press K for the tech tree. Six eras are planned (the design is
   `docs/design/economy-and-eras.md`, the work plan
@@ -544,8 +548,8 @@ versions don't play together.
   loses goods keeps its kind, with fewer beds. Ten cottages bring the Medieval era: iron
   mines, brickworks, sheep farms and the converters (a bakery turns grain
   into bread, a weaver wool into clothes, a brewery grain into beer), which
-  hold their inputs while they stand; swordsmen, crossbowmen, knights and
-  trebuchets. Counters go by class: spears and swords beat riders, riders
+  hold their inputs while they stand; pastures and stables, horsemen,
+  swordsmen, crossbowmen, knights and trebuchets. Counters go by class: spears and swords beat riders, riders
   beat bows and crossbows, they beat foot soldiers; trebuchets smash
   buildings.
   Ten townhouses (full cottages with five goods, grown with brick) bring
@@ -612,12 +616,12 @@ versions don't play together.
   middle-drag rotates and tilts.
 - **Hotkey order:** Q, E, R, T, F, G, C, V, B, Y, U, I, O, J, L, N: the left
   hand's keys first. Buildings, era pages and training all go by it.
-- **Build:** the menu has a page per era (Shift+` Ancient, Shift+E
-  Medieval, Shift+R Gunpowder, Shift+T Industrial, Shift+F Modern, Shift+G
+- **Build:** the menu has a page per era (Shift+E Ancient, Shift+R
+  Medieval, Shift+T Gunpowder, Shift+F Industrial, Shift+G Modern, Shift+C
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
-  quarry, F fishing hut, G hunting lodge, C orchard, V pasture, B barracks,
-  Y range, U stable, I tower. Shift+Q or Del (twice) demolishes the
+  quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
+  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del (twice) demolishes the
   selected buildings, or disbands the selected units.
 - **Missile silo:** Z arms a nuke, then Z again and a click launches it
   (a ring shows the blast, and blue rings the cover of enemy air defenses).

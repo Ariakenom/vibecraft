@@ -5,6 +5,24 @@ use crate::defs::*;
 use crate::game::*;
 
 
+/// A game with the start these tests were written for: two huts and eight
+/// workers each (a real game starts with two workers and no houses).
+pub fn town(seed: u32, difficulty: u32, players: u8) -> Game {
+    let mut g = Game::new(seed, difficulty, players);
+    for p in 1..=g.n_players {
+        let c = g.find_first(p, Kind::Capitol).unwrap();
+        let (bx, by) = (g.ents[c].tx + 1, g.ents[c].ty + 1);
+        for (hx, hy) in [(bx - 4, by + 1), (bx + 2, by - 4)] {
+            g.spawn_building(Kind::Hut, p, hx, hy, 1.0);
+        }
+        for _ in 0..6 {
+            g.spawn_worker(p, None);
+        }
+    }
+    g.resolve();
+    g
+}
+
 /// How many slots of `r` a `k` makes.
 pub fn makes(k: Kind, r: Res) -> u16 {
     k.stats().produces.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n)
@@ -96,14 +114,15 @@ fn a_new_game_starts_with_free_workers_and_nobody_short() {
         for p in 1..=players {
             let pl = &g.players[p as usize];
             assert!(Res::ALL.iter().all(|&r| pl.free(r) >= 0), "player {p} starts short");
-            assert_eq!((pl.people, pl.free, pl.beds), (8, 8, 8), "player {p}: 8 people, all free at the campfire, 8 beds");
+            assert_eq!((pl.people, pl.free, pl.beds), (2, 2, CAPITOL_BEDS), "player {p}: 2 people, free at the campfire, the Capitol's beds");
+            assert!(!g.ents.iter().any(|e| e.alive && e.owner == p && e.kind.house_tier().is_some()), "no houses");
         }
     }
 }
 
 #[test]
 fn slots_come_free_the_tick_after_a_unit_dies() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     build(&mut g, Kind::LumberCamp);
     let barracks = build(&mut g, Kind::Barracks);
     let wood = free(&g, Res::Wood);
@@ -123,7 +142,7 @@ fn slots_come_free_the_tick_after_a_unit_dies() {
 
 #[test]
 fn two_placements_in_one_tick_cannot_share_a_slot() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     build(&mut g, Kind::LumberCamp);
     // Use up wood until exactly 3 are free: one Barracks' worth.
     while free(&g, Res::Wood) > 3 {
@@ -141,7 +160,7 @@ fn two_placements_in_one_tick_cannot_share_a_slot() {
 
 #[test]
 fn extractors_need_their_deposit() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     // A quarry right beside the Capitol is nowhere near stone.
     let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
     let (x, y) = (cap.tx - 3, cap.ty - 3);
@@ -156,7 +175,7 @@ fn extractors_need_their_deposit() {
 
 #[test]
 fn a_lost_producer_leaves_the_newest_units_unsupplied() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     let pasture = build(&mut g, Kind::Pasture);
     assert_eq!(free(&g, Res::Horses), 2);
     let older = g.spawn_unit(Kind::Horseman, 1, 30.0, 30.0);
@@ -186,7 +205,7 @@ fn a_lost_producer_leaves_the_newest_units_unsupplied() {
 
 #[test]
 fn saves_keep_slots_in_step() {
-    let mut a = Game::new(77, 2, 2);
+    let mut a = town(77, 2, 2);
     a.set_ai(1, true);
     let start = a.ents.len();
     run(&mut a, 100.0);
@@ -206,8 +225,12 @@ fn houses(g: &Game, p: u8) -> Vec<usize> {
 
 #[test]
 fn beds_are_two_per_good() {
-    let mut g = Game::new(5, 1, 2);
-    // The Capitol's grain and fruit: both huts get 2 goods, 4 beds each.
+    let mut g = town(5, 1, 2);
+    // Grain and fruit (the Capitol's, a farm's and an orchard's): both huts
+    // get 2 goods, 4 beds each.
+    build(&mut g, Kind::Farm);
+    build(&mut g, Kind::Orchard);
+    g.resolve();
     for h in houses(&g, 1) {
         assert_eq!((g.ents[h].goods.count_ones(), g.ents[h].beds()), (2, 4));
     }
@@ -229,26 +252,25 @@ fn beds_are_two_per_good() {
 
 #[test]
 fn losing_a_farm_empties_the_furthest_houses_first() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     build(&mut g, Kind::LumberCamp); // wood for the huts
-    let farm = build(&mut g, Kind::Farm); // grain 2 + 2 = 4
-    build(&mut g, Kind::Hut);
+    let farm = build(&mut g, Kind::Farm); // grain 1 + 2 = 3
     build(&mut g, Kind::Hut);
     g.resolve();
     let hs = houses(&g, 1);
-    assert_eq!(hs.len(), 4);
+    assert_eq!(hs.len(), 3);
     let grain = 1 << Res::Grain.idx();
-    assert!(hs.iter().all(|&h| g.ents[h].goods & grain != 0), "4 grain for 4 huts");
+    assert!(hs.iter().all(|&h| g.ents[h].goods & grain != 0), "3 grain for 3 huts");
     g.ents[farm as usize].hp = 0.0;
     g.tick();
     g.tick();
     let has: Vec<bool> = hs.iter().map(|&h| g.ents[h].goods & grain != 0).collect();
-    assert_eq!(has, [true, true, false, false], "the two nearest keep their grain");
+    assert_eq!(has, [true, false, false], "the nearest keeps its grain");
 }
 
 #[test]
 fn a_free_worker_walks_over_and_becomes_the_soldier() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     build(&mut g, Kind::LumberCamp);
     let barracks = build(&mut g, Kind::Barracks);
     g.tick();
@@ -271,7 +293,7 @@ fn a_free_worker_walks_over_and_becomes_the_soldier() {
 
 #[test]
 fn a_foundation_waits_for_all_its_builders() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     // Plenty of everything, so the airfield's slots don't empty the houses.
     g.players[1].supply_pct = 400;
     empty_campfire(&mut g);
@@ -302,7 +324,7 @@ fn a_foundation_waits_for_all_its_builders() {
 
 #[test]
 fn free_workers_go_to_work_by_themselves() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     // 8 free workers, eight lumber camps of 1 placed without crews: they all
     // fill, in id order. A ninth gets nobody.
     let camps: Vec<u32> = (0..9)
@@ -316,13 +338,13 @@ fn free_workers_go_to_work_by_themselves() {
     run(&mut g, 30.0);
     let crewed: Vec<bool> = camps.iter().map(|&c| g.ents[c as usize].crewed).collect();
     assert_eq!(crewed, [true, true, true, true, true, true, true, true, false]);
-    assert_eq!(g.players[1].supply[Res::Wood.idx()], 4 + 8 * makes(Kind::LumberCamp, Res::Wood), "the camp with nobody makes nothing");
+    assert_eq!(g.players[1].supply[Res::Wood.idx()], makes(Kind::Capitol, Res::Wood) + 8 * makes(Kind::LumberCamp, Res::Wood), "the camp with nobody makes nothing");
     assert_eq!(g.players[1].free, 0);
 }
 
 #[test]
 fn moving_workers_away_pauses_a_producer() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     let (x, y) = spot(&g, Kind::LumberCamp);
     let camp = g.spawn_building(Kind::LumberCamp, 1, x, y, 1.0);
     run(&mut g, 30.0);
@@ -343,7 +365,7 @@ fn moving_workers_away_pauses_a_producer() {
 
 #[test]
 fn a_killed_worker_stops_the_producer_until_someone_replaces_them() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     let (x, y) = spot(&g, Kind::LumberCamp);
     let camp = g.spawn_building(Kind::LumberCamp, 1, x, y, 1.0);
     run(&mut g, 30.0);
@@ -359,7 +381,7 @@ fn a_killed_worker_stops_the_producer_until_someone_replaces_them() {
 #[test]
 fn newcomers_fill_free_beds_faster_in_a_bigger_town() {
     assert!(growth_interval(80) < growth_interval(40) && growth_interval(40) < growth_interval(8));
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     build(&mut g, Kind::HuntingLodge); // a third good: 12 beds
     build(&mut g, Kind::LumberCamp);
     build(&mut g, Kind::LumberCamp);
@@ -374,7 +396,7 @@ fn newcomers_fill_free_beds_faster_in_a_bigger_town() {
 
 #[test]
 fn when_beds_run_short_free_workers_leave_first() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     let lodge = build(&mut g, Kind::HuntingLodge); // 12 beds
     let camp = build(&mut g, Kind::LumberCamp);
     run(&mut g, 20.0);
@@ -392,7 +414,7 @@ fn when_beds_run_short_free_workers_leave_first() {
 
 #[test]
 fn demolishing_frees_slots_and_sends_workers_home() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     let quarry = build(&mut g, Kind::Quarry);
     let crew: Vec<u32> = g.ents.iter().filter(|e| e.alive && e.order == Order::Work(quarry)).map(|e| e.id).collect();
     let wood = free(&g, Res::Wood);
@@ -409,7 +431,7 @@ fn demolishing_frees_slots_and_sends_workers_home() {
 
 #[test]
 fn nothing_is_built_on_the_campfire() {
-    let g = Game::new(5, 1, 2);
+    let g = town(5, 1, 2);
     let (cx, cy) = g.campfire(1).unwrap();
     assert!(!g.can_place(Kind::Hut, cx as i32 - 1, cy as i32 - 1, 1, 0));
 }
@@ -468,8 +490,9 @@ fn watch_the_ai() {
 
 #[test]
 fn a_full_hut_with_every_good_can_become_a_cottage_and_stays_one() {
-    let mut g = Game::new(5, 1, 2);
-    g.players[1].supply_pct = 200; // wood and stone to spare
+    let mut g = town(5, 1, 2);
+    g.players[1].supply_pct = 200; // the Capitol's grain and fruit, doubled
+    build(&mut g, Kind::LumberCamp); // wood to spare
     build(&mut g, Kind::HuntingLodge); // meat: 3 goods for both huts, 12 beds
     for _ in 0..4 {
         g.spawn_worker(1, None);
@@ -498,7 +521,7 @@ fn a_full_hut_with_every_good_can_become_a_cottage_and_stays_one() {
 
 #[test]
 fn ten_houses_of_the_next_tier_bring_the_next_era() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].supply_pct = 1000; // plenty of slots, so nothing else gets in the way
     build(&mut g, Kind::HuntingLodge); // and a third good, so cottages keep their tier
     let cottages = |g: &Game| g.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Cottage).count() as u32;
@@ -527,8 +550,9 @@ fn ten_houses_of_the_next_tier_bring_the_next_era() {
 
 #[test]
 fn medieval_things_wait_for_the_medieval_era() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].supply_pct = 200;
+    build(&mut g, Kind::LumberCamp);
     let (x, y) = spot(&g, Kind::Bakery);
     let r = g.apply(1, Command::Place { ids: vec![], kind: Kind::Bakery, tx: x, ty: y });
     assert_eq!(r.err(), Some(CmdError::Era(1)));
@@ -540,8 +564,9 @@ fn medieval_things_wait_for_the_medieval_era() {
 
 #[test]
 fn converters_hold_their_inputs_and_the_newest_stops_first() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].era = 1;
+    g.players[1].supply_pct = 200; // the Capitol's grain, doubled: 2
     let supply = |g: &Game, r: Res| g.players[1].supply[r.idx()];
     // The Capitol's 2 grain feed one bakery: 4 bread.
     let first = build(&mut g, Kind::Bakery);
@@ -556,10 +581,11 @@ fn converters_hold_their_inputs_and_the_newest_stops_first() {
     assert!(g.ents[second as usize].fed);
     assert_eq!(supply(&g, Res::Bread), 8);
     // Paused, a bakery makes nothing but still holds its grain.
+    let grain = free(&g, Res::Grain);
     g.apply(1, Command::Hire { ids: vec![first], on: false }).unwrap();
     g.resolve();
     assert_eq!(supply(&g, Res::Bread), 4);
-    assert_eq!(free(&g, Res::Grain), 0);
+    assert_eq!(free(&g, Res::Grain), grain);
 }
 
 #[test]
@@ -575,9 +601,9 @@ fn counters_go_by_class_across_eras() {
 
 #[test]
 fn a_full_cottage_with_five_goods_becomes_a_townhouse_from_the_medieval_era() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].supply_pct = 300; // plenty of wood and stone
-    for k in [Kind::HuntingLodge, Kind::Brickworks] {
+    for k in [Kind::LumberCamp, Kind::Quarry, Kind::HuntingLodge, Kind::Brickworks] {
         build(&mut g, k);
     }
     let cottage = |g: &mut Game| {
@@ -602,7 +628,7 @@ fn a_full_cottage_with_five_goods_becomes_a_townhouse_from_the_medieval_era() {
     let townhouses = |g: &Game| g.ents.iter().filter(|e| e.alive && e.kind == Kind::Townhouse).count();
     assert!(townhouses(&g) >= 1, "{}", census(&g, 1));
     // In the Ancient era it would have stayed a cottage.
-    let mut g2 = Game::new(5, 1, 2);
+    let mut g2 = town(5, 1, 2);
     g2.players[1].supply_pct = 300;
     build(&mut g2, Kind::HuntingLodge);
     let c2 = cottage(&mut g2);
@@ -617,9 +643,10 @@ fn a_full_cottage_with_five_goods_becomes_a_townhouse_from_the_medieval_era() {
 
 #[test]
 fn gunpowder_comes_from_nitrate_and_wood() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].era = 2;
     g.players[1].supply_pct = 300;
+    build(&mut g, Kind::LumberCamp);
     build(&mut g, Kind::Brickworks); // the works and the mill are built with brick
     let works = build(&mut g, Kind::SaltpeterWorks);
     assert_eq!(g.players[1].supply[Res::Nitrate.idx()], 3 * makes(Kind::SaltpeterWorks, Res::Nitrate), "its nitrate, times 3");
@@ -664,7 +691,7 @@ fn ai_stats() {
 
 #[test]
 fn steel_comes_from_iron_and_coal_and_makes_field_guns_possible() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].era = 3;
     g.players[1].supply_pct = 300;
     // Beds for all the crews (people over beds leave, crews too).
@@ -734,7 +761,7 @@ fn tick_cost() {
 
 #[test]
 fn aircraft_fly_over_anything_and_only_some_units_hit_them() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     // A fighter of player 2's over player 1's spearman: the spearman can't
     // touch it; a machine gunner can.
     let (x, y) = (30.0, 30.0);
@@ -760,7 +787,7 @@ fn aircraft_fly_over_anything_and_only_some_units_hit_them() {
 
 #[test]
 fn a_chain_of_converters_works_in_any_order() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].era = 4;
     g.players[1].supply_pct = 300;
     for _ in 0..6 {
@@ -784,7 +811,7 @@ fn a_chain_of_converters_works_in_any_order() {
 
 #[test]
 fn a_nuke_is_armed_launched_and_leaves_a_crater() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].era = 5;
     g.players[1].supply_pct = 300;
     for _ in 0..6 {
@@ -834,7 +861,8 @@ fn a_nuke_is_armed_launched_and_leaves_a_crater() {
 /// even when free workers at the campfire could have come instead.
 #[test]
 fn builders_start_work_where_they_built() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
+    build(&mut g, Kind::LumberCamp);
     let (x, y) = spot(&g, Kind::Quarry);
     let q = g.apply(1, Command::Place { ids: vec![], kind: Kind::Quarry, tx: x, ty: y }).map(|_| g.ents.len() as u32 - 1).unwrap();
     assert_eq!(g.ents[q as usize].kind, Kind::Quarry);
@@ -857,7 +885,7 @@ fn builders_start_work_where_they_built() {
 /// Playtest: attackers go for what fights back before workers and houses.
 #[test]
 fn attackers_go_for_what_fights_first() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.set_ai(2, false);
     let (x, y) = (60.0, 60.0);
     let me = g.spawn_unit(Kind::Spearman, 1, x, y);
@@ -936,7 +964,7 @@ fn brick_budget() {
     }
     // How many brickworks fit around a base's clay.
     for seed in 1..=4 {
-        let mut g = Game::new(seed, 1, 2);
+        let mut g = town(seed, 1, 2);
         let mut n = 0;
         let (cx, cy) = { let c = g.find_first(1, Kind::Capitol).unwrap(); (g.ents[c].x, g.ents[c].y) };
         for y in 0..g.map.h {
@@ -953,7 +981,7 @@ fn brick_budget() {
 
 #[test]
 fn musketeers_fight_each_other() {
-    let mut g = Game::new(3, 1, 2);
+    let mut g = town(3, 1, 2);
     g.set_ai(2, false);
     g.players[1].supply_pct = 400;
     g.players[2].supply_pct = 400;
@@ -983,26 +1011,20 @@ fn spot_away(g: &Game, kind: Kind, far: i32) -> (i32, i32) {
 }
 
 #[test]
-fn no_more_than_seven_of_a_kind_but_fields_and_houses() {
-    let mut g = Game::new(5, 1, 2);
+fn seven_of_a_kind_is_a_target_not_a_rule() {
+    let mut g = town(5, 1, 2);
     g.players[1].supply_pct = 1000;
     for _ in 0..MAX_SAME {
         build(&mut g, Kind::FishingHut);
     }
     let (x, y) = spot(&g, Kind::FishingHut);
-    let r = g.apply(1, Command::Place { ids: vec![], kind: Kind::FishingHut, tx: x, ty: y });
-    assert_eq!(r.err(), Some(CmdError::TooMany));
-    for _ in 0..MAX_SAME + 1 {
-        let (x, y) = spot(&g, Kind::Farm);
-        g.apply(1, Command::Place { ids: vec![], kind: Kind::Farm, tx: x, ty: y }).expect("fields have no limit");
-    }
-    let (x, y) = spot(&g, Kind::Hut);
-    g.apply(1, Command::Place { ids: vec![], kind: Kind::Hut, tx: x, ty: y }).expect("houses have no limit");
+    g.apply(1, Command::Place { ids: vec![], kind: Kind::FishingHut, tx: x, ty: y }).expect("an eighth is allowed");
+    assert_eq!(Game::max_of(Kind::FishingHut), MAX_SAME, "the computer keeps to seven");
 }
 
 #[test]
-fn a_second_capitol_holds_its_cost_and_losing_one_takes_its_town() {
-    let mut g = Game::new(5, 1, 2);
+fn capitols_can_be_founded_and_only_the_last_one_counts() {
+    let mut g = town(5, 1, 2);
     g.set_ai(2, false);
     g.players[1].supply_pct = 1000;
     build(&mut g, Kind::Brickworks);
@@ -1010,24 +1032,21 @@ fn a_second_capitol_holds_its_cost_and_losing_one_takes_its_town() {
     assert_eq!(g.apply(1, Command::Place { ids: vec![], kind: Kind::Capitol, tx: x, ty: y }).err(), Some(CmdError::Era(1)), "not in the Ancient era");
     g.players[1].era = 1;
     let wood = free(&g, Res::Wood);
+    let beds = g.players[1].beds;
     g.apply(1, Command::Place { ids: vec![], kind: Kind::Capitol, tx: x, ty: y }).unwrap();
     let second = g.ents.len() - 1;
     g.tick();
     assert_eq!(free(&g, Res::Wood), wood - 8, "a founded Capitol holds its cost (the first holds nothing)");
-    // Finish it, and put a hut by each.
     g.ents[second].built = 1.0;
     g.ents[second].hp = Kind::Capitol.stats().hp;
+    g.tick();
+    assert_eq!(g.players[1].beds, beds + CAPITOL_BEDS, "a finished one has beds of its own");
     let first = g.find_first(1, Kind::Capitol).unwrap();
-    let near_first = build(&mut g, Kind::Hut);
-    let (hx, hy) = (x + 4, y + 4);
-    assert!(g.can_place(Kind::Hut, hx, hy, 1, 0));
-    let near_second = g.spawn_building(Kind::Hut, 1, hx, hy, 1.0);
-    // The first one falls: its town goes with it, the other's stays, and
-    // the player is still in the game.
+    let hut = build(&mut g, Kind::Hut);
+    // The first falls: nothing else does, and the player plays on.
     g.ents[first].hp = 0.0;
     run(&mut g, 0.2);
-    assert!(!g.alive(near_first), "the first Capitol's town fell with it");
-    assert!(g.alive(near_second), "the second's town stands");
+    assert!(g.alive(hut), "losing a Capitol takes nothing else with it");
     assert!(!g.players[1].defeated && g.state == 0);
     assert_eq!(g.home_capitol(1), Some(second), "the campfire moves to the other");
     // The last one falls: out.
@@ -1038,7 +1057,7 @@ fn a_second_capitol_holds_its_cost_and_losing_one_takes_its_town() {
 
 #[test]
 fn an_unfinished_capitol_does_not_keep_you_in_the_game() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.players[1].era = 1;
     g.players[1].supply_pct = 1000;
     build(&mut g, Kind::Brickworks);
@@ -1052,7 +1071,7 @@ fn an_unfinished_capitol_does_not_keep_you_in_the_game() {
 
 #[test]
 fn an_air_defense_shoots_down_a_nuke_falling_near_it() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.set_ai(2, false);
     let cap = g.find_first(2, Kind::Capitol).unwrap();
     let (cx, cy) = (g.ents[cap].x, g.ents[cap].y);
@@ -1086,7 +1105,7 @@ fn an_air_defense_shoots_down_a_nuke_falling_near_it() {
 
 #[test]
 fn shells_hurt_what_stands_around_their_target() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     g.set_ai(2, false);
     let a = g.spawn_unit(Kind::Spearman, 2, 40.0, 40.0);
     let b = g.spawn_unit(Kind::Spearman, 2, 40.8, 40.0);
@@ -1110,7 +1129,7 @@ fn shells_hurt_what_stands_around_their_target() {
 
 #[test]
 fn your_own_units_can_be_disbanded() {
-    let mut g = Game::new(5, 1, 2);
+    let mut g = town(5, 1, 2);
     let w = g.ents.iter().find(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker).unwrap().id;
     let theirs = g.ents.iter().find(|e| e.alive && e.owner == 2 && e.kind == Kind::Worker).unwrap().id;
     let people = g.players[1].people;

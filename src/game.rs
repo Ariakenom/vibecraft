@@ -15,9 +15,9 @@ pub const GAIA: u8 = 0;
 pub const PLAYER: u8 = 1;
 /// Up to four players. Player 0 is "nature" (gaia).
 pub const MAX_PLAYERS: usize = 4;
-/// Each player starts with two huts and this many workers at the campfire.
-/// The Capitol's own grain and fruit give the huts 8 beds.
-const START_WORKERS: usize = 8;
+/// Each player starts with this many workers at the campfire, no houses,
+/// and the Capitol's beds (`CAPITOL_BEDS`).
+const START_WORKERS: usize = 2;
 const CELL: i32 = 4; // spatial-hash cell size in tiles
 
 /// What a unit is currently trying to do. Enums with data are one of Rust's
@@ -75,7 +75,7 @@ pub enum Ev {
     Upgraded = 15,   // one of the player's houses grew a tier (data = new kind)
     Downgraded = 16, // one of the player's houses fell back a tier (data = new kind)
     EraReached = 17, // a player entered an era (data = player * 16 + era)
-    CapitolLost = 21, // a player lost a Capitol but has another (data = owner); everyone hears
+    // 21 was CapitolLost (losing one Capitol no longer takes its town).
     NukeIntercepted = 22, // an air defense shot down a nuke at (x, y) (data = the nuke's owner)
     SiloBuilt = 23,  // someone finished a missile silo at (x, y) (data = owner); everyone hears
     NukeArming = 24, // someone started arming a nuke (data = owner); everyone hears
@@ -99,8 +99,6 @@ pub enum CmdError {
     Locked(Kind),
     /// A house that can't grow yet: a bed is free, or it lacks a good.
     NotReady,
-    /// Already `MAX_SAME` of this kind (`MAX_CAPITOLS` for Capitols).
-    TooMany,
 }
 
 impl CmdError {
@@ -115,7 +113,6 @@ impl CmdError {
             CmdError::NoDeposit(d) => 20 + d as i32,
             CmdError::Locked(k) => 2000 + k as i32,
             CmdError::NotReady => 14,
-            CmdError::TooMany => 15,
         }
     }
 }
@@ -498,11 +495,6 @@ impl Game {
             let owner = i as u8 + 1;
             let cap = g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
             g.ents[cap as usize].starting = true;
-            // Two huts inside the cleared square around the town site, clear
-            // of the campfire in front of the Capitol.
-            for (hx, hy) in [(bx - 4, by + 1), (bx + 2, by - 4)] {
-                g.spawn_building(Kind::Hut, owner, hx, hy, 1.0);
-            }
             for _ in 0..START_WORKERS {
                 g.spawn_worker(owner, None);
             }
@@ -715,12 +707,11 @@ impl Game {
         self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == kind).count()
     }
 
-    /// The most of `kind` a player may have: `MAX_SAME`, except fields and
-    /// houses (no limit) and Capitols (`MAX_CAPITOLS`).
+    /// The most of `kind` the computer builds: the balance target
+    /// `MAX_SAME`, except fields, houses and Capitols (no limit). Players
+    /// have no limit.
     pub fn max_of(kind: Kind) -> usize {
-        if kind == Kind::Capitol {
-            MAX_CAPITOLS
-        } else if kind == Kind::Farm || kind.house_tier().is_some() {
+        if kind == Kind::Capitol || kind == Kind::Farm || kind.house_tier().is_some() {
             usize::MAX
         } else {
             MAX_SAME
@@ -1097,9 +1088,6 @@ impl Game {
     pub fn place(&mut self, owner: u8, kind: Kind, tx: i32, ty: i32, builders: &[u32]) -> Result<u32, CmdError> {
         if !kind.is_building() || !self.spot_free(kind, tx, ty, owner, 0) {
             return Err(CmdError::BadSpot);
-        }
-        if self.count_of(owner, kind) >= Self::max_of(kind) {
-            return Err(CmdError::TooMany);
         }
         if !self.near_deposit(kind, tx, ty) {
             return Err(CmdError::NoDeposit(kind.stats().needs_deposit.unwrap_or(Dep::Forest)));
@@ -1691,32 +1679,11 @@ impl Game {
             let (owner, kind, x, y) = (e.owner, e.kind, e.x, e.y);
             self.players[owner as usize].lost += 1;
             self.remove(i);
-            if kind == Kind::Capitol && self.ents[i].built >= 1.0 {
-                self.capitol_fell(owner, x, y);
-            }
             if kind.is_building() && owner == self.local {
                 self.push_event(Ev::Lost, x, y, kind as u32 as f32);
             }
             self.push_event(Ev::Death, x, y, owner as f32 * 100.0 + kind as u32 as f32);
         }
-    }
-
-    /// A Capitol fell and its owner still has another: everything of theirs
-    /// nearer to it than to any Capitol they have left falls with it. Their
-    /// town around it is lost, so taking a Capitol still swings a game.
-    fn capitol_fell(&mut self, owner: u8, x: f32, y: f32) {
-        let left: Vec<(f32, f32)> = self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0).map(|e| (e.x, e.y)).collect();
-        if left.is_empty() {
-            return; // that was the last: `check_victory` takes the rest
-        }
-        let d2 = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2);
-        for e in self.ents.iter_mut().filter(|e| e.alive && e.owner == owner && e.is_building() && e.kind != Kind::Capitol) {
-            let here = d2((e.x, e.y), (x, y));
-            if left.iter().all(|&c| d2((e.x, e.y), c) > here) {
-                e.hp = 0.0;
-            }
-        }
-        self.push_event(Ev::CapitolLost, x, y, owner as f32);
     }
 
     /// Take something off the map: it's gone, and a building's tiles are free.

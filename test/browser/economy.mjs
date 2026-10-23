@@ -53,10 +53,10 @@ check(up && up[0] === "Upgrade to Cottage" && up[1] && up[2], `a hut has "Upgrad
 // Era pages of the build menu: Shift and a key picks one; a click on a tab
 // works even when the panel would have been redrawn while it was held.
 await pg.evaluate(() => { W.debug_set_era(2); readWorld(); const c = findOwn(K.Capitol); setSelection([E(c, F.id)]); renderSelection(true); });
+await pg.keyboard.press("Shift+R");
+check(await pg.evaluate(() => buildPage) === 1, "Shift+R: the Medieval page");
 await pg.keyboard.press("Shift+E");
-check(await pg.evaluate(() => buildPage) === 1, "Shift+E: the Medieval page");
-await pg.keyboard.press("Shift+Backquote");
-check(await pg.evaluate(() => buildPage) === 0, "Shift+`: back to the Ancient page");
+check(await pg.evaluate(() => buildPage) === 0, "Shift+E: back to the Ancient page");
 const tab = await pg.$("#cmd button.page:nth-of-type(3)");
 const tb = await tab.boundingBox();
 await pg.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);

@@ -26,12 +26,13 @@ the design conversation; the conclusions are all here.
 
 ## Core rules
 
-### No more than seven of a kind
+### Seven of a kind, as a target
 
 Decided October 2026, after a 78-minute playtest in which the winner had
-47 lumber camps, 22 brickworks and 21 quarries. A player may have at most
-**7 buildings of one kind** (`MAX_SAME`), apart from farms (fields) and
-houses, which have no limit, and Capitols (`MAX_CAPITOLS`, 3).
+47 lumber camps, 22 brickworks and 21 quarries. A town shouldn't need more
+than **7 buildings of one kind** (`MAX_SAME`), apart from farms (fields),
+houses and Capitols. It's a target for the numbers, not a rule: players may
+build more; the computer keeps to it.
 
 So that a whole town fits, scarcity runs the other way round from before:
 the basics are tight at the start and plentiful late.
@@ -72,7 +73,7 @@ barracks stands, you have 1 wood free. If the barracks burns, 4 are free.
 - **Converters** borrow input slots and make output slots: a bakery borrows
   2 grain and makes 4 bread. (Later producers make more: Medieval ones about
   twice what Ancient ones do, Industrial ones and later three to four
-  times. See *No more than seven of a kind*.) Converters form the production chains. If its
+  times. See *Seven of a kind, as a target*.) Converters form the production chains. If its
   inputs aren't free, a converter stands idle and makes nothing.
 - **Service buildings** make a good from nothing but workers (for example a
   church making *worship*, if we add one). Optional.
@@ -284,8 +285,8 @@ buildings. Newer units have better numbers within their class.
 
 | Era | Line / anti-mounted | Ranged | Mounted / armor | Siege / artillery | Air |
 |---|---|---|---|---|---|
-| Ancient | Spearman (wood) | Archer (wood) | Horseman (horses) | | |
-| Medieval | Swordsman (iron) | Crossbowman (wood, iron) | Knight (horses, iron) | Trebuchet (wood ×3) | |
+| Ancient | Spearman (wood) | Archer (wood) | | | |
+| Medieval | Swordsman (iron) | Crossbowman (wood, iron) | Horseman (horses); Knight (horses, iron) | Trebuchet (wood ×3) | |
 | Gunpowder | Musketeer (iron, gunpowder) | | Dragoon (horses, gunpowder) | Cannon (iron ×2, gunpowder) | |
 | Industrial | Rifleman (steel, gunpowder) | Machine gunner (steel, gunpowder ×2) | | Field gun (steel ×2, explosives, horses) | |
 | Modern | Infantry (steel, explosives) | | Tank (steel ×2, oil, explosives) | | Fighter (aluminum, oil); Bomber (aluminum ×2, oil, explosives ×2) |
@@ -305,13 +306,13 @@ twice), which frees their slots and beds.
 Decided October 2026: a nuke that lands on a Capitol shouldn't end a long
 game in one click, but taking a Capitol should still swing it toward the
 attacker, so games end.
-- From the Medieval era a player can **found more Capitols**, up to three
-  (8 wood, 8 stone, 6 brick, 4 builders, 2 minutes). Each makes the
-  Capitol's free basics. The first holds nothing; founded ones hold their
-  cost.
-- **Losing a Capitol takes its town**: everything of the owner's nearer to
-  it than to their other Capitols falls with it. Lose the last finished one
-  and you're out. The campfire burns at the oldest finished Capitol.
+- From the Medieval era a player can **found more Capitols**, as many as
+  they like (8 wood, 8 stone, 6 brick, 4 builders, 2 minutes; the price is
+  to be found in play). Each makes the Capitol's free basics and has 4
+  beds. The first holds nothing; founded ones hold their cost.
+- **Losing a Capitol costs only that Capitol**; lose the last finished one
+  and you're out. The campfire burns at the oldest finished Capitol. (For
+  a day, losing one took the town nearest it; Patrik preferred this.)
 - The **nuke's blast is 15 tiles** (it was 5): a near miss is no longer
   harmless.
 - **Air Defense** (Modern): anti-aircraft guns with a 10-tile reach that
@@ -328,8 +329,8 @@ Every unit also costs one resident. About 21 units in all.
 ## Buildings by era (first draft)
 
 - **Ancient:** Capitol, Hut, Lumber camp, Quarry, Farm, Fishing hut,
-  Hunting lodge, Orchard, Pasture, Barracks, Range, Stable, Tower.
-- **Medieval:** Sawmill, Sheep farm, Weaver, Bakery, Brewery, Iron mine,
+  Hunting lodge, Orchard, Barracks, Range, Tower.
+- **Medieval:** Pasture, Stable (and horsemen), Sawmill, Sheep farm, Weaver, Bakery, Brewery, Iron mine,
   Brickworks, Siege workshop; more Capitols.
 - **Gunpowder:** Stone works, Kiln, Saltpeter works, Powder mill,
   Carpenter, Printer, Circus.
@@ -361,10 +362,11 @@ fly over their target and drop their bombs.
 
 ## Start of a game (first guess)
 
-Capitol (makes 4 wood, 2 stone, 2 grain and 2 fruit by itself, no
-workers), 2 huts and 8 workers at the campfire. The two foods give each hut
-4 beds: 8 for 8 workers. Enough to place a lumber camp, a
-farm and a third hut straight away.
+Capitol (makes 2 wood, 1 stone, 1 grain and 1 fruit by itself, no
+workers, and has 4 beds) and 2 workers at the campfire; no houses (October
+2026: the start had too much of everything). One worker builds a lumber
+camp (free) and works there; the Capitol's wood, grain and fruit make the
+first hut 4 beds.
 
 ## What it should feel like
 

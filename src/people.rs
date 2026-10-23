@@ -436,9 +436,11 @@ impl Game {
                 self.ents[i].goods = goods[h];
             }
         }
+        // Every finished Capitol has a few beds of its own.
+        let capitols = self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0).count() as u32;
         let p = &mut self.players[owner as usize];
         p.housed = [0; N_RES];
-        p.beds = 0;
+        p.beds = capitols * CAPITOL_BEDS;
         for &i in &houses {
             let e = &self.ents[i];
             for (r, slot) in p.housed.iter_mut().enumerate() {
