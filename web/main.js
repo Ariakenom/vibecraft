@@ -518,7 +518,9 @@ function drawOverlay() {
     const want = bld && E(i, F.owner) === ME && !(flags & 2) && stat(k, 10) >= 0 ? nextWant(k, W.house_goods(E(i, F.id))) : undefined;
     // ...and an arrow when one can be upgraded (it's your call: Upgrade, Z).
     const ready = bld && E(i, F.owner) === ME && !(flags & 2) && HOUSE_UP[k] && W.house_upgrade_state(E(i, F.id)) === 0;
-    if (!sel && !short && !idleP && !paused && want === undefined && !ready && (f >= 1 || bld)) continue;
+    // A converter of yours without all its inputs: the one it lacks, crossed out.
+    const unfed = bld && E(i, F.owner) === ME && (flags & 256) && !paused;
+    if (!sel && !short && !idleP && !paused && !unfed && want === undefined && !ready && (f >= 1 || bld)) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
     if (ready) {
@@ -534,6 +536,14 @@ function drawOverlay() {
       octx.beginPath(); octx.moveTo(x - 4, y + 11); octx.lineTo(x, y + 16); octx.lineTo(x + 4, y + 11); octx.fill();
       if (img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
       if (!sel && f >= 1) continue;
+    }
+    if (unfed) {
+      const lack = slotsOf(k, 2).find(([r, n]) => free(r) < n), x = p.x, y = p.y - (idleP ? 46 : 20);
+      octx.fillStyle = "rgba(20,16,10,.85)"; rr(octx, x - 13, y - 13, 26, 26, 6); octx.fill();
+      const img = lack && resImage(lack[0]);
+      if (img && img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
+      octx.strokeStyle = "#e2593f"; octx.lineWidth = 2.5; octx.beginPath(); octx.moveTo(x - 9, y + 9); octx.lineTo(x + 9, y - 9); octx.stroke();
+      if (!idleP && !sel && f >= 1) continue;
     }
     if (paused) { // a producer you paused: two bars
       const x = p.x, y = p.y - 20;
