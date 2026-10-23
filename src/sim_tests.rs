@@ -462,7 +462,7 @@ fn watch_the_ai() {
 // Phase 4: house tiers, eras, converters, classes
 
 #[test]
-fn a_full_hut_with_every_good_becomes_a_cottage_and_back() {
+fn a_full_hut_with_every_good_can_become_a_cottage_and_stays_one() {
     let mut g = Game::new(5, 1, 2);
     g.players[1].supply_pct = 200; // wood and stone to spare
     build(&mut g, Kind::HuntingLodge); // meat: 3 goods for both huts, 12 beds
@@ -472,16 +472,23 @@ fn a_full_hut_with_every_good_becomes_a_cottage_and_back() {
     run(&mut g, 0.5);
     let used = |g: &Game| (g.players[1].used[Res::Wood.idx()], g.players[1].used[Res::Stone.idx()]);
     let hs = houses(&g, 1);
-    assert!(hs.iter().all(|&h| g.ents[h].kind == Kind::Cottage), "full, 3 goods, materials free: both grow");
+    assert!(hs.iter().all(|&h| g.ents[h].kind == Kind::Hut), "nothing grows by itself (it's the player's call)");
+    assert!(hs.iter().all(|&h| g.house_upgrade(h) == Ok(Kind::Cottage)), "full, 3 goods, materials free: they could");
+    g.apply(1, Command::Upgrade { ids: hs.iter().map(|&h| h as u32).collect() }).unwrap();
+    assert!(hs.iter().all(|&h| g.ents[h].kind == Kind::Cottage), "Upgrade: both grow");
     // A cottage holds 2 wood and a stone (a hut held 1 wood); the lodge 1 wood.
     assert_eq!(used(&g), (2 * 2 + 1, 2));
-    // The lodge burns: 2 goods is too few for a cottage, so they fall back
-    // and give the extra materials back.
+    // The lodge burns: 2 goods is fewer than a cottage can use, but it stays
+    // a cottage (with fewer beds) and keeps its materials.
+    let beds = g.players[1].beds;
     let lodge = g.find_first(1, Kind::HuntingLodge).unwrap();
     g.ents[lodge].hp = 0.0;
     run(&mut g, 0.5);
-    assert!(houses(&g, 1).iter().all(|&h| g.ents[h].kind == Kind::Hut));
-    assert_eq!(used(&g), (2, 0));
+    assert!(houses(&g, 1).iter().all(|&h| g.ents[h].kind == Kind::Cottage), "houses never shrink");
+    assert_eq!(used(&g), (2 * 2, 2));
+    assert!(g.players[1].beds < beds);
+    // A cottage that isn't full can't grow (and says why).
+    assert_eq!(g.house_upgrade(hs[0]).err(), Some(CmdError::Era(1)));
 }
 
 #[test]
@@ -585,6 +592,8 @@ fn a_full_cottage_with_five_goods_becomes_a_townhouse_from_the_medieval_era() {
     }
     run(&mut g, 2.0);
     let _ = c;
+    let cottages = |g: &Game| g.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Cottage).map(|e| e.id).collect::<Vec<u32>>();
+    g.apply(1, Command::Upgrade { ids: cottages(&g) }).unwrap();
     let townhouses = |g: &Game| g.ents.iter().filter(|e| e.alive && e.kind == Kind::Townhouse).count();
     assert!(townhouses(&g) >= 1, "{}", census(&g, 1));
     // In the Ancient era it would have stayed a cottage.
@@ -597,6 +606,7 @@ fn a_full_cottage_with_five_goods_becomes_a_townhouse_from_the_medieval_era() {
     }
     run(&mut g2, 2.0);
     let _ = c2;
+    assert_eq!(g2.apply(1, Command::Upgrade { ids: cottages(&g2) }).err(), Some(CmdError::Era(1)));
     assert_eq!(townhouses(&g2), 0);
 }
 
@@ -810,4 +820,137 @@ fn a_nuke_is_armed_launched_and_leaves_a_crater() {
     let i = g.map.idx(cx as i32, cy as i32);
     assert!(g.map.blocked[i] && g.map.terrain[i] == crate::map::CRATER);
     assert_eq!(g.craters.len(), 1);
+}
+
+/// Playtest: the builders of a producer stay on as its crew when it's done,
+/// even when free workers at the campfire could have come instead.
+#[test]
+fn builders_start_work_where_they_built() {
+    let mut g = Game::new(5, 1, 2);
+    let (x, y) = spot(&g, Kind::Quarry);
+    let q = g.apply(1, Command::Place { ids: vec![], kind: Kind::Quarry, tx: x, ty: y }).map(|_| g.ents.len() as u32 - 1).unwrap();
+    assert_eq!(g.ents[q as usize].kind, Kind::Quarry);
+    let mut builder = None;
+    for _ in 0..20 * 120 {
+        g.tick();
+        if builder.is_none() {
+            builder = g.ents.iter().find(|e| e.alive && e.order == Order::Build(q) && g.ents[q as usize].builders_in > 0).map(|e| e.id);
+        }
+        if g.ents[q as usize].built >= 1.0 {
+            break;
+        }
+    }
+    let b = builder.expect("someone built it");
+    g.tick();
+    g.tick();
+    assert_eq!(g.ents[b as usize].order, Order::Work(q), "the builder went to work there");
+}
+
+/// Playtest: attackers go for what fights back before workers and houses.
+#[test]
+fn attackers_go_for_what_fights_first() {
+    let mut g = Game::new(5, 1, 2);
+    g.set_ai(2, false);
+    let (x, y) = (60.0, 60.0);
+    let me = g.spawn_unit(Kind::Spearman, 1, x, y);
+    let worker = g.spawn_unit(Kind::Worker, 2, x + 1.0, y);
+    let soldier = g.spawn_unit(Kind::Spearman, 2, x + 4.0, y);
+    g.rebuild_grid_for_tests();
+    assert_eq!(g.nearest_enemy(me as usize, 6.0), Some(soldier), "the soldier, though the worker is nearer");
+    // Already hitting the worker: it turns to the soldier.
+    g.order_attack(me, worker);
+    g.ents[me as usize].order = Order::Attack { target: worker, auto: true };
+    g.tick();
+    g.tick();
+    assert_eq!(g.ents[me as usize].order, Order::Attack { target: soldier, auto: true });
+    let _ = worker;
+}
+
+/// How much brick a town needs, era by era, against how much one clay
+/// deposit can make: `cargo test --release brick_budget -- --ignored
+/// --nocapture`. The town: ten houses of the tier that brings the next era,
+/// with every good they can use (one slot each), and the producers for those
+/// goods and for everything those producers take, one barracks-like
+/// building per era, and the houses' own materials.
+#[test]
+#[ignore]
+fn brick_budget() {
+    use std::collections::BTreeMap;
+    let producer = |r: Res| Kind::BUILDABLE.into_iter().find(|k| k.stats().produces.iter().any(|&(p, _)| p == r));
+    let mut house = Kind::Cottage;
+    while let Some(next) = house.upgrade() {
+        let tier = next.house_tier().unwrap(); // brings era `tier`, grown in era tier-1
+        let era = tier - 1;
+        // Goods the houses use: the first `max` house goods of their era or older.
+        let max = house_max_goods(tier) as usize;
+        let goods: Vec<Res> = Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= tier && producer(*r).is_some_and(|k| k.era() <= era)).take(max).collect();
+        // Slots needed of everything: 10 of each good, then what makes them.
+        let mut need: BTreeMap<usize, u32> = BTreeMap::new();
+        for r in &goods {
+            *need.entry(r.idx()).or_default() += 10;
+        }
+        let mut buildings: BTreeMap<&'static str, u32> = BTreeMap::new();
+        let mut brick_in_buildings = 0u32;
+        // Resolve producers, most refined first (several passes are enough).
+        let mut made: BTreeMap<usize, u32> = BTreeMap::new();
+        for _ in 0..8 {
+            for (&ri, &n) in need.clone().iter() {
+                let have = *made.get(&ri).unwrap_or(&0);
+                if have >= n || Res::ALL[ri] == Res::Brick {
+                    continue;
+                }
+                let Some(k) = producer(Res::ALL[ri]) else { continue };
+                let out = k.stats().produces.iter().find(|&&(p, _)| p.idx() == ri).unwrap().1 as u32;
+                let count = (n - have).div_ceil(out);
+                *buildings.entry(Box::leak(format!("{k:?}").into_boxed_str())).or_default() += count;
+                for &(p, q) in k.stats().produces {
+                    *made.entry(p.idx()).or_default() += q as u32 * count;
+                }
+                for &(c, q) in k.stats().consumes {
+                    *need.entry(c.idx()).or_default() += q as u32 * count;
+                }
+                for &(c, q) in k.stats().cost {
+                    if c == Res::Brick {
+                        brick_in_buildings += q as u32 * count;
+                    }
+                }
+            }
+        }
+        let brick_in_houses: u32 = next.stats().cost.iter().filter(|c| c.0 == Res::Brick).map(|c| c.1 as u32).sum::<u32>() * 10;
+        let total = brick_in_buildings + brick_in_houses + need.get(&Res::Brick.idx()).copied().unwrap_or(0);
+        let per = Kind::Brickworks.stats().produces[0].1 as u32;
+        println!(
+            "{:?} era (growing 10 {next:?}s, {} goods each): brick in houses {brick_in_houses}, in producers {brick_in_buildings}, taken {} => {total} brick = {} brickworks of {per}",
+            ["Ancient", "Medieval", "Gunpowder", "Industrial", "Modern", "Atomic"][era as usize], goods.len(), need.get(&Res::Brick.idx()).copied().unwrap_or(0), total.div_ceil(per)
+        );
+        println!("   producers: {buildings:?}");
+        house = next;
+    }
+    // How many brickworks fit around a base's clay.
+    for seed in 1..=4 {
+        let mut g = Game::new(seed, 1, 2);
+        let mut n = 0;
+        let (cx, cy) = { let c = g.find_first(1, Kind::Capitol).unwrap(); (g.ents[c].x, g.ents[c].y) };
+        for y in 0..g.map.h {
+            for x in 0..g.map.w {
+                if ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt() < 40.0 && g.can_place(Kind::Brickworks, x, y, 1, 0) {
+                    g.spawn_building(Kind::Brickworks, 1, x, y, 1.0);
+                    n += 1;
+                }
+            }
+        }
+        println!("seed {seed}: {n} brickworks fit by the clay within 40 tiles of the Capitol = {} brick", n * Kind::Brickworks.stats().produces[0].1 as u32);
+    }
+}
+
+#[test]
+fn musketeers_fight_each_other() {
+    let mut g = Game::new(3, 1, 2);
+    g.set_ai(2, false);
+    g.players[1].supply_pct = 400;
+    g.players[2].supply_pct = 400;
+    let a = g.spawn_unit(Kind::Musketeer, 1, 60.0, 60.0);
+    let b = g.spawn_unit(Kind::Musketeer, 2, 65.0, 60.0);
+    run(&mut g, 6.0);
+    assert!(g.ents[a as usize].hp < Kind::Musketeer.stats().hp || g.ents[b as usize].hp < Kind::Musketeer.stats().hp, "{:?} {:?}", g.ents[a as usize].order, g.ents[b as usize].order);
 }

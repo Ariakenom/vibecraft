@@ -597,18 +597,6 @@ impl Kind {
         }
     }
 
-    /// The house this one falls back to when it can't keep its goods.
-    pub fn downgrade(self) -> Option<Kind> {
-        match self {
-            Kind::Cottage => Some(Kind::Hut),
-            Kind::Townhouse => Some(Kind::Cottage),
-            Kind::Tenement => Some(Kind::Townhouse),
-            Kind::Apartment => Some(Kind::Tenement),
-            Kind::TowerBlock => Some(Kind::Apartment),
-            _ => None,
-        }
-    }
-
     pub fn is_building(self) -> bool {
         self as u32 >= BUILDINGS_FROM
     }

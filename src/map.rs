@@ -259,13 +259,24 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         (18, -8, Feat::Uranium, 1.3),
     ];
     // Neutral deposits out on the map, in 80×80 coordinates (scaled to fit).
-    let neutral: [(i32, i32, Feat, f32); 6] = [
+    // Each is copied to every symmetric image, so everyone gets the same.
+    // Later eras' deposits too, so a town isn't held to its start's clay,
+    // iron or coal: there's more out there to take (and to fight over).
+    let neutral: [(i32, i32, Feat, f32); 14] = [
         (20, 40, Feat::Iron, 1.5),
         (31, 44, Feat::Horses, 1.6),
         (44, 66, Feat::Stone, 1.5),
         (24, 30, Feat::Game, 1.6),
         (52, 52, Feat::Fertile, 1.6),
         (36, 36, Feat::Stone, 1.5),
+        (10, 46, Feat::Clay, 1.6),
+        (40, 56, Feat::Clay, 1.6),
+        (27, 52, Feat::Hills, 1.6),
+        (55, 70, Feat::Coal, 1.5),
+        (30, 20, Feat::Iron, 1.5),
+        (48, 44, Feat::Nitrate, 1.4),
+        (64, 58, Feat::Oil, 1.3),
+        (16, 26, Feat::Bauxite, 1.4),
     ];
     let mut place = |cx: i32, cy: i32, f: Feat, r: f32| {
         let ri = r.ceil() as i32 + 2;

@@ -35,8 +35,10 @@ if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(locat
 function versionInfo() {
   return Object.assign({ protocol: NET.PROTOCOL, replay: REPLAY_FORMAT, deployed: deployedCommit }, BUILD_INFO || { sim: null, base: null });
 }
-// (Format 2: the rules changed, builders stay on and maps are bigger, so
-// older replays would play out differently.)
+// (Format 2: the rules changed, builders stay on and maps are bigger. Since
+// then replays say which version made them (`version`), and rule changes
+// don't change the format: an old replay still opens, with a warning, so
+// it can be looked at with the version that made it.)
 const REPLAY_FORMAT = 2, REPLAY_KEY = "vibecraft.replays", REPLAY_MAX = 6;
 const REPLAY_MIN_TICKS = 400;       // games shorter than 20 s aren't kept
 const KEYFRAME_EVERY = 1200;        // ticks between replay keyframes (1 minute)
@@ -148,6 +150,16 @@ const Rec = {
       mp: !!this.meta.mp, watched: !!this.meta.watched, startTime: this.meta.startTime,
       ticks: this.ticks, result, version: this.meta.version || versionInfo(), log: this.keys.map(k => [k, this.cmds.get(k)]),
     };
+  },
+  // Keep the game so far among the replays (the menu's Save replay, in any
+  // game, multiplayer too). The same game saved again, or finished, replaces
+  // it. Returns whether it was kept.
+  async saveNow() {
+    if (this.done || !this.real || !this.start) return false;
+    const r = this.object("Not finished (saved)");
+    Object.assign(r, await packBytes(this.start));
+    storeReplay(r);
+    return true;
   },
   // The page is closing: keep the game as it stands, uncompressed (there's
   // no time to compress it).
@@ -319,6 +331,9 @@ const Replay = {
     running = true;
     publishLobby();
     this.ui(true);
+    // Made by another version of the rules: it may play out differently.
+    const v = data.version, now = BUILD_INFO && BUILD_INFO.sim;
+    if (now && (!v || v.sim !== now)) toast(`This replay was made by ${v && v.base ? `an older version (built on ${v.base})` : "an older version"}: it may not play out as it went.`, "bad");
   },
   close() { this.on = false; this.data = null; this.cmds = new Map(); this.keyframes = new Map(); },
 

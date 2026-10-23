@@ -317,7 +317,8 @@ impl Game {
     fn builders_missing(&self, b: u32) -> u32 {
         let f = &self.ents[b as usize];
         let coming = self.ents.iter().filter(|e| e.alive && e.order == Order::Build(b)).count() as u32;
-        (f.kind.stats().builders as u32).saturating_sub(coming) // (builders at work keep their order)
+        let st = f.kind.stats();
+        (st.builders.max(st.workers) as u32).saturating_sub(coming) // (builders at work keep their order; its crew builds it)
     }
 
     /// More beds. While some house lacks goods it could use, a producer of

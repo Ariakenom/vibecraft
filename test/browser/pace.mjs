@@ -53,7 +53,8 @@ check(h1 === h0 && g1 === g0, `paused: nobody's game moves (host ${h0}→${h1}, 
 await spec.waitForFunction(() => !$("netWait").hidden && /Paused by/.test($("netWait").textContent) && toastLog.some(m => /paused the game/.test(m)), null, { timeout: 8000 });
 await sleep(500);
 const s0 = await spec.evaluate(() => watcher.k); await sleep(1000);
-check(await spec.evaluate(k => watcher.k === k, s0) && await told(spec, "paused the game"), "the spectator's view stops too, saying it's paused");
+const s1 = await spec.evaluate(() => watcher.k);
+check(s1 - s0 <= 10 && await told(spec, "paused the game"), `the spectator's view stops too, saying it's paused (${s0}→${s1}: only what was already on its way)`);
 // A player leaves while it's paused: everyone hears at once.
 await guest2.context().close();
 await host.waitForFunction(() => toastLog.some(m => / left\. The computer takes over .* when the game goes on/.test(m)), null, { timeout: 10000 });
@@ -72,6 +73,13 @@ const k = Math.max(...sums[0].map(e => e[0]).filter(t => sums[1].some(e => e[0] 
 check(sums[0].find(e => e[0] === k)[1] === sums[1].find(e => e[0] === k)[1], `the games agree at tick ${k}, after speeding up and pausing`);
 check(await host.evaluate(() => [...Rec.cmds.values()].some(l => l.some(e => e[0] !== 1 && e[0] !== 0))), "the order given while paused reached the host");
 
+// Save replay works online too.
+await guest.evaluate(() => { $("menuBtn").click(); });
+check(await guest.evaluate(() => !$("saveReplayBtn").hidden), "the menu has Save replay online");
+await guest.evaluate(() => $("saveReplayBtn").click());
+await guest.waitForFunction(() => readReplays().some(r => r.id === Rec.id && r.mp), null, { timeout: 5000 });
+check(true, "...and it keeps the game so far among the replays");
+await guest.evaluate(() => { $("menuScreen").hidden = true; });
 // The guest's computer gets slow: it can't do 40 ticks a second any more.
 const win0 = await host.evaluate(() => mp.server.window);
 await guest.evaluate(() => { const step = mp.stepLive.bind(mp); mp.stepLive = () => { const t = performance.now(); while (performance.now() - t < 30); step(); }; });

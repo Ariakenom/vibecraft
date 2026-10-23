@@ -45,12 +45,12 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
-  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, it becomes a Cottage by itself if 1 more wood and 1 stone are free.",
-  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Below 3 goods it falls back to a hut. Full, with 5 goods, it becomes a Townhouse (from the Medieval era) if 1 more stone and 2 brick are free.",
-  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Below 5 goods it falls back to a cottage. Full, with 7 goods, it becomes a Tenement (from the Gunpowder era) if 1 more brick and 1 steel are free.",
-  [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (18 people). Ten bring the Industrial era. Below 7 goods it falls back to a townhouse. Full, with 9 goods, it becomes an Apartment Block (from the Industrial era) if 1 more steel is free.",
-  [K.Apartment]: "A modern apartment block, grown from a full tenement with 9 goods. It uses up to 11 goods, electricity and radios too (22 people). Ten bring the Modern era. Below 9 goods it falls back to a tenement. Full, with 11 goods, it becomes a Tower Block (from the Modern era) if 1 more steel and 1 aluminum are free.",
-  [K.TowerBlock]: "A high-rise, grown from a full apartment block with 11 goods. It uses up to 13 goods, cars and TVs too (26 people). Ten bring the Atomic era. Below 11 goods it falls back to an apartment block.",
+  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone).",
+  [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (10 people). Ten cottages bring the Medieval era. Full, with 5 goods, you can upgrade it to a Townhouse from the Medieval era (1 more stone and 2 brick).",
+  [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (14 people). Ten bring the Gunpowder era. Full, with 7 goods, you can upgrade it to a Tenement from the Gunpowder era (2 more brick).",
+  [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (18 people). Ten bring the Industrial era. Full, with 9 goods, you can upgrade it to an Apartment Block from the Industrial era (2 steel).",
+  [K.Apartment]: "A modern apartment block, grown from a full tenement with 9 goods. It uses up to 11 goods, electricity and radios too (22 people). Ten bring the Modern era. Full, with 11 goods, you can upgrade it to a Tower Block from the Modern era (1 more steel and 1 aluminum).",
+  [K.TowerBlock]: "A high-rise, grown from a full apartment block with 11 goods. It uses up to 13 goods, cars and TVs too (26 people). Ten bring the Atomic era.",
   [K.Spearman]: "Sturdy infantry. Deals heavy damage to horsemen.",
   [K.Swordsman]: "Armoured infantry. Like spearmen, deadly to riders, but tougher and harder-hitting. Costs iron.",
   [K.Crossbowman]: "Shoots further and harder than an archer. Strong against infantry, weak against riders. Costs iron.",
@@ -160,7 +160,7 @@ const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.Hunt
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
   K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield,
   K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo];
-const PAGE_KEYS = "QERTYUIOFGCVBJLN";
+const PAGE_KEYS = "QERTFGCVBYUIOJLN"; // the left hand's keys first (Y is a stretch)
 // Every building (for code that wants them all; keys are per page).
 const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
 let buildPage = 0;
@@ -175,7 +175,7 @@ function buildMenu() {
   const ks = BUILD_ORDER.filter(k => W.kind_era(k) === buildPage);
   return ks.map((k, n) => [k, PAGE_KEYS[n] || ""]);
 }
-const TRAIN_KEYS = "QERTYUIOFGCVBJLN"; // enough for every unit when several kinds of building are selected
+const TRAIN_KEYS = PAGE_KEYS; // enough for every unit when several kinds of building are selected
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet] };
@@ -510,11 +510,20 @@ function drawOverlay() {
     const sel = flags & 1, f = E(i, F.hp) / E(i, F.maxhp), bld = isBld(k), short = flags & 16, paused = flags & 64, idleP = (flags & 32) && !paused;
     // Your houses show the first good they still want, in a bubble.
     const want = bld && E(i, F.owner) === ME && !(flags & 2) && stat(k, 10) >= 0 ? nextWant(k, W.house_goods(E(i, F.id))) : undefined;
-    if (!sel && !short && !idleP && !paused && want === undefined && (f >= 1 || bld)) continue;
+    // ...and an arrow when one can be upgraded (it's your call: Upgrade, Z).
+    const ready = bld && E(i, F.owner) === ME && !(flags & 2) && HOUSE_UP[k] && W.house_upgrade_state(E(i, F.id)) === 0;
+    if (!sel && !short && !idleP && !paused && want === undefined && !ready && (f >= 1 || bld)) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
+    if (ready) {
+      const x = p.x + (want !== undefined ? 15 : 0), y = p.y - 18;
+      octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
+      octx.fillStyle = "#79c95f"; octx.beginPath(); octx.moveTo(x, y - 8); octx.lineTo(x + 7, y); octx.lineTo(x + 3, y); octx.lineTo(x + 3, y + 7);
+      octx.lineTo(x - 3, y + 7); octx.lineTo(x - 3, y); octx.lineTo(x - 7, y); octx.closePath(); octx.fill();
+      if (want === undefined && !sel && f >= 1) continue;
+    }
     if (want !== undefined) {
-      const x = p.x, y = p.y - 18, img = resImage(want);
+      const x = p.x - (ready ? 15 : 0), y = p.y - 18, img = resImage(want);
       octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
       octx.beginPath(); octx.moveTo(x - 4, y + 11); octx.lineTo(x, y + 16); octx.lineTo(x + 4, y + 11); octx.fill();
       if (img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
@@ -766,8 +775,11 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${sel.some(i => E(i, F.kind) === K.Capitol) ? `${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}` : ""}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
   if (!force && sig === selKey) return;
+  // A button held down: rebuilding the panel now would swallow its click
+  // (the button under the pointer is replaced before it's released).
+  if (!force && cmdHeld) return;
   selKey = sig;
   const panel = $("sel");
   panel.replaceChildren();
@@ -829,7 +841,7 @@ function singleInfo(panel, i) {
     if (owner === ME || observe) {
       html += `<div class="statline">Has ${have.length ? icons(have) : "nothing yet"}</div>`;
       html += wants.length ? `<div class="statline">Wants ${icons(wants)} <span class="muted">(any ${wants.length > 1 ? `${house_room(k, goods)} of these` : "one"})</span></div>` : `<div class="statline">Has every good a ${NAMES[k]} can use.</div>`;
-      if (owner === ME) html += houseTierLine(k, goods, E(i, F.residents), E(i, F.beds));
+      if (owner === ME) html += houseTierLine(k, goods, E(i, F.residents), E(i, F.beds), id);
     }
   } else if (slotsOf(k, 1).length) {
     const need = stat(k, 7), takes = slotsOf(k, 2);
@@ -886,6 +898,10 @@ function showTip(html) { const t = $("tip"); t.innerHTML = html; t.hidden = fals
 function hideTip() { $("tip").hidden = true; }
 
 let cmdKeys = {};
+let cmdHeld = false; // a pointer is down on the command buttons
+$("cmd").addEventListener("pointerdown", () => { cmdHeld = true; });
+window.addEventListener("pointerup", () => { cmdHeld = false; });
+window.addEventListener("pointercancel", () => { cmdHeld = false; });
 function renderCommands(sel) {
   const box = $("cmd");
   const tip = $("tip");
@@ -911,12 +927,16 @@ function renderCommands(sel) {
     if (pages.length > 1) {
       const turn = d => { buildPage = (buildPage + d + pages.length) % pages.length; selKey = ""; Sfx.ui("select"); };
       for (const e of pages) {
-        const b = cmdButton(`${ERA_NAMES[e]} buildings`, "", () => { buildPage = e; selKey = ""; Sfx.ui("select"); },
+        // Shift and the page's key (Shift+Q the Ancient page, Shift+E the
+        // Medieval one, …), or Tab and Shift+Tab to step through them.
+        const key = "⇧" + PAGE_KEYS[e];
+        const fn = () => { buildPage = e; selKey = ""; Sfx.ui("select"); };
+        const b = cmdButton(`${ERA_NAMES[e]} buildings`, key, fn,
           { glyph: ["I", "II", "III", "IV", "V", "VI"][e], locked: e > W.era(),
-            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Tab: next page, Shift+Tab: back.</p>` });
+            tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${PAGE_KEYS[e]}, or Tab for the next page and Shift+Tab to go back.</p>` });
         b.classList.add("page");
         if (e === buildPage) b.classList.add("on");
-        box.append(b);
+        add(b, key, fn);
       }
       cmdKeys["tab"] = () => turn(1);
       cmdKeys["⇧tab"] = () => turn(-1);
@@ -959,6 +979,17 @@ function renderCommands(sel) {
       const fn = () => { aimSilo = id; amode = true; placing = null; updateCursor(); };
       add(cmdButton("Launch", "Z", fn, { glyph: "🚀", tip: `<h4>Launch the nuke</h4><p>Click where it should fall. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming.</p>` }), "Z", fn);
     }
+  }
+  // Houses: upgrade the ones that are ready (it holds more materials, so
+  // it's your call).
+  const homes = mine.filter(i => HOUSE_UP[E(i, F.kind)] && !(E(i, F.flags) & 2));
+  if (homes.length && !hasUnits && !workplaces.length) {
+    const ids = homes.map(i => E(i, F.id)), states = ids.map(id => W.house_upgrade_state(id));
+    const ready = states.filter(s => s === 0).length, k = E(homes[0], F.kind), [up, mats] = HOUSE_UP[k];
+    const fn = () => { const code = issue({ c: 14, ids }); if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("place"); selKey = ""; };
+    const why = ready ? "" : explain(states.find(s => s !== 11) ?? 11);
+    add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
+      tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
   const doomed = mine.filter(i => isBld(E(i, F.kind)) && E(i, F.kind) !== K.Capitol).map(i => E(i, F.id));
   if (doomed.length && !hasUnits) {
@@ -1005,23 +1036,20 @@ function nextWant(k, goods) {
   const { wants } = houseWants(k, goods);
   return wants.find(r => free(r) - W.housed(r) > 0) ?? wants[0];
 }
-// What a house needs to grow a tier, or what makes it fall back.
-function houseTierLine(k, goods, residents, beds) {
-  const tier = stat(k, 10), n = popcount(goods), max = W.house_max_goods(tier);
-  // Each tier: what it falls back to below, and what it grows into.
-  const TIERS = { [K.Hut]: [null, 0, K.Cottage, "1 wood and 1 stone"], [K.Cottage]: [K.Hut, 3, K.Townhouse, "1 stone and 2 brick"],
-    [K.Townhouse]: [K.Cottage, 5, K.Tenement, "2 more brick"], [K.Tenement]: [K.Townhouse, 7, K.Apartment, "2 steel"],
-    [K.Apartment]: [K.Tenement, 9, K.TowerBlock, "1 more steel and 1 aluminum"], [K.TowerBlock]: [K.Apartment, 11, null, ""] };
-  const t = TIERS[k];
-  if (!t) return "";
-  const [down, keep, up, mats] = t;
-  if (down != null && n < keep) return `<div class="statline bad">Fewer than ${keep} goods: it falls back to a ${NAMES[down].toLowerCase()}.</div>`;
-  if (up == null || W.era_progress(2) < tier + 1) return "";
-  if (W.era() + 1 < tier + 1) return `<div class="statline muted">Becomes a ${NAMES[up]} in the ${ERA_NAMES[tier]} era.</div>`;
+// The kind a house can be upgraded to, and the extra materials it takes.
+const HOUSE_UP = { [K.Hut]: [K.Cottage, "1 more wood and 1 stone"], [K.Cottage]: [K.Townhouse, "1 more stone and 2 brick"],
+  [K.Townhouse]: [K.Tenement, "2 more brick"], [K.Tenement]: [K.Apartment, "2 steel"], [K.Apartment]: [K.TowerBlock, "1 more steel and 1 aluminum"] };
+// What a house needs to be upgraded (by you: Upgrade, Z). Houses never shrink.
+function houseTierLine(k, goods, residents, beds, id) {
+  const tier = stat(k, 10), n = popcount(goods), max = W.house_max_goods(tier), t = HOUSE_UP[k];
+  if (!t || W.era_progress(2) < tier + 1) return "";
+  const [up, mats] = t, st = W.house_upgrade_state(id);
+  if (st === 0) return `<div class="statline good">Ready: upgrade it to a ${NAMES[up]} (Z), holding ${mats}.</div>`;
+  if (W.era() + 1 < tier + 1) return `<div class="statline muted">Can be upgraded to a ${NAMES[up]} in the ${ERA_NAMES[tier]} era.</div>`;
   const need = [];
   if (residents < beds || beds === 0) need.push("every bed taken");
   if (n < max) need.push(`all ${max} goods`);
-  return `<div class="statline muted">${need.length ? `Becomes a ${NAMES[up]} with ${need.join(" and ")}, if ${mats} are free.` : `Becomes a ${NAMES[up]} as soon as ${mats} are free.`}</div>`;
+  return `<div class="statline muted">${need.length ? `Can be upgraded to a ${NAMES[up]} with ${need.join(" and ")} (and ${mats}).` : `Can be upgraded to a ${NAMES[up]} once ${mats} are free.`}</div>`;
 }
 function house_room(k, goods) { return W.house_max_goods(stat(k, 10)) - popcount(goods); }
 const popcount = v => { let n = 0; for (; v; v >>>= 1) n += v & 1; return n; };
@@ -1034,7 +1062,7 @@ function explain(code) {
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is free at the campfire to train" }[code] || "Can't do that";
+    13: "Nobody is free at the campfire to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -1105,7 +1133,7 @@ function cleanCmd(arr) {
   if (!Array.isArray(arr) || arr.length < 4 || arr.length > 64) return null;
   if (!arr.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = arr[0] | 0;
-  if (c < 1 || c > 13) return null;
+  if (c < 1 || c > 14) return null;
   return [c, arr[1] >>> 0, arr[2], arr[3], ...arr.slice(4).map(v => v >>> 0)];
 }
 const myIds = (buildings = null) => selection().filter(i => E(i, F.owner) === ME && (buildings === null || isBld(E(i, F.kind)) === buildings)).map(i => E(i, F.id));
@@ -1467,7 +1495,6 @@ function handleEvents() {
         toast(`A house grew into a ${NAMES[d]}` + (era < W.era_progress(2) && stat(d, 10) > era ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
         Sfx.at("hammer", x, y, 90);
         break; }
-      case EV.Downgraded: toast(`A house fell back to a ${NAMES[d]}: it lost one of its goods`, "bad"); break;
       case EV.EraReached: {
         const who = d >> 4, era = d & 15;
         if (who === ME) {
@@ -2615,6 +2642,7 @@ $("menuBtn").onclick = () => {
   const playing = !observe && W.state_of(ME) === 0;
   $("menuTitle").textContent = mp || watcher ? "Menu" : "Paused";
   $("saveBtn").hidden = $("menuLoadBtn").hidden = !!mp || !!observe;
+  $("saveReplayBtn").hidden = !Rec.real || Rec.done || Replay.on;
   $("restartBtn").hidden = !!mp || !!observe;
   $("surrenderBtn").hidden = !playing;
   delete $("surrenderBtn").dataset.sure; $("surrenderBtn").textContent = "Surrender";
@@ -2635,6 +2663,10 @@ $("surrenderBtn").onclick = e => {
 $("outWatchBtn").onclick = () => { $("outScreen").hidden = true; startObserving("out"); if (paused && !mp) togglePause(); };
 $("outLeaveBtn").onclick = leaveOut;
 $("saveBtn").onclick = () => saveGame();
+$("saveReplayBtn").onclick = async () => {
+  const ok = await Rec.saveNow().catch(() => false);
+  toast(ok ? `Replay saved (${fmtTime(Rec.ticks * SIM_MS / 1000)}): find it under Replays on the start screen.` : "Couldn't save the replay.", ok ? "good" : "bad");
+};
 $("menuLoadBtn").onclick = () => openLoadScreen("menuScreen");
 $("startLoadBtn").onclick = () => openLoadScreen("startScreen");
 $("loadClose").onclick = () => closeLoadScreen();

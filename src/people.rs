@@ -269,37 +269,72 @@ impl Game {
         }
     }
 
-    /// One house a tick may change tier. A house **upgrades** when every
-    /// bed is taken, it uses as many goods as its tier allows, and the
-    /// bigger house's extra materials are free (a cottage holds more wood
-    /// and stone than a hut); nearest the Capitol first. A house that no
-    /// longer gets the goods its old tier needed **downgrades**, giving the
-    /// extra materials back; furthest first. Houses can reach one tier past
-    /// the player's era: that's how the next era is reached.
-    fn house_tiers(&mut self, owner: u8) {
-        let houses = self.houses_by_distance(owner);
-        for &i in houses.iter().rev() {
-            let e = &self.ents[i];
-            let Some(lower) = e.kind.downgrade() else { continue };
-            if e.built < 1.0 || e.goods.count_ones() >= house_max_goods(lower.house_tier().unwrap_or(0)) as u32 {
+    /// Can house `i` grow into the next kind now? It can when every bed is
+    /// taken, it uses as many goods as its tier allows, the bigger house's
+    /// extra materials are free (a cottage holds more wood and stone than a
+    /// hut), and the new kind is at most one tier past the player's era:
+    /// that's how the next era is reached. Returns the kind it would become.
+    pub fn house_upgrade(&self, i: usize) -> Result<Kind, CmdError> {
+        let e = &self.ents[i];
+        let (Some(tier), Some(next)) = (e.kind.house_tier(), e.kind.upgrade()) else { return Err(CmdError::NoBuilding) };
+        if !e.alive || e.built < 1.0 {
+            return Err(CmdError::NoBuilding);
+        }
+        let era = self.players[e.owner as usize].era;
+        let to = next.house_tier().unwrap_or(0);
+        if to > era + 1 {
+            return Err(CmdError::Era(to - 1));
+        }
+        if e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
+            return Err(CmdError::NotReady);
+        }
+        let p = &self.players[e.owner as usize];
+        for &(r, k) in next.stats().cost {
+            let had = e.kind.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, k)| k);
+            if p.free(r) < k as i32 - had as i32 {
+                return Err(CmdError::Short(r));
+            }
+        }
+        Ok(next)
+    }
+
+    /// The Upgrade command: every one of `ids` that can grow does, nearest
+    /// the Capitol first, as long as the materials last. If none could, why
+    /// the first one couldn't.
+    pub(crate) fn upgrade_houses(&mut self, owner: u8, ids: &[u32]) -> Result<(), CmdError> {
+        let mut first = None;
+        let mut any = false;
+        for i in self.houses_by_distance(owner) {
+            if !ids.contains(&(i as u32)) {
                 continue;
             }
-            self.change_house(i, lower);
+            match self.house_upgrade(i) {
+                Ok(next) => {
+                    self.change_house(i, next);
+                    any = true;
+                }
+                Err(e) => {
+                    first.get_or_insert(e);
+                }
+            }
+        }
+        match (any, first) {
+            (false, Some(e)) => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// Houses grow by the player's command (they hold more materials, so it's
+    /// the player's call): the Upgrade button. The computer grows its own,
+    /// one house a tick, nearest the Capitol first. Houses never shrink: a
+    /// house that loses goods keeps its kind (and its materials), it just
+    /// has fewer beds until the goods come back.
+    fn house_tiers(&mut self, owner: u8) {
+        if !self.ais.get(owner as usize).is_some_and(|a| a.on) {
             return;
         }
-        let era = self.players[owner as usize].era;
-        for &i in &houses {
-            let e = &self.ents[i];
-            let (Some(tier), Some(next)) = (e.kind.house_tier(), e.kind.upgrade()) else { continue };
-            if e.built < 1.0 || next.house_tier().unwrap_or(0) > era + 1 || e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
-                continue;
-            }
-            let p = &self.players[owner as usize];
-            let affordable = next.stats().cost.iter().all(|&(r, k)| {
-                let had = e.kind.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, k)| k);
-                p.free(r) >= k as i32 - had as i32
-            });
-            if affordable {
+        for i in self.houses_by_distance(owner) {
+            if let Ok(next) = self.house_upgrade(i) {
                 self.change_house(i, next);
                 return;
             }
@@ -530,9 +565,11 @@ impl Game {
                 }
                 let st = b.kind.stats();
                 if b.built < 1.0 {
+                    // As many as will work there once it's done (at least
+                    // the builders it needs): they build, then stay on.
                     // (Builders keep their order while they build, so the
                     // ones there are among those coming.)
-                    let need = st.builders.saturating_sub(wants[i].builders_coming);
+                    let need = st.builders.max(st.workers).saturating_sub(wants[i].builders_coming);
                     jobs.extend((0..need).map(|_| (i, Order::Build(i as u32))));
                 }
                 let need = (b.queue.len() as u8).saturating_sub(b.recruits + wants[i].recruits_coming);
@@ -667,6 +704,20 @@ impl Game {
             b.built = 1.0;
             let (owner, kind, bx, by) = (b.owner, b.kind, b.x, b.y);
             self.players[owner as usize].built += 1;
+            // Its builders become its crew right away, before anyone at the
+            // campfire is sent for (the rest go home on their next step).
+            let mut need = st.workers.saturating_sub(self.ents[i].hired);
+            for w in 0..self.ents.len() {
+                if need == 0 {
+                    break;
+                }
+                let e = &self.ents[w];
+                if e.alive && e.owner == owner && e.order == Order::Build(i as u32) {
+                    self.ents[w].set_order(Order::Work(i as u32));
+                    self.ents[i].hired += 1;
+                    need -= 1;
+                }
+            }
             if owner == self.local {
                 self.push_event(Ev::Built, bx, by, kind as u32 as f32);
             }
