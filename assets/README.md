@@ -38,7 +38,9 @@ conventions, which the game relies on:
   `Circus`, `Saltpeter`, `Musketeer`, `Dragoon`, `Cannon`; Industrial:
   `Tenement`, `CoalMine`, `SteelMill`, `ExplosivesWorks`, `Cannery`,
   `CoalYard`, `Press`, `Factory`, `CoalSeam`, `Rifleman`, `MachineGunner`,
-  `FieldGun`. (The Trebuchet, the Cannon and the Field Gun have no
+  `FieldGun`; and `Lumbermill` (the Sawmill), `Stoneworks`, `Kiln`,
+  `AirDefense`, which draw from their own random seed so adding them
+  doesn't change the models made after them. (The Trebuchet, the Cannon and the Field Gun have no
   skeleton: no bone pivots, so the game rolls them whole and moves their
   tool, the arm or the barrel.) The object's own location doesn't matter.
 - **Units** face +X with their feet at the ground. The weapon or tool is a
