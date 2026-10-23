@@ -334,8 +334,8 @@ static ROCKET_ARTILLERY: Stats = unit(200.0, 70.0, 13.0, 4.0, 2.2, 10.0, &[(Stee
 static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, and
-// has `CAPITOL_BEDS` beds, so a game can start with two workers and no
-// houses: the first hut's wood and food come from it. From the Medieval era
+// has `CAPITOL_BEDS` beds, so a game can start with nobody and no houses:
+// newcomers fill its beds, and the first hut's wood and food come from it. From the Medieval era
 // a player can found more, as many as they like; those hold their cost like
 // any building, the first one holds nothing. A player is out only when the
 // last one falls.
@@ -447,8 +447,8 @@ pub const CRATER_RADIUS: f32 = 2.4;
 /// it can stop another. It also shoots at aircraft out to here.
 pub const AIR_DEFENSE_COVER: f32 = 10.0;
 pub const AIR_DEFENSE_RELOAD: f32 = 90.0;
-/// Beds in every finished Capitol: room for the two workers a game starts
-/// with, and two newcomers.
+/// Beds in every finished Capitol: a game starts with nobody, and four
+/// newcomers come to fill them.
 pub const CAPITOL_BEDS: u32 = 4;
 
 /// Shells, rockets and bombs hurt everything hostile within this many
