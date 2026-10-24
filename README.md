@@ -523,9 +523,11 @@ versions don't play together.
   mines, brickworks, sheep farms and the converters (a bakery turns grain
   into bread, a weaver wool into clothes, a brewery grain into beer), which
   hold their inputs while they stand; swordsmen, crossbowmen, knights and
-  trebuchets. Counters go by class: spears and swords beat riders, riders
-  beat bows and crossbows, they beat foot soldiers; trebuchets smash
-  buildings.
+  trebuchets. Counters go by class, the same in every era: line infantry
+  (spears, swords, muskets, rifles, infantry) beat mounted units (riders
+  and tanks), mounted units beat ranged ones (bows, crossbows, machine
+  guns), and ranged units beat line infantry; siege (trebuchets, cannon,
+  field guns, bombers, rocket artillery) smashes buildings.
   Ten townhouses (full cottages with five goods, grown with brick) bring
   the Gunpowder era: saltpeter works and powder mills, carpenters,
   printers and the circus; musketeers, dragoons and cannon.
