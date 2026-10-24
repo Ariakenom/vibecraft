@@ -158,8 +158,7 @@ const Rec = {
     if (this.done || !this.real || !this.start) return false;
     const r = this.object("Not finished (saved)");
     Object.assign(r, await packBytes(this.start));
-    storeReplay(r);
-    return true;
+    return storeReplay(r);
   },
   // The page is closing: keep the game as it stands, uncompressed (there's
   // no time to compress it).
@@ -183,8 +182,12 @@ function writeReplays(list) {
   }
   return 0;
 }
+// Keep `r` among the replays. If the browser has no room even for it
+// alone, say so: it can still be downloaded from the end screen.
 function storeReplay(r) {
-  writeReplays([r, ...readReplays().filter(x => x.id !== r.id)].slice(0, REPLAY_MAX));
+  const kept = writeReplays([r, ...readReplays().filter(x => x.id !== r.id)].slice(0, REPLAY_MAX));
+  if (kept === 0 && typeof toast === "function") toast("This replay is too big to keep in the browser. Download it from the end screen (or the replay bar) to keep it.", "bad");
+  return kept > 0;
 }
 
 // Who the players were, for the scoreboard and the replay list.
@@ -753,6 +756,12 @@ function initWatchUi() {
     if (!r) { toast("There's no replay of that game.", "bad"); return; }
     Replay.open(r).catch(() => toast("That replay couldn't be played.", "bad"));
   };
+  $("replayDlBtn").onclick = async () => {
+    const r = await Rec.replay;
+    if (!r) { toast("There's no replay of that game.", "bad"); return; }
+    downloadSave(r, "replay");
+  };
+  $("rpDownload").onclick = () => { if (Replay.data) downloadSave(Replay.data, "replay"); };
 }
 // Copy a link; where the clipboard is refused, show it to copy by hand.
 function copyText(text, btn, label) {

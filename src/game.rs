@@ -15,9 +15,10 @@ pub const GAIA: u8 = 0;
 pub const PLAYER: u8 = 1;
 /// Up to four players. Player 0 is "nature" (gaia).
 pub const MAX_PLAYERS: usize = 4;
-/// Each player starts with two huts and this many workers at the campfire.
-/// The Capitol's own grain and fruit give the huts 8 beds.
-const START_WORKERS: usize = 8;
+/// Each player starts with this many workers at the campfire (none: the
+/// Capitol's `CAPITOL_BEDS` fill with newcomers over the first half
+/// minute), and no houses.
+const START_WORKERS: usize = 0;
 const CELL: i32 = 4; // spatial-hash cell size in tiles
 
 /// What a unit is currently trying to do. Enums with data are one of Rust's
@@ -69,12 +70,17 @@ pub enum Ev {
     Short = 12,   // the player holds more than they make, and units suffer (data = resource)
     // 13 was WonderBegun (the Wonder is gone).
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
-    NukeArmed = 18,  // one of the player's silos has a nuke ready
+    NukeArmed = 18,  // a silo has a nuke ready (data = owner); everyone hears
     NukeLaunched = 19, // someone launched a nuke at (x, y) (data = owner); everyone hears
     NukeDetonated = 20, // a nuke fell at (x, y) (data = owner)
     Upgraded = 15,   // one of the player's houses grew a tier (data = new kind)
     Downgraded = 16, // one of the player's houses fell back a tier (data = new kind)
     EraReached = 17, // a player entered an era (data = player * 16 + era)
+    // 21 was CapitolLost (losing one Capitol no longer takes its town).
+    NukeIntercepted = 22, // an air defense shot down a nuke at (x, y) (data = the nuke's owner)
+    SiloBuilt = 23,  // someone finished a missile silo at (x, y) (data = owner); everyone hears
+    NukeArming = 24, // someone started arming a nuke (data = owner); everyone hears
+    Cheats = 25,     // the host turned cheat mode on or off (data = 1 on); everyone hears
 }
 
 /// Why a command was refused. `code()` is the number JavaScript receives.
@@ -175,11 +181,15 @@ pub struct Entity {
     /// nearest the Capitol first. Worked out every tick.
     pub residents: u8,
     /// Which goods this house gets, one bit per resource index. Its beds
-    /// are `BEDS_PER_GOOD` for each.
+    /// follow from how many (`beds_for`).
     pub goods: u32,
     // --- missile silos ---
     /// 0 empty, 1 arming a nuke (progress in `progress`), 2 armed.
+    /// (Air defenses count down their reload in `progress`.)
     pub nuke: u8,
+    /// The Capitol a player started with: it holds no slots (any they
+    /// found later holds its cost).
+    pub starting: bool,
 }
 
 /// A nuke in flight, from the silo at (sx, sy) to (x, y). Everyone sees it.
@@ -242,12 +252,13 @@ impl Entity {
             residents: 0,
             goods: 0,
             nuke: 0,
+            starting: false,
         }
     }
 
-    /// Beds in this house: two for each different good it gets.
+    /// Beds in this house, from how many different goods it gets.
     pub fn beds(&self) -> u8 {
-        if self.kind.house_tier().is_some() && self.built >= 1.0 { self.goods.count_ones() as u8 * BEDS_PER_GOOD } else { 0 }
+        if self.kind.house_tier().is_some() && self.built >= 1.0 { beds_for(self.goods.count_ones()) } else { 0 }
     }
 
     pub fn is_building(&self) -> bool {
@@ -330,6 +341,10 @@ pub struct Player {
     pub soldiers: u32,
     /// Lost their Capitol: out of the game.
     pub defeated: bool,
+    /// Cheat mode (the host's switch, for people, not the computer): they
+    /// can build and train anything, of any era, and nothing they have
+    /// holds slots. Saved.
+    pub cheat: bool,
     /// Some of this player's units were unsupplied last tick. Only used to
     /// tell the player once when it starts.
     pub short: bool,
@@ -354,6 +369,7 @@ impl Player {
             working: 0,
             soldiers: 0,
             defeated: false,
+            cheat: false,
             short: false,
             trained: 0,
             lost: 0,
@@ -398,7 +414,8 @@ pub enum Command {
     Place { ids: Vec<u32>, kind: Kind, tx: i32, ty: i32 },
     /// Give up: everything this player owns falls, as if their Capitol had.
     Surrender,
-    /// Tear down your own buildings (not the Capitol).
+    /// Tear down your own buildings (not a Capitol), or have your own
+    /// units fall on their swords.
     Demolish { ids: Vec<u32> },
     /// Pause producers (their workers go to the campfire) or resume them.
     Hire { ids: Vec<u32>, on: bool },
@@ -483,12 +500,8 @@ impl Game {
         let mut g = Game::from_parts(seed, map, deps, Vec::new(), players, n_players, Vec::new(), vec![0; n], ais, PLAYER);
         for (i, &(bx, by)) in bases.iter().enumerate() {
             let owner = i as u8 + 1;
-            g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
-            // Two huts inside the cleared square around the town site, clear
-            // of the campfire in front of the Capitol.
-            for (hx, hy) in [(bx - 4, by + 1), (bx + 2, by - 4)] {
-                g.spawn_building(Kind::Hut, owner, hx, hy, 1.0);
-            }
+            let cap = g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
+            g.ents[cap as usize].starting = true;
             for _ in 0..START_WORKERS {
                 g.spawn_worker(owner, None);
             }
@@ -660,7 +673,7 @@ impl Game {
 
     /// Has `owner` reached `kind`'s era, with every building it requires in place?
     pub fn unlocked(&self, owner: u8, kind: Kind) -> bool {
-        kind.era() <= self.players[owner as usize].era && kind.requires().iter().all(|&k| self.has_built(owner, k))
+        self.cheat(owner) || kind.era() <= self.players[owner as usize].era && kind.requires().iter().all(|&k| self.has_built(owner, k))
     }
 
     /// How many of `owner`'s finished houses are past their era's tier:
@@ -670,12 +683,28 @@ impl Game {
         self.ents.iter().filter(|e| e.alive && e.owner == owner && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| t > era)).count() as u32
     }
 
+    /// Is `owner` in cheat mode?
+    pub fn cheat(&self, owner: u8) -> bool {
+        self.players.get(owner as usize).is_some_and(|p| p.cheat)
+    }
+
+    /// The host's cheat switch: every player a person plays (not the
+    /// computer) can build anything, free. Everyone hears.
+    pub fn set_cheats(&mut self, on: bool) {
+        for p in self.player_ids() {
+            let human = !self.ais[p as usize].on;
+            self.players[p as usize].cheat = on && human;
+        }
+        self.push_event(Ev::Cheats, 0.0, 0.0, on as u32 as f32);
+    }
+
     /// Hand a player slot to the computer (or take it back). In multiplayer
     /// this happens when someone leaves: their people carry on without them.
     pub fn set_ai(&mut self, player: u8, on: bool) {
         if let Some(ai) = self.ais.get_mut(player as usize) {
             ai.on = on && player >= 1;
             if on {
+                self.players[player as usize].cheat = false; // cheats are for people
                 self.players[player as usize].supply_pct = 100;
             }
         }
@@ -688,6 +717,28 @@ impl Game {
 
     pub fn find_first(&self, owner: u8, kind: Kind) -> Option<usize> {
         self.ents.iter().position(|e| e.alive && e.owner == owner && e.kind == kind)
+    }
+
+    /// `owner`'s home: their oldest finished Capitol. The campfire burns
+    /// there, and while they have one they're in the game.
+    pub fn home_capitol(&self, owner: u8) -> Option<usize> {
+        self.ents.iter().position(|e| e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0)
+    }
+
+    /// How many of `kind` `owner` has, foundations included.
+    pub fn count_of(&self, owner: u8, kind: Kind) -> usize {
+        self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == kind).count()
+    }
+
+    /// The most of `kind` the computer builds: the balance target
+    /// `MAX_SAME`, except fields, houses and Capitols (no limit). Players
+    /// have no limit.
+    pub fn max_of(kind: Kind) -> usize {
+        if kind == Kind::Capitol || kind == Kind::Farm || kind.house_tier().is_some() {
+            usize::MAX
+        } else {
+            MAX_SAME
+        }
     }
 
     /// Is an enemy (from `owner`'s point of view) able to be targeted?
@@ -838,8 +889,8 @@ impl Game {
         self.check_victory();
     }
 
-    /// Lose your Capitol and you're out: everything you own falls with it.
-    /// The last player standing wins.
+    /// Lose your last Capitol and you're out: everything you own falls with
+    /// it. (A foundation doesn't count.) The last player standing wins.
     /// A player gives up. Their things fall at the end of this tick, and
     /// `check_victory` puts them out of the game exactly as if their Capitol
     /// had been destroyed.
@@ -854,7 +905,7 @@ impl Game {
 
     fn check_victory(&mut self) {
         for p in self.player_ids() {
-            if !self.players[p as usize].defeated && self.find_first(p, Kind::Capitol).is_none() {
+            if !self.players[p as usize].defeated && self.home_capitol(p).is_none() {
                 self.players[p as usize].defeated = true;
                 for e in self.ents.iter_mut().filter(|e| e.alive && e.owner == p) {
                     e.hp = 0.0;
@@ -915,6 +966,10 @@ impl Game {
             }
         }
         let owner = self.ents[i].owner as usize;
+        if kind == Kind::AirDefense {
+            let e = &mut self.ents[i];
+            e.progress = (e.progress - DT).max(0.0);
+        }
         // A silo arming its nuke.
         if self.ents[i].nuke == 1 {
             self.ents[i].progress += DT / NUKE_ARM_TIME;
@@ -923,9 +978,7 @@ impl Game {
                 e.progress = 0.0;
                 e.nuke = 2;
                 let (x, y) = (e.x, e.y);
-                if owner == self.local as usize {
-                    self.push_event(Ev::NukeArmed, x, y, 0.0);
-                }
+                self.push_event(Ev::NukeArmed, x, y, owner as f32);
             }
         }
         // Training goes on while its recruit is inside.
@@ -965,6 +1018,9 @@ impl Game {
     /// tick sees them taken.
     pub fn pay(&mut self, owner: u8, cost: Slots) -> Result<(), CmdError> {
         let p = &mut self.players[owner as usize];
+        if p.cheat {
+            return Ok(()); // nothing holds slots in cheat mode
+        }
         if let Some(&(r, _)) = cost.iter().find(|&&(r, k)| p.free(r) < k as i32) {
             return Err(CmdError::Short(r));
         }
@@ -977,6 +1033,9 @@ impl Game {
     /// Give back slots taken this tick (a cancelled unit).
     pub(crate) fn unpay(&mut self, owner: u8, cost: Slots) {
         let p = &mut self.players[owner as usize];
+        if p.cheat {
+            return;
+        }
         for &(r, k) in cost {
             p.used[r.idx()] = p.used[r.idx()].saturating_sub(k);
         }
@@ -985,6 +1044,9 @@ impl Game {
     /// The first resource `owner` lacks free slots of for `kind`, if any.
     pub fn short_of(&self, owner: u8, kind: Kind) -> Option<Res> {
         let p = &self.players[owner as usize];
+        if p.cheat {
+            return None;
+        }
         kind.stats().cost.iter().find(|&&(r, k)| p.free(r) < k as i32).map(|&(r, _)| r)
     }
 
@@ -1056,16 +1118,17 @@ impl Game {
     }
 
     pub fn place(&mut self, owner: u8, kind: Kind, tx: i32, ty: i32, builders: &[u32]) -> Result<u32, CmdError> {
-        if !kind.is_building() || kind == Kind::Capitol || !self.spot_free(kind, tx, ty, owner, 0) {
+        if !kind.is_building() || !self.spot_free(kind, tx, ty, owner, 0) {
             return Err(CmdError::BadSpot);
         }
         if !self.near_deposit(kind, tx, ty) {
             return Err(CmdError::NoDeposit(kind.stats().needs_deposit.unwrap_or(Dep::Forest)));
         }
-        if kind.era() > self.players[owner as usize].era {
+        let cheat = self.cheat(owner);
+        if kind.era() > self.players[owner as usize].era && !cheat {
             return Err(CmdError::Era(kind.era()));
         }
-        if let Some(&missing) = kind.requires().iter().find(|&&k| !self.has_built(owner, k)) {
+        if let Some(&missing) = kind.requires().iter().find(|&&k| !self.has_built(owner, k)).filter(|_| !cheat) {
             return Err(CmdError::Locked(missing));
         }
         self.pay(owner, kind.stats().cost)?;
@@ -1398,7 +1461,10 @@ impl Game {
             mix(e.queue.len() as u32);
             mix(e.builders_in as u32 | (e.recruits as u32) << 8 | (e.hiring as u32) << 16);
             mix(e.goods);
-            mix(e.nuke as u32);
+            mix(e.nuke as u32 | (e.starting as u32) << 8);
+        }
+        for p in &self.players[1..] {
+            mix(p.cheat as u32);
         }
         for n in &self.nukes {
             mix(n.left.to_bits());
@@ -1532,8 +1598,54 @@ impl Game {
         } else {
             let t = &self.ents[target as usize];
             let (tx, ty) = (t.x, t.y);
+            let (shooter, owner) = (self.ents[i].kind, self.ents[i].owner);
             self.damage(target, dmg, i as u32);
+            self.splash(shooter, owner, i as u32, target, tx, ty);
             self.push_event(Ev::Melee, tx, ty, kind);
+        }
+    }
+
+    /// Shells, rockets and bombs hurt everything hostile around where they
+    /// land, not just their target: half their damage, less further out.
+    fn splash(&mut self, shooter: Kind, owner: u8, attacker: u32, target: u32, x: f32, y: f32) {
+        let r = splash_radius(shooter);
+        if r <= 0.0 {
+            return;
+        }
+        let base = shooter.stats().attack * SPLASH_SHARE;
+        let mut hit: Vec<(u32, f32)> = Vec::new();
+        self.units_near(x, y, r + 0.5, |id| {
+            let e = &self.ents[id as usize];
+            if id != target && e.alive && Self::hostile(owner, e.owner) && shooter.can_hit(e.kind) {
+                let d = e.edge_dist(x, y).max(0.0);
+                if d < r {
+                    hit.push((id, base * damage_mult(shooter, e.kind) * (1.0 - d / r)));
+                }
+            }
+        });
+        // Buildings: their footprints, near where it landed.
+        let ri = r.ceil() as i32 + 1;
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        for ty in cy - ri..=cy + ri {
+            for tx in cx - ri..=cx + ri {
+                if !self.map.inside(tx, ty) {
+                    continue;
+                }
+                let b = self.map.bld_at[self.map.idx(tx, ty)];
+                if b < 0 || b as u32 == target || hit.iter().any(|&(id, _)| id == b as u32) {
+                    continue;
+                }
+                let e = &self.ents[b as usize];
+                if e.alive && Self::hostile(owner, e.owner) {
+                    let d = e.edge_dist(x, y).max(0.0);
+                    if d < r {
+                        hit.push((b as u32, base * damage_mult(shooter, e.kind) * (1.0 - d / r)));
+                    }
+                }
+            }
+        }
+        for (id, dmg) in hit {
+            self.damage(id, dmg, attacker);
         }
     }
 
@@ -1579,10 +1691,12 @@ impl Game {
             p.py = p.y;
             if d <= step + 0.2 {
                 p.alive = false;
-                let (tg, dm, at) = (p.target, p.damage, p.attacker);
+                let (tg, dm, at, shooter) = (p.target, p.damage, p.attacker, p.shooter);
                 let t = &self.ents[tg as usize];
                 let (tx, ty, bld) = (t.x, t.y, t.is_building());
+                let owner = self.ents[at as usize].owner;
                 self.damage(tg, dm, at);
+                self.splash(shooter, owner, at, tg, tx, ty);
                 self.push_event(Ev::ArrowHit, tx, ty, bld as u32 as f32);
             } else {
                 p.x += dx / d * step;
@@ -1631,7 +1745,12 @@ impl Game {
     /// anyone queued in it is lost.
     fn demolish(&mut self, id: u32) {
         let e = &self.ents[id as usize];
-        if !e.is_building() || e.kind == Kind::Capitol {
+        if !e.is_building() {
+            // A unit: it falls where it stands (`reap` takes it this tick).
+            self.ents[id as usize].hp = 0.0;
+            return;
+        }
+        if e.kind == Kind::Capitol {
             return;
         }
         let (x, y, kind, owner) = (e.x, e.y, e.kind, e.owner);
@@ -1957,6 +2076,8 @@ impl Game {
         let e = &mut self.ents[id as usize];
         e.nuke = 1;
         e.progress = 0.0;
+        let (x, y) = (e.x, e.y);
+        self.push_event(Ev::NukeArming, x, y, owner as f32);
         Ok(())
     }
 
@@ -1985,8 +2106,30 @@ impl Game {
         }
         self.nukes.retain(|n| n.left > 0.0);
         for (owner, x, y) in fell {
-            self.detonate(owner, x, y);
+            if let Some(d) = self.interceptor(owner, x, y) {
+                self.ents[d].progress = AIR_DEFENSE_RELOAD;
+                self.push_event(Ev::NukeIntercepted, x, y, owner as f32);
+            } else {
+                self.detonate(owner, x, y);
+            }
         }
+    }
+
+    /// A ready air defense (not the attacker's) within `AIR_DEFENSE_COVER`
+    /// of where a nuke falls: the nearest one, oldest first on a tie.
+    fn interceptor(&self, owner: u8, x: f32, y: f32) -> Option<usize> {
+        let mut best = None;
+        let mut bd = f32::MAX;
+        for (i, e) in self.ents.iter().enumerate() {
+            if e.alive && e.kind == Kind::AirDefense && e.built >= 1.0 && e.owner != owner && e.owner != GAIA && e.progress <= 0.0 {
+                let d = e.edge_dist(x, y);
+                if d <= AIR_DEFENSE_COVER && d < bd {
+                    bd = d;
+                    best = Some(i);
+                }
+            }
+        }
+        best
     }
 
     /// Everything near the blast suffers, the nuke's owner's things too:

@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 22,   // 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 24,   // 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
@@ -375,6 +375,11 @@ class Server {
     this.inbox.push([T, 0, 0, [13, slot, 0, 0]]);
     Trace.event("claim", { slot, T });
     return offer;
+  }
+  // A host's system command (owner 0) for everyone, from the next tick:
+  // the cheat switch.
+  system(cmd) {
+    this.inbox.push([Math.ceil(this.now()), 0, 0, cmd]);
   }
   // Seats handed out but not taken up within `ms`: the computer keeps them.
   stale(ms) {
@@ -720,7 +725,7 @@ class Client {
           if (!this.foreign.has(key)) { this.stats.seenLate.push(this.live - k); if (this.stats.seenLate.length > 50) this.stats.seenLate.shift(); }
           this.foreign.delete(key);
           this.doneSeq.set(e[0], Math.max(this.doneSeq.get(e[0]) || 0, e[1]));
-        } else if (e[2] === 7) this.hooks.system(e.slice(2));
+        } else if (e[2] === 7 || e[2] === 15) this.hooks.system(e.slice(2));
       }
       // Step the confirmed copy: swap it in, run the tick, swap it back.
       W.mp_swap();

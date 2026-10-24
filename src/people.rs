@@ -42,9 +42,10 @@ impl Game {
     // -----------------------------------------------------------------------
     // Where people are
 
-    /// Where `owner`'s campfire burns, if they still have a Capitol.
+    /// Where `owner`'s campfire burns, if they still have a Capitol: in
+    /// front of their oldest one.
     pub fn campfire(&self, owner: u8) -> Option<(f32, f32)> {
-        self.find_first(owner, Kind::Capitol).map(|c| (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD))
+        self.home_capitol(owner).map(|c| (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD))
     }
 
     /// A spot on the ring around the campfire for worker `id` to stand on.
@@ -166,6 +167,8 @@ impl Game {
         // 2–3. Supply from crewed producers; use by everything.
         let mut supply = vec![[0u32; N_RES]; n];
         let mut used = vec![[0u32; N_RES]; n];
+        // In cheat mode nothing a player has holds slots.
+        let cheat: Vec<bool> = self.players.iter().map(|p| p.cheat).collect();
         for e in self.ents.iter_mut().filter(|e| e.alive) {
             let o = e.owner as usize;
             let st = e.kind.stats();
@@ -180,8 +183,14 @@ impl Game {
                     supply[o][r.idx()] += k as u32;
                 }
             }
-            for &(r, k) in st.cost {
-                used[o][r.idx()] += k as u32;
+            // (The Capitol a player started with holds nothing.)
+            if cheat[o] {
+                continue;
+            }
+            if !e.starting {
+                for &(r, k) in st.cost {
+                    used[o][r.idx()] += k as u32;
+                }
             }
             for q in &e.queue {
                 for &(r, k) in q.stats().cost {
@@ -281,15 +290,16 @@ impl Game {
             return Err(CmdError::NoBuilding);
         }
         let era = self.players[e.owner as usize].era;
+        let cheat = self.players[e.owner as usize].cheat;
         let to = next.house_tier().unwrap_or(0);
-        if to > era + 1 {
+        if to > era + 1 && !cheat {
             return Err(CmdError::Era(to - 1));
         }
         if e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
             return Err(CmdError::NotReady);
         }
         let p = &self.players[e.owner as usize];
-        for &(r, k) in next.stats().cost {
+        for &(r, k) in next.stats().cost.iter().filter(|_| !cheat) {
             let had = e.kind.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, k)| k);
             if p.free(r) < k as i32 - had as i32 {
                 return Err(CmdError::Short(r));
@@ -351,11 +361,13 @@ impl Game {
         e.kind = kind;
         let (owner, x, y) = (e.owner, e.x, e.y);
         let p = &mut self.players[owner as usize];
-        for &(r, k) in old.cost {
-            p.used[r.idx()] -= k;
-        }
-        for &(r, k) in new.cost {
-            p.used[r.idx()] += k;
+        if !p.cheat {
+            for &(r, k) in old.cost {
+                p.used[r.idx()] = p.used[r.idx()].saturating_sub(k);
+            }
+            for &(r, k) in new.cost {
+                p.used[r.idx()] += k;
+            }
         }
         if owner == self.local {
             self.push_event(if up { Ev::Upgraded } else { Ev::Downgraded }, x, y, kind as u32 as f32);
@@ -378,7 +390,7 @@ impl Game {
     /// Houses of `owner`, nearest the Capitol first (ties by id): squared
     /// distance in whole tiles, so it's exact on every computer.
     pub(crate) fn houses_by_distance(&self, owner: u8) -> Vec<usize> {
-        let (cx, cy) = self.find_first(owner, Kind::Capitol).map_or((0, 0), |c| (self.ents[c].tx, self.ents[c].ty));
+        let (cx, cy) = self.home_capitol(owner).map_or((0, 0), |c| (self.ents[c].tx, self.ents[c].ty));
         let mut hs: Vec<(i32, usize)> = self
             .ents
             .iter()
@@ -432,9 +444,11 @@ impl Game {
                 self.ents[i].goods = goods[h];
             }
         }
+        // Every finished Capitol has a few beds of its own.
+        let capitols = self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0).count() as u32;
         let p = &mut self.players[owner as usize];
         p.housed = [0; N_RES];
-        p.beds = 0;
+        p.beds = capitols * CAPITOL_BEDS;
         for &i in &houses {
             let e = &self.ents[i];
             for (r, slot) in p.housed.iter_mut().enumerate() {
@@ -482,12 +496,16 @@ impl Game {
         }
     }
 
-    /// Who lives where, for the page: people fill houses nearest the
-    /// Capitol first. Nothing depends on it but the drawing and the house
-    /// tiers (a house is full when every bed is taken).
+    /// Who lives where, for the page: people fill the lowest tier of house
+    /// first (huts before cottages), so the houses that can grow next are
+    /// full and ready to; among the same tier, nearest the Capitol first.
+    /// Nothing depends on it but the drawing and the house tiers (a house
+    /// is full when every bed is taken).
     fn fill_houses(&mut self, owner: u8) {
         let mut left = self.players[owner as usize].people;
-        for i in self.houses_by_distance(owner) {
+        let mut order = self.houses_by_distance(owner);
+        order.sort_by_key(|&i| self.ents[i].kind.house_tier()); // stable: keeps the distance order within a tier
+        for i in order {
             let e = &mut self.ents[i];
             let n = left.min(e.beds() as u32);
             e.residents = n as u8;
@@ -721,6 +739,10 @@ impl Game {
             if owner == self.local {
                 self.push_event(Ev::Built, bx, by, kind as u32 as f32);
             }
+            // Everyone hears when a silo goes up.
+            if kind == Kind::MissileSilo {
+                self.push_event(Ev::SiloBuilt, bx, by, owner as f32);
+            }
         } else if self.work_stroke(i) {
             let (bx, by) = (self.ents[i].x, self.ents[i].y);
             self.push_event(Ev::Hammer, bx, by, 0.0);
@@ -746,7 +768,7 @@ impl Game {
             return Err(CmdError::QueueFull);
         }
         let owner = b.owner;
-        if kind.era() > self.players[owner as usize].era {
+        if kind.era() > self.players[owner as usize].era && !self.cheat(owner) {
             return Err(CmdError::Era(kind.era()));
         }
         if self.unclaimed_workers(owner) == 0 {

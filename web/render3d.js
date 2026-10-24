@@ -608,7 +608,8 @@ function glbName(kind) {
     [K.Infantry]: "Infantry", [K.Tank]: "Tank", [K.Fighter]: "Fighter", [K.Bomber]: "Bomber", [K.Apartment]: "Apartment", [K.OilWell]: "OilWell",
     [K.BauxiteMine]: "BauxiteMine", [K.PowerPlant]: "PowerPlant", [K.HaberBosch]: "HaberBosch", [K.RadioFactory]: "RadioFactory", [K.TankWorks]: "TankWorks", [K.Airfield]: "Airfield",
     [K.RocketArtillery]: "RocketArtillery", [K.Jet]: "Jet", [K.TowerBlock]: "TowerBlock", [K.UraniumMine]: "UraniumMine", [K.Reactor]: "Reactor",
-    [K.CarPlant]: "CarPlant", [K.TvPlant]: "TvPlant", [K.MissileSilo]: "MissileSilo" };
+    [K.CarPlant]: "CarPlant", [K.TvPlant]: "TvPlant", [K.MissileSilo]: "MissileSilo",
+    [K.Sawmill]: "Lumbermill", [K.Stoneworks]: "Stoneworks", [K.Kiln]: "Kiln", [K.AirDefense]: "AirDefense" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
@@ -787,6 +788,11 @@ function initRenderer() {
   R3.stones = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(0.13, 0), withFow(new THREE.MeshLambertMaterial({ color: "#7d766c" })), 64);
   R3.stones.frustumCulled = false;
   scene.add(R3.stones);
+  // Missiles from air defenses: a white body with a dark nose.
+  const mg = new THREE.CylinderGeometry(0.05, 0.05, 0.55, 8).rotateZ(Math.PI / 2);
+  R3.missiles = new THREE.InstancedMesh(mg, withFow(new THREE.MeshLambertMaterial({ color: "#f2f1ea", emissive: "#3a3020" })), 32);
+  R3.missiles.frustumCulled = false;
+  scene.add(R3.missiles);
   // Powder smoke: white puffs that swell, drift up and shrink away.
   R3.puffMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial({ color: "#e8e6e0" })), 192);
   R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
@@ -835,15 +841,19 @@ function computeHeights() {
   const cw = MW + 1, ch = MH + 1;
   let h = new Float32Array(cw * ch);
   const wet = new Uint8Array(cw * ch);
+  // How much of each corner's ground is land (0..1): the shore runs where
+  // land meets water, so a corner half and half sits at the waterline.
+  const landShare = new Float32Array(cw * ch);
   for (let cy = 0; cy <= MH; cy++) for (let cx = 0; cx <= MW; cx++) {
-    let sum = 0, n = 0;
+    let sum = 0, n = 0, land = 0;
     for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
       const tx = cx + dx, ty = cy + dy;
       if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
       sum += elevOf(shade[ty * MW + tx] / 255); n++;
-      if (ter[ty * MW + tx] === 1) wet[cy * cw + cx] = 1;
+      if (ter[ty * MW + tx] === 1) wet[cy * cw + cx] = 1; else land++;
     }
     h[cy * cw + cx] = n ? sum / n : -1;
+    landShare[cy * cw + cx] = n ? land / n : 0;
   }
   // Two blur passes turn the blocky per-tile steps into rolling hills.
   for (let pass = 0; pass < 2; pass++) {
@@ -860,8 +870,15 @@ function computeHeights() {
     }
     h = o;
   }
-  // Keep water below the surface and the shore just above it.
-  for (let i = 0; i < h.length; i++) h[i] = wet[i] ? Math.min(h[i], -0.4) : Math.max(h[i], 0.02);
+  // Keep water below the surface and land above it. A corner on the shore
+  // (water and land both) sits at the waterline, a little above where it's
+  // mostly land, a little below where it's mostly water. (Pulling every
+  // corner that touched water down to the seabed drew beaches half a tile
+  // into the sea, and sank thin strips of land you could still walk on.)
+  for (let i = 0; i < h.length; i++) {
+    const l = landShare[i];
+    h[i] = l === 0 ? Math.min(h[i], -0.4) : l === 1 ? Math.max(h[i], 0.02) : WATER_Y + (l - 0.5) * 0.3;
+  }
   R3.heights = h;
   R3.wet = wet;
 }
@@ -1345,7 +1362,7 @@ function makeObj(i) {
     o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.FishingHut]: 1.0, [K.Tower]: 3 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
-    if (kind === K.Capitol) root.add(campfire());
+    if (kind === K.Capitol) { o.campfire = campfire(); root.add(o.campfire); }
   } else if (mdl.rig) {
     root.remove(body);
     makeRigged(o, mdl);
@@ -1556,6 +1573,8 @@ function render3d(alpha, now, dt) {
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
     o.residents = E(i, F.residents);
+    // Only a player's home Capitol (their oldest finished one) has the campfire.
+    if (o.campfire) o.campfire.visible = W.home_capitol(o.owner) === id;
     if (isBld(kind)) {
       const building = flags & 2;
       // Placed, but no builder there yet: only its owner sees where it will go.
@@ -1640,6 +1659,7 @@ function render3d(alpha, now, dt) {
   updateCampfires(performance.now());
   updatePuffs(performance.now());
   updateNukes(performance.now());
+  updateAimRings();
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
   const g = performance.now();
@@ -1690,13 +1710,22 @@ function updateNukes(now) {
   }
   // Craters.
   const c = W.crater_count();
+  // Fewer craters than drawn (a replay starting, or jumping back), or not
+  // where they're drawn (another game): take those marks away.
+  for (let k = 0; k < R3.craterMeshes.length; k++) {
+    const g = R3.craterMeshes[k];
+    if (k >= c || g.position.x !== W.crater_info(k, 0) || g.position.z !== W.crater_info(k, 1)) {
+      for (const m of R3.craterMeshes.splice(k)) { R3.scene.remove(m); m.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+      break;
+    }
+  }
   while (R3.craterMeshes.length < c) {
     const k = R3.craterMeshes.length, cx = W.crater_info(k, 0), cy = W.crater_info(k, 1);
     const g = new THREE.Group();
-    g.add(new THREE.Mesh(new THREE.CircleGeometry(2.0, 40).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#2b241e" }))));
-    const scorch = new THREE.Mesh(new THREE.RingGeometry(2.0, 4.6, 48).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#3e3a2c", transparent: true, opacity: 0.6, depthWrite: false })));
+    g.add(new THREE.Mesh(new THREE.CircleGeometry(2.6, 40).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#2b241e" }))));
+    const scorch = new THREE.Mesh(new THREE.RingGeometry(2.6, 9.0, 48).rotateX(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#3e3a2c", transparent: true, opacity: 0.6, depthWrite: false })));
     scorch.position.y = 0.01; g.add(scorch);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.22, 6, 40).rotateX(Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#4a3e32" })));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(2.6, 0.25, 6, 40).rotateX(Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ color: "#4a3e32" })));
     g.add(rim);
     g.position.set(cx, groundAt(cx, cy) + 0.05, cy);
     R3.scene.add(g); R3.craterMeshes.push(g);
@@ -1705,10 +1734,39 @@ function updateNukes(now) {
   R3.fireballs = R3.fireballs.filter(f => {
     const a = (now - f.t0) / 4000;
     if (a >= 1) { R3.scene.remove(f.mesh); return false; }
-    f.mesh.scale.setScalar(0.5 + Math.min(1, a * 3) * 4.5);
+    f.mesh.scale.setScalar((0.5 + Math.min(1, a * 3) * 4.5) * W.nuke_numbers(2) / 5);
     f.mesh.material.opacity = Math.max(0, 1 - a) * 0.9;
     f.mesh.position.y = f.y0 + a * 3;
     return true;
+  });
+}
+// Aiming a nuke: a ring under the pointer as wide as the blast, and the
+// cover of every enemy air defense in sight (a nuke falling inside one is
+// shot down). A selected air defense of your own shows its cover too.
+function aimRing(r, color) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(r - 0.2, r, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, depthWrite: false }));
+  m.renderOrder = 3;
+  R3.scene.add(m);
+  return m;
+}
+function updateAimRings() {
+  R3.aim ??= aimRing(W.nuke_numbers(2), "#ff5a3c");
+  R3.covers ??= [];
+  const aiming = typeof amode !== "undefined" && amode && aimSilo != null;
+  let w = null;
+  if (aiming && mouse.inside) w = screenToGround(mouse.x, mouse.y);
+  R3.aim.visible = !!w;
+  if (w) R3.aim.position.set(w.x, groundAt(w.x, w.y) + 0.12, w.y);
+  const want = [];
+  for (let i = 0; i < entCount; i++) {
+    if (E(i, F.kind) !== K.AirDefense) continue;
+    const own = E(i, F.owner) === ME;
+    if ((aiming && !own) || (own && (E(i, F.flags) & 1))) want.push([E(i, F.x), E(i, F.y)]);
+  }
+  while (R3.covers.length < want.length) R3.covers.push(aimRing(W.nuke_numbers(3), "#7fd0ff"));
+  R3.covers.forEach((m, k) => {
+    m.visible = k < want.length;
+    if (m.visible) m.position.set(want[k][0], groundAt(want[k][0], want[k][1]) + 0.1, want[k][1]);
   });
 }
 function nukeFlash(x, y) {
@@ -1841,8 +1899,8 @@ function updateResources() {
 // are worked out here from how far along the way they are.
 const _e = new THREE.Euler();
 function updateArrows(alpha) {
-  const a = R3.arrows, st = R3.stones, S = PROJ_STRIDE;
-  let na = 0, ns = 0;
+  const a = R3.arrows, st = R3.stones, ms = R3.missiles, S = PROJ_STRIDE;
+  let na = 0, ns = 0, nm = 0;
   for (let i = 0; i < Math.min(projCount, 256); i++) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
@@ -1855,15 +1913,16 @@ function updateArrows(alpha) {
     // The bow: ahead of the shooter, at the height it holds it.
     const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank || shooter === K.RocketArtillery;
     if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet) continue; // bullets are too small to see
-    const fromH = shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
+    const missile = shooter === K.AirDefense;
+    const fromH = missile ? 0.7 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
-    const toH = atBuilding ? 0.9 : 0.55;
+    const toH = missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
     // How far along: distance flown over that plus the distance still to go.
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
+    const arc = missile ? total * 0.25 : shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
@@ -1871,10 +1930,15 @@ function updateArrows(alpha) {
     _q.setFromEuler(_e.set(0, -Math.atan2(dy, dx), pitch, "YZX"));
     _s.setScalar(1);
     _m4.compose(_p, _q, _s);
-    if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
+    if (missile) {
+      if (nm < 32) ms.setMatrixAt(nm++, _m4);
+      // A trail of smoke behind it.
+      if (GFX.smoke && Math.random() < 0.5 && R3.puffs.length < 150) R3.puffs.push({ x: _p.x - dx * 0.3, y: _p.z - dy * 0.3, h: _p.y, t0: performance.now(), big: false, seed: Math.random() * 6.28 });
+    } else if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
     else a.setMatrixAt(na++, _m4);
   }
-  a.count = na; st.count = ns;
+  a.count = na; st.count = ns; ms.count = nm;
+  ms.instanceMatrix.needsUpdate = true;
   a.instanceMatrix.needsUpdate = true;
   st.instanceMatrix.needsUpdate = true;
 }
@@ -2102,7 +2166,7 @@ function updateSmoke() {
   for (const o of R3.objs.values()) {
     if (!isBld(o.kind) || o.body.scale.y < 1 || list.length >= SMOKE_MAX) continue;
     const ch = CHIMNEYS[o.kind], p = o.root.position;
-    if (ch && (stat(o.kind, 10) < 0 || o.residents > 0)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
+    if (ch && (stat(o.kind, 10) < 0 || o.residents > 0) && (!o.campfire || o.campfire.visible)) list.push([p.x + ch[0], p.y + ch[1], p.z + ch[2], 1]);
     if (o.lastHp < 0.5 && o.kind !== K.Farm && list.length < SMOKE_MAX) list.push([p.x - 0.2, p.y + o.height * 0.6, p.z + 0.1, 2]);
   }
   setSmokeEmitters(list);
