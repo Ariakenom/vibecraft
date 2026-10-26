@@ -7,6 +7,9 @@ pub const MAP_W: i32 = 120;
 pub const MAP_H: i32 = 120;
 /// How far apart a base's deposits are, against the first maps (80 tiles).
 const SPREAD: f32 = 1.5;
+/// Free tiles kept between the edges of two clusters of different kinds, so
+/// a building fits next to each.
+const CLUSTER_GAP: f32 = 4.0;
 /// Tiles of sea along every edge of the map.
 const COAST: i32 = 3;
 
@@ -303,19 +306,39 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             })
         })
     };
-    let on_land = |terrain: &[u8], cx: i32, cy: i32, r: f32| -> (i32, i32) {
-        for ring in 0..=10 {
+    // Room between clusters (playtest: clay right up against the sheep hills,
+    // no space to put a building between them): no deposit of another kind
+    // within `CLUSTER_GAP` tiles of a cluster's edge. Trees don't count;
+    // they are cleared around a cluster anyway.
+    let roomy = |feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| {
+        let ri = (r + CLUSTER_GAP).ceil() as i32;
+        (-ri..=ri).all(|dy| {
+            (-ri..=ri).all(|dx| {
+                let (x, y) = (cx + dx, cy + dy);
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                d > r + CLUSTER_GAP || !(x >= 0 && y >= 0 && x < w && y < h) || matches!(feat[(y * w + x) as usize], Feat::None | Feat::Tree) || feat[(y * w + x) as usize] == f
+            })
+        })
+    };
+    // The nearest dry spot with room around it; failing that, the nearest
+    // dry spot; failing that, where it was meant to go.
+    let on_land = |terrain: &[u8], feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| -> (i32, i32) {
+        let mut dry_only = None;
+        for ring in 0..=14 {
             for k in 0..(8 * ring).max(1) {
                 let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
                 if dry(terrain, cx + dx, cy + dy, r) {
-                    return (cx + dx, cy + dy);
+                    if roomy(feat, cx + dx, cy + dy, r, f) {
+                        return (cx + dx, cy + dy);
+                    }
+                    dry_only.get_or_insert((cx + dx, cy + dy));
                 }
             }
         }
-        (cx, cy)
+        dry_only.unwrap_or((cx, cy))
     };
     let mut place = |cx: i32, cy: i32, f: Feat, r: f32| {
-        let (cx, cy) = on_land(&terrain, cx, cy, r);
+        let (cx, cy) = on_land(&terrain, &feat, cx, cy, r, f);
         let ri = r.ceil() as i32 + 2;
         for dy in -ri..=ri {
             for dx in -ri..=ri {
@@ -489,5 +512,35 @@ mod tests {
         for seed in 0..40 {
             assert_eq!(islands(seed, 4) + islands(seed, 2), 0, "seed {seed}");
         }
+    }
+
+    /// Fewest free tiles between two deposits of different kinds (not trees).
+    fn tightest(seed: u32, players: usize) -> f32 {
+        let (_, deps, _) = generate(seed, players);
+        let d: Vec<_> = deps.iter().filter(|d| d.kind != Dep::Forest).collect();
+        let mut best = f32::MAX;
+        for (i, a) in d.iter().enumerate() {
+            for b in &d[i + 1..] {
+                if a.kind != b.kind {
+                    let (dx, dy) = ((a.tx - b.tx) as f32, (a.ty - b.ty) as f32);
+                    best = best.min((dx * dx + dy * dy).sqrt());
+                }
+            }
+        }
+        best
+    }
+
+    /// Playtest: clay right next to the sheep hills. Different deposits keep
+    /// room for a building between them.
+    #[test]
+    fn deposits_keep_their_distance() {
+        let mut worst = f32::MAX;
+        for seed in 0..40 {
+            for players in [2, 4] {
+                worst = worst.min(tightest(seed, players));
+            }
+        }
+        println!("closest two different deposits: {worst:.1} tiles");
+        assert!(worst >= 4.0, "two kinds of deposit only {worst:.1} tiles apart");
     }
 }

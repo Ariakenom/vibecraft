@@ -19,6 +19,9 @@ pub const MAX_PLAYERS: usize = 4;
 /// Capitol's `CAPITOL_BEDS` fill with newcomers over the first half
 /// minute), and no houses.
 const START_WORKERS: usize = 0;
+/// Seconds until the first newcomer turns up (playtest: 10 was too long to
+/// stand around). The next ones follow at `growth_interval`.
+const FIRST_ARRIVAL: f32 = 2.0;
 const CELL: i32 = 4; // spatial-hash cell size in tiles
 
 /// What a unit is currently trying to do. Enums with data are one of Rust's
@@ -360,7 +363,7 @@ impl Player {
             supply: [0; N_RES],
             used: [0; N_RES],
             supply_pct,
-            arrive_timer: growth_interval(0),
+            arrive_timer: FIRST_ARRIVAL,
             era: 0,
             housed: [0; N_RES],
             beds: 0,

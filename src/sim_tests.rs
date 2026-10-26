@@ -18,6 +18,9 @@ pub fn town(seed: u32, difficulty: u32, players: u8) -> Game {
         for _ in 0..8 {
             g.spawn_worker(p, None);
         }
+        // A settled town: no newcomer in the first seconds (the 2 s welcome
+        // is for a game's very start).
+        g.players[p as usize].arrive_timer = growth_interval(0);
     }
     g.resolve();
     g
@@ -1209,4 +1212,17 @@ fn the_lowest_houses_fill_first_so_they_can_grow() {
     assert!(g.players[1].people < hut.beds() as u32 + cottage.beds() as u32, "not enough people for both");
     assert_eq!(hut.residents, hut.beds(), "the hut is full first, though it's further away");
     assert!(cottage.residents < cottage.beds());
+}
+
+/// Playtest: ten seconds of standing around before the first worker was too long.
+#[test]
+fn the_first_worker_comes_within_two_seconds() {
+    let mut g = Game::new(9, 1, 2);
+    for p in 1..=2 {
+        g.set_ai(p, false);
+    }
+    run(&mut g, 1.8);
+    assert_eq!(g.players[1].people, 0, "not yet");
+    run(&mut g, 0.4);
+    assert_eq!(g.players[1].people, 1, "one worker after about two seconds");
 }

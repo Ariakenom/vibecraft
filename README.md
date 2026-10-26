@@ -512,11 +512,11 @@ versions don't play together.
 - **Winning:** destroy every rival Capitol. From the Medieval era a player
   can found as many as they like (8 wood, 8 stone, 6 brick, 4 builders; the
   first holds nothing). Losing one costs only that one; lose the last (a
-  foundation doesn't count) and you're out. The campfire burns at your
-  oldest Capitol.
+  foundation doesn't count) and you're out. The town square, with its
+  statue, lies in front of your oldest Capitol.
 - **The start:** a Capitol (2 wood, 1 stone, 1 grain and 1 fruit by itself,
-  and 4 beds), nobody and no houses. Four newcomers arrive at the campfire
-  over the first half minute to fill the Capitol's beds: they build the
+  and 4 beds), nobody and no houses. Four newcomers arrive in the town square
+  (the first after 2 seconds, then every 10) to fill the Capitol's beds: they build the
   first lumber camp, and the first hut from the Capitol's wood and food. (There was a
   Wonder victory; it was removed in October 2026.)
 - **Seven of a kind, as a target.** The numbers are tuned so a town
@@ -538,8 +538,8 @@ versions don't play together.
 - **People are workers you can see.** A hut gets 2 beds for each
   different food it receives (up to 3 kinds); bigger houses get 3 for each
   good past the third (a tower block with 13 goods has 36). While there's a free bed, a
-  newcomer appears at the campfire in front of the Capitol (faster as the
-  town grows). Workers idle in the campfire circle are free; they walk off
+  newcomer appears in the town square in front of the Capitol (faster as the
+  town grows). Workers idle in the town square are free; they walk off
   by themselves to build foundations, work producers and become soldiers.
   A producer works only while its workers stand at it, so raids that kill
   them hurt. Move its workers away to pause it.
@@ -608,7 +608,7 @@ versions don't play together.
 - **Builders** walk to a foundation and build it while they stand there; it
   shows up only once the first of them gets there (until then its owner sees
   a mark on the ground). As many come as will work there, and when it's
-  done they become its crew at once; the rest go back to the campfire. A lumber camp takes one
+  done they become its crew at once; the rest go back to the town square. A lumber camp takes one
   worker. The Capitol shows how soon the next newcomer comes, and the cap
   (beds).
 
@@ -631,7 +631,7 @@ versions don't play together.
   gets a key).
 - **Other keys:**
   - Z attack-move (every unit, workers too), X stop
-  - H home, `.` free workers (at the campfire)
+  - H home, `.` free workers (in the town square)
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, 1–9 recall it
   - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
