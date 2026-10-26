@@ -1417,10 +1417,17 @@ window.addEventListener("keydown", e => {
   if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
-    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+N: the selection becomes group N.
       e.preventDefault();
       groups[g] = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
       toast(`Group ${g} set`);
+    } else if (e.shiftKey) {
+      // Shift+N: add the selection to group N (no one twice).
+      e.preventDefault();
+      const mine = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
+      groups[g] = [...new Set([...(groups[g] || []), ...mine])];
+      toast(`Added to group ${g}`);
     } else if (groups[g]) {
       const now = performance.now();
       if (groups._last === g && now - groups._t < 400) focusSelection();
