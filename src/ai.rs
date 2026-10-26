@@ -320,8 +320,15 @@ impl Game {
         }
         // The plan: the first project that isn't impossible.
         let mut next = None;
+        // A house waiting on materials the soldiers' buildings hold: those
+        // second barracks and towers aren't rebuilt as fast as `ai_free_up`
+        // tears them down.
+        let hold = self.upgrade_short(me).is_some();
         for (kind, n) in PLAN {
             if c.have[kind as usize] >= n || !self.unlocked(me, kind) {
+                continue;
+            }
+            if hold && (kind == Kind::Tower || (n >= 2 && matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable))) {
                 continue;
             }
             let step = if acted { Step::Waiting } else { self.ai_project(kind, c, false) };
@@ -367,6 +374,13 @@ impl Game {
                     let step = self.ai_project(k, c, true);
                     if step != Step::Blocked {
                         return step;
+                    }
+                    // The producer itself is short (a Brickworks needs
+                    // wood and stone, and the soldiers hold them): make room.
+                    if let Some(q) = self.ai_short_of(c.me, k) {
+                        if self.ai_free_up(c.me, q) {
+                            return Step::Started;
+                        }
                     }
                 }
                 None => {}
@@ -452,7 +466,17 @@ impl Game {
                 Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop => g.count_of(me, e.kind) > 1 && e.queue.is_empty(),
                 Kind::Tower => true,
                 Kind::Hut => houses > HOUSES_FOR_ERA,
-                _ => false,
+                // A food or cloth producer nobody is eating from holds
+                // slots a house upgrade needs. Never the raw materials.
+                k => {
+                    let st = k.stats();
+                    e.crewed
+                        && e.built >= 1.0
+                        && st.workers > 0
+                        && (!matches!(k, Kind::Sawmill | Kind::Brickworks) || g.count_of(me, k) > 2)
+                        && !matches!(k, Kind::Quarry | Kind::LumberCamp | Kind::Kiln | Kind::IronMine | Kind::Stoneworks | Kind::Farm)
+                        && st.produces.iter().all(|&(q, n)| g.players[me as usize].spare(q) >= n as i32)
+                }
             }
         };
         let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id) else { return false };
