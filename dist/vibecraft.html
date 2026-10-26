@@ -2441,6 +2441,15 @@ function initRenderer() {
   R3.missiles = new THREE.InstancedMesh(mg, withFow(new THREE.MeshLambertMaterial({ color: "#f2f1ea", emissive: "#3a3020" })), 32);
   R3.missiles.frustumCulled = false;
   scene.add(R3.missiles);
+  // Rockets from rocket artillery: an olive body, a red nose, fins and a
+  // burning tail, nose first along +x like the arrows.
+  const rk = new Model();
+  rk.add(cyl(0.045, 0.045, 0.42, 8), "#6b6f52", 0, 0, 0).add(cone(0.045, 0.12, 8), "#b23a2a", 0, 0.27, 0);
+  for (let k = 0; k < 4; k++) rk.add(box(0.012, 0.1, 0.09).rotateY(k * Math.PI / 2), "#3e4146", Math.cos(k * Math.PI / 2) * 0.04, -0.17, Math.sin(k * Math.PI / 2) * 0.04);
+  rk.add(cone(0.035, 0.16, 8).rotateX(Math.PI), "#ffb347", 0, -0.29, 0);
+  R3.rockets = new THREE.InstancedMesh(rk.build().rotateZ(-Math.PI / 2), withFow(new THREE.MeshLambertMaterial({ vertexColors: true, emissive: "#2a1a08" })), 64);
+  R3.rockets.frustumCulled = false;
+  scene.add(R3.rockets);
   // Powder smoke: white puffs that swell, drift up and shrink away.
   R3.puffMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial({ color: "#e8e6e0" })), 192);
   R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
@@ -3329,7 +3338,7 @@ function render3d(alpha, now, dt) {
   updateSmoke();
   updateCampfires(performance.now());
   updatePuffs(performance.now());
-  updateNukes(performance.now());
+  updateNukes(performance.now(), alpha);
   updateAimRings();
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
@@ -3343,6 +3352,8 @@ function render3d(alpha, now, dt) {
 // ring where it will fall, for everyone. When it lands (`nukeFlash`): a white
 // flash over the screen, a fireball that swells and fades, a column of smoke.
 // Craters: dark scorched discs, from the game's list, so saved games show them.
+// Seconds per game tick, and a nuke's flight (defs.rs `NUKE_FLIGHT`).
+const TICK_S = 0.05, NUKE_FLIGHT_S = 20;
 function nukeMeshes() {
   if (R3.nukeMesh) return;
   const m = new Model();
@@ -3354,7 +3365,7 @@ function nukeMeshes() {
   R3.craterMeshes = [];
   R3.fireballs = [];
 }
-function updateNukes(now) {
+function updateNukes(now, alpha = 0) {
   if (!R3.scene || !W) return;
   nukeMeshes();
   const n = W.nuke_count();
@@ -3368,8 +3379,13 @@ function updateNukes(now) {
     const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k];
     mesh.visible = ring.visible = k < n;
     if (k >= n) continue;
-    const tx = W.nuke_info(k, 0), ty = W.nuke_info(k, 1), sx = W.nuke_info(k, 2), sy = W.nuke_info(k, 3), p = W.nuke_info(k, 4);
-    const H = 10, at = q => [sx + (tx - sx) * q, sy + (ty - sy) * q, groundAt(sx + (tx - sx) * q, sy + (ty - sy) * q) + 4 * H * q * (1 - q)];
+    const tx = W.nuke_info(k, 0), ty = W.nuke_info(k, 1), sx = W.nuke_info(k, 2), sy = W.nuke_info(k, 3);
+    // Smooth between ticks (the game moves it 20 times a second), and fly
+    // over a straight line from the silo's ground to the target's: following
+    // the ground under it made it shake over every hill.
+    const p = Math.max(0, W.nuke_info(k, 4) - (1 - alpha) * TICK_S / NUKE_FLIGHT_S);
+    const g0 = groundAt(sx, sy), g1 = groundAt(tx, ty);
+    const H = 10, at = q => [sx + (tx - sx) * q, sy + (ty - sy) * q, g0 + (g1 - g0) * q + 4 * H * q * (1 - q)];
     const [x, y, h] = at(p), [x2, y2, h2] = at(Math.min(1, p + 0.01));
     mesh.position.set(x, h, y);
     // Point it along its flight.
@@ -3570,8 +3586,8 @@ function updateResources() {
 // are worked out here from how far along the way they are.
 const _e = new THREE.Euler();
 function updateArrows(alpha) {
-  const a = R3.arrows, st = R3.stones, ms = R3.missiles, S = PROJ_STRIDE;
-  let na = 0, ns = 0, nm = 0;
+  const a = R3.arrows, st = R3.stones, ms = R3.missiles, rk = R3.rockets, S = PROJ_STRIDE;
+  let na = 0, ns = 0, nm = 0, nr = 0;
   for (let i = 0; i < Math.min(projCount, 256); i++) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
@@ -3582,10 +3598,11 @@ function updateArrows(alpha) {
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
-    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank || shooter === K.RocketArtillery;
+    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank;
+    const rocket = shooter === K.RocketArtillery;
     if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet) continue; // bullets are too small to see
     const missile = shooter === K.AirDefense;
-    const fromH = missile ? 0.7 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
+    const fromH = missile ? 0.7 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
     const toH = missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
@@ -3593,23 +3610,28 @@ function updateArrows(alpha) {
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = missile ? total * 0.25 : shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
+    const arc = missile ? total * 0.25 : rocket ? total * 0.22 : shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
     const pitch = Math.atan2((h1 - h0) / total + arc * 4 * (1 - 2 * t) / total, 1);
     _q.setFromEuler(_e.set(0, -Math.atan2(dy, dx), pitch, "YZX"));
-    _s.setScalar(1);
+    _s.setScalar(rocket ? 1.3 : 1);
     _m4.compose(_p, _q, _s);
     if (missile) {
       if (nm < 32) ms.setMatrixAt(nm++, _m4);
       // A trail of smoke behind it.
       if (GFX.smoke && Math.random() < 0.5 && R3.puffs.length < 150) R3.puffs.push({ x: _p.x - dx * 0.3, y: _p.z - dy * 0.3, h: _p.y, t0: performance.now(), big: false, seed: Math.random() * 6.28 });
+    } else if (rocket) {
+      if (nr < 64) rk.setMatrixAt(nr++, _m4);
+      // Smoke behind it: a rocket's trail is thicker than a missile's.
+      if (GFX.smoke && Math.random() < 0.7 && R3.puffs.length < 150) R3.puffs.push({ x: _p.x - dx * 0.35, y: _p.z - dy * 0.35, h: _p.y, t0: performance.now(), big: false, seed: Math.random() * 6.28 });
     } else if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
     else a.setMatrixAt(na++, _m4);
   }
-  a.count = na; st.count = ns; ms.count = nm;
+  a.count = na; st.count = ns; ms.count = nm; rk.count = nr;
   ms.instanceMatrix.needsUpdate = true;
+  rk.instanceMatrix.needsUpdate = true;
   a.instanceMatrix.needsUpdate = true;
   st.instanceMatrix.needsUpdate = true;
 }
@@ -4093,7 +4115,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "870a7a31a6e9", "base": "fcfeb47659"};
+const BUILD_INFO = {"sim": "870a7a31a6e9", "base": "ba5334f8b9"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
