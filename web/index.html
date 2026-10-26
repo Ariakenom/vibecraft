@@ -114,6 +114,14 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .queue button { width: 34px; height: 34px; padding: 0; background: #2a2219; border: 1px solid var(--line); border-radius: 2px; cursor: pointer; }
 .queue button:hover { border-color: var(--bad); }
 .queue canvas { width: 32px; height: 32px; display: block; }
+.trainlist { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.trainrow { display: flex; align-items: center; gap: 6px; }
+.trainrow .who { width: 28px; height: 28px; flex: none; opacity: .85; }
+.trainrow .queue button { position: relative; width: 30px; height: 30px; }
+.trainrow .queue canvas { width: 28px; height: 28px; }
+.trainrow .queue i { position: absolute; left: 2px; right: 2px; bottom: 2px; height: 3px; background: #0009; }
+.trainrow .queue i b { display: block; height: 100%; background: var(--bronze); }
+.trainrow .idle { color: var(--dim, #8d8068); font-size: 11px; }
 .multi { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; }
 .multi button { position: relative; width: 38px; height: 38px; padding: 0; background: #2a2219; border: 1px solid var(--line); border-radius: 2px; cursor: pointer; }
 .multi button:hover { border-color: var(--bronze); }

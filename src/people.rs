@@ -390,6 +390,10 @@ impl Game {
         if era >= LAST_ERA {
             return;
         }
+        // An Easy computer player doesn't hurry: no era before its time.
+        if self.ais.get(owner as usize).is_some_and(|a| a.on && a.difficulty == 0) && self.time < EASY_ERA_AT[era as usize] {
+            return;
+        }
         if self.houses_past_era(owner) >= HOUSES_FOR_ERA {
             self.players[owner as usize].era = era + 1;
             self.push_event(Ev::EraReached, 0.0, 0.0, (owner as u32 * 16 + era as u32 + 1) as f32);
