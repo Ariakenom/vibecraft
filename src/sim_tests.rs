@@ -496,6 +496,24 @@ fn ais_get_brickworks_and_sawmills() {
     assert!(both >= 5, "only {both} of {n} computer players had a Brickworks and a Sawmill after 20 minutes");
 }
 
+/// With nobody to fight, the computer's economy has to keep climbing: it
+/// used to freeze in the Medieval era with every wood and stone slot held
+/// (the first town stuck at 55 people), and now makes its houses Tenements
+/// within half an hour. `ai_peace` measures it over twelve maps.
+#[test]
+fn a_peaceful_ai_keeps_climbing_the_eras() {
+    let mut g = Game::new(3, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, 30.0 * 60.0);
+    for p in 1..=2usize {
+        assert!(g.players[p].era >= 2, "P{p} stopped in era {}: {}", g.players[p].era, census(&g, p as u8));
+        assert!(g.players[p].people >= 150, "P{p} has only {} people", g.players[p].people);
+    }
+}
+
 #[test]
 #[ignore]
 fn watch_the_ai() {
@@ -1291,4 +1309,52 @@ fn a_newcomer_waits_in_the_square() {
     let (x, y) = (g.ents[w].x, g.ents[w].y);
     assert!(!(x >= tx && x < tx + 3.0 && y >= ty && y < ty + 3.0), "({x}, {y}) is inside the Capitol");
     assert!(g.is_free_worker(&g.ents[w]), "and waits in the town square");
+}
+
+#[test]
+#[ignore]
+fn diag_timeline() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let mut g = Game::new(env("VC_SEED", 4), 1, 2);
+    g.set_ai(1, true);
+    if env("VC_PEACE", 1) == 1 {
+        for a in g.ais.iter_mut() { a.next_attack = 1.0e9; }
+    }
+    let me = env("VC_P", 1) as u8;
+    for m in 1..=env("VC_MINUTES", 60) {
+        run(&mut g, 60.0);
+        if m % env("VC_EVERY", 3) != 0 { continue; }
+        let p = &g.players[me as usize];
+        let mut by: std::collections::BTreeMap<String, u32> = Default::default();
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some()) {
+            *by.entry(format!("{:?}", e.kind)).or_default() += 1;
+        }
+        println!("{m:2}m era {} people {} soldiers {} state {} houses {by:?} short {:?} free w{} s{} b{}", p.era, p.people, p.soldiers, g.state, g.upgrade_short(me), p.free(Res::Wood), p.free(Res::Stone), p.free(Res::Brick));
+    }
+    println!("{}", census(&g, me));
+}
+
+/// How far the computer's economy gets when nobody attacks it: the era of
+/// every player after VC_MINUTES (40), over 12 maps. For comparing changes
+/// to the AI: `cargo test --release ai_peace -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn ai_peace() {
+    let minutes: f32 = std::env::var("VC_MINUTES").ok().and_then(|v| v.parse().ok()).unwrap_or(40.0);
+    let mut eras = [0u32; 8];
+    let mut people = 0;
+    for seed in 1..=12 {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        run(&mut g, minutes * 60.0);
+        let (a, b) = (&g.players[1], &g.players[2]);
+        eras[a.era as usize] += 1;
+        eras[b.era as usize] += 1;
+        people += a.people + b.people;
+        println!("seed {seed:2}: eras {} {} people {} {}", a.era, b.era, a.people, b.people);
+    }
+    println!("players per era {eras:?}, {} people on average, era sum {}", people / 24, eras.iter().enumerate().map(|(e, n)| e as u32 * n).sum::<u32>());
 }

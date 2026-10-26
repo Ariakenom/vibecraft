@@ -15,6 +15,7 @@
 //! - **fighting**: defend home, then attack in waves that grow.
 
 use crate::defs::*;
+use crate::econ;
 use crate::game::*;
 
 #[derive(Clone)]
@@ -67,6 +68,12 @@ const STYLES: [Style; 3] = [
 /// Free residents the AI keeps at home: one to crew the next food producer
 /// when the houses fill up, one more for whatever comes next.
 const KEEP_FREE: u32 = 2;
+/// Wood and stone left free after a tower or a second barracks.
+const LUXURY_RESERVE: i32 = 4;
+/// Wood and stone the army leaves free for house upgrades while the town grows.
+const HOUSE_RESERVE: i32 = 4;
+/// Supply the computer keeps ahead of use in wood, stone and brick.
+const RAW_MARGIN: i32 = 6;
 
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
@@ -160,6 +167,9 @@ struct Census {
     unfinished: Vec<u32>,
     /// Tiles a worker can walk to from the campfire.
     reach: Vec<bool>,
+    /// Build past the town's target for a kind: the target's own goods
+    /// have nowhere to go (no free deposit), so the houses need others.
+    relax: bool,
 }
 
 /// How a build project went.
@@ -180,6 +190,19 @@ fn producer_of(r: Res) -> Option<Kind> {
 
 /// The house goods a player of `era` can make: food in the Ancient era;
 /// bread, clothes and beer join them in the Medieval.
+/// What the town of a player in `era` is working toward: the fewest
+/// buildings (`econ.rs`) for the next era's houses, or for the silo once
+/// they are in the last one. The computer builds no more of a kind than this
+/// needs (one over, for slack) and lets go of what it no longer needs.
+fn target(era: u8) -> &'static econ::Plan {
+    static PLANS: std::sync::OnceLock<Vec<econ::Plan>> = std::sync::OnceLock::new();
+    &PLANS.get_or_init(|| (1..=5).map(econ::era_plan).chain(std::iter::once(econ::silo_plan())).collect())[era.min(5) as usize]
+}
+
+/// Kinds the computer keeps one of for its army, whatever the target says:
+/// iron for swordsmen, horses for riders.
+const ARMY_SUPPLY: [Kind; 2] = [Kind::IronMine, Kind::Pasture];
+
 fn house_goods(era: u8) -> Vec<Res> {
     Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && producer_of(*r).is_some_and(|k| k.era() <= era)).collect()
 }
@@ -187,17 +210,62 @@ fn house_goods(era: u8) -> Vec<Res> {
 // A second `impl Game` block, in a different file. Rust lets you split a
 // type's methods across modules, which keeps the AI code out of game.rs.
 impl Game {
+    /// The most of `kind` this player's town needs now: what `target` has,
+    /// plus one, and never past `MAX_SAME`. Houses and fields have no limit,
+    /// nor do the soldiers' buildings (the plan and a reserve keep those).
+    fn ai_max(&self, me: u8, kind: Kind) -> usize {
+        let mut hard = Self::max_of(kind);
+        // A dozen houses are all the next era asks for; more huts only hold
+        // the wood the upgrades are waiting for.
+        if kind == Kind::Hut {
+            let houses = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.house_tier().is_some()).count();
+            return if houses < HOUSES_FOR_ERA as usize + 2 { usize::MAX } else { 0 };
+        }
+        // Fields are unlimited for a player; the computer keeps to what the
+        // target needs (and a few spare), or its farms hold all the wood.
+        if kind == Kind::Farm {
+            hard = target(self.players[me as usize].era).count(kind) as usize + 3;
+        }
+        // The Kiln makes three Brickworks' worth: once it can be built, no
+        // more of the old ones (they would take the stone it waits for).
+        if kind == Kind::Brickworks && self.unlocked(me, Kind::Kiln) {
+            return 2;
+        }
+        // Wood, stone and brick pay for everything, the army included: as
+        // many as it takes for the supply to stay `RAW_MARGIN` ahead of use.
+        if matches!(kind, Kind::LumberCamp | Kind::Quarry | Kind::Sawmill | Kind::Stoneworks | Kind::Brickworks | Kind::Kiln) {
+            let Some(&(res, out)) = kind.stats().produces.first() else { return hard };
+            let pl = &self.players[me as usize];
+            let built = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind && e.built >= 1.0).count() as i32;
+            let others = pl.supply[res.idx()] as i32 - built * out as i32;
+            let need = pl.used[res.idx()] as i32 + RAW_MARGIN - others;
+            return hard.min((need.max(0) as usize).div_ceil(out as usize));
+        }
+        if kind == Kind::Farm || hard == usize::MAX || matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Tower) {
+            return hard;
+        }
+        let want = target(self.players[me as usize].era).count(kind) as usize;
+        let army = ARMY_SUPPLY.contains(&kind) as usize;
+        let wide = if want > 0 { want + 1 } else { 0 };
+        hard.min(wide.max(army))
+    }
+
     /// The producer to build for more of `r`: of those `me` may build now
     /// (unlocked, and not at `MAX_SAME` yet), the one that makes the most
     /// among those it can afford right away, else the one that makes the
     /// most (and then its own needs come first).
     fn ai_producer(&self, me: u8, r: Res) -> Option<Kind> {
+        self.ai_producer_ex(me, r, &[])
+    }
+
+    /// `ai_producer`, leaving out the kinds in `skip`.
+    fn ai_producer_ex(&self, me: u8, r: Res, skip: &[Kind]) -> Option<Kind> {
         let makes = |k: Kind| k.stats().produces.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
-        let ok = |k: Kind| makes(k) > 0 && k != Kind::Capitol && self.unlocked(me, k) && self.count_of(me, k) < Self::max_of(k);
+        let ok = |k: Kind| makes(k) > 0 && k != Kind::Capitol && !skip.contains(&k) && self.unlocked(me, k) && self.count_of(me, k) < self.ai_max(me, k);
         let best = |pool: &mut dyn Iterator<Item = Kind>| pool.max_by_key(|&k| (makes(k), k as u32));
         best(&mut Kind::BUILDABLE.into_iter().filter(|&k| ok(k) && self.ai_short_of(me, k).is_none()))
             .or_else(|| best(&mut Kind::BUILDABLE.into_iter().filter(|&k| ok(k))))
-            .or_else(|| producer_of(r))
+            .or_else(|| producer_of(r).filter(|k| !skip.contains(k)))
     }
 
     pub fn ai_think(&mut self, me: u8) {
@@ -320,16 +388,17 @@ impl Game {
         }
         // The plan: the first project that isn't impossible.
         let mut next = None;
-        // A house waiting on materials the soldiers' buildings hold: those
-        // second barracks and towers aren't rebuilt as fast as `ai_free_up`
-        // tears them down.
-        let hold = self.upgrade_short(me).is_some();
         for (kind, n) in PLAN {
             if c.have[kind as usize] >= n || !self.unlocked(me, kind) {
                 continue;
             }
-            if hold && (kind == Kind::Tower || (n >= 2 && matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable))) {
-                continue;
+            // Soldiers' buildings only from a surplus: what `ai_free_up`
+            // tears down for a house must not be rebuilt before the house
+            // has used the room.
+            if matches!(kind, Kind::Tower | Kind::Range | Kind::Stable | Kind::SiegeWorkshop) || (n >= 2 && matches!(kind, Kind::Barracks | Kind::Capitol)) {
+                if kind.stats().cost.iter().any(|&(r, k)| p.free(r) < k as i32 + LUXURY_RESERVE) {
+                    continue;
+                }
             }
             let step = if acted { Step::Waiting } else { self.ai_project(kind, c, false) };
             if step == Step::Started {
@@ -363,30 +432,34 @@ impl Game {
         let p = self.players[c.me as usize];
         // A house ready to grow a tier but for its materials: make them.
         if let Some(r) = self.upgrade_short(c.me) {
-            match self.ai_producer(c.me, r) {
-                // Every producer of it at the limit: make room for it.
-                Some(k) if self.count_of(c.me, k) >= Self::max_of(k) => {
-                    if self.ai_free_up(c.me, r) {
+            // Every way of making it, the best first: one may have nowhere
+            // to stand (no free clay), another want a slot it can free.
+            let mut tried: Vec<Kind> = Vec::new();
+            for _ in 0..3 {
+                let Some(k) = self.ai_producer_ex(c.me, r, &tried) else { break };
+                tried.push(k);
+                if self.count_of(c.me, k) >= self.ai_max(c.me, k) {
+                    continue;
+                }
+                let step = self.ai_project(k, c, true);
+                if step != Step::Blocked {
+                    return step;
+                }
+                // The producer itself is short (a Kiln needs stone, and
+                // the old brickworks hold it): make room.
+                if let Some(q) = self.ai_short_of(c.me, k) {
+                    if self.ai_free_up(c.me, q) {
                         return Step::Started;
                     }
                 }
-                Some(k) => {
-                    let step = self.ai_project(k, c, true);
-                    if step != Step::Blocked {
-                        return step;
-                    }
-                    // The producer itself is short (a Brickworks needs
-                    // wood and stone, and the soldiers hold them): make room.
-                    if let Some(q) = self.ai_short_of(c.me, k) {
-                        if self.ai_free_up(c.me, q) {
-                            return Step::Started;
-                        }
-                    }
-                }
-                None => {}
+            }
+            // Nothing could be built: make room for the material itself.
+            if self.ai_free_up(c.me, r) {
+                return Step::Started;
             }
         }
-        let goods = house_goods(p.era);
+        let all = house_goods(p.era);
+        let goods: Vec<Res> = target(p.era).goods.iter().copied().filter(|r| all.contains(r)).collect();
         let lacking = self.ents.iter().any(|e| {
             e.alive && e.owner == c.me && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| (e.goods.count_ones() as usize) < (house_max_goods(t) as usize).min(goods.len()))
         });
@@ -409,6 +482,20 @@ impl Game {
                 return step;
             }
         }
+        // The target's goods have nowhere to go: any other the houses can use.
+        c.relax = true;
+        let mut others = all.clone();
+        others.retain(|r| !goods.contains(r));
+        others.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
+        for r in others {
+            let Some(k) = producer_of(r).filter(|&k| self.unlocked(c.me, k) && self.count_of(c.me, k) < Self::max_of(k)) else { continue };
+            let step = self.ai_project(k, c, true);
+            if step != Step::Blocked {
+                c.relax = false;
+                return step;
+            }
+        }
+        c.relax = false;
         if !hut_first && goods.iter().any(|&r| p.spare(r) > 0) {
             return self.ai_project(Kind::Hut, c, true);
         }
@@ -416,7 +503,7 @@ impl Game {
     }
 
     /// The material a house that's ready to grow a tier is waiting for.
-    fn upgrade_short(&self, me: u8) -> Option<Res> {
+    pub(crate) fn upgrade_short(&self, me: u8) -> Option<Res> {
         let p = &self.players[me as usize];
         self.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0).find_map(|e| {
             let (tier, next) = (e.kind.house_tier()?, e.kind.upgrade()?);
@@ -457,15 +544,19 @@ impl Game {
     /// houses the next era needs. Returns whether it did.
     fn ai_free_up(&mut self, me: u8, r: Res) -> bool {
         let holds = |k: Kind| k.stats().cost.iter().any(|&(q, _)| q == r);
-        let houses = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.house_tier().is_some()).count() as u32;
         let spare = |g: &Game, e: &Entity| {
             if !e.alive || e.owner != me || !e.is_building() || !holds(e.kind) || e.kind == Kind::Capitol {
                 return false;
             }
             match e.kind {
-                Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop => g.count_of(me, e.kind) > 1 && e.queue.is_empty(),
+                Kind::Barracks => g.count_of(me, e.kind) > 1 && e.queue.is_empty(),
+                // Luxuries when a house upgrade has waited for stone: the
+                // plan doesn't rebuild them meanwhile (see `hold`).
+                Kind::Range | Kind::Stable | Kind::SiegeWorkshop => e.queue.is_empty(),
                 Kind::Tower => true,
-                Kind::Hut => houses > HOUSES_FOR_ERA,
+                // The Kiln (4 stone) makes three times a Brickworks' bricks,
+                // and the old ones hold the stone it is waiting for.
+                Kind::Brickworks => g.unlocked(me, Kind::Kiln) && g.count_of(me, Kind::Kiln) == 0 && g.count_of(me, Kind::Brickworks) > 1,
                 // A food or cloth producer nobody is eating from holds
                 // slots a house upgrade needs. Never the raw materials.
                 k => {
@@ -473,8 +564,7 @@ impl Game {
                     e.crewed
                         && e.built >= 1.0
                         && st.workers > 0
-                        && (!matches!(k, Kind::Sawmill | Kind::Brickworks) || g.count_of(me, k) > 2)
-                        && !matches!(k, Kind::Quarry | Kind::LumberCamp | Kind::Kiln | Kind::IronMine | Kind::Stoneworks | Kind::Farm)
+                        && (g.count_of(me, k) > g.ai_max(me, k) || (!matches!(k, Kind::Sawmill | Kind::Brickworks) || g.count_of(me, k) > 2) && !matches!(k, Kind::Quarry | Kind::LumberCamp | Kind::Kiln | Kind::IronMine | Kind::Stoneworks | Kind::Farm))
                         && st.produces.iter().all(|&(q, n)| g.players[me as usize].spare(q) >= n as i32)
                 }
             }
@@ -509,6 +599,9 @@ impl Game {
     /// which may use the last of them.
     fn ai_project(&mut self, kind: Kind, c: &mut Census, for_beds: bool) -> Step {
         let me = c.me;
+        if !c.relax && self.count_of(me, kind) >= self.ai_max(me, kind) {
+            return Step::Blocked; // the town has all of these it needs
+        }
         let mut what = kind;
         let mut seen = vec![kind];
         for _ in 0..3 {
@@ -517,7 +610,7 @@ impl Game {
             // Every producer of it is at the limit, or the chain comes back
             // round (a sawmill needs stone, a quarry needs wood, the best
             // wood is a sawmill): make room instead.
-            if self.count_of(me, p) >= Self::max_of(p) || seen.contains(&p) {
+            if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) {
                 return if self.ai_free_up(me, short) { Step::Started } else { Step::Blocked };
             }
             if !self.unlocked(me, p) {
@@ -658,7 +751,13 @@ impl Game {
             if c.spare == 0 || (!behind && c.spare <= crew) || army as f32 >= people * style.army_share {
                 break;
             }
-            let spare = |r: Res| pl.free(r) - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32);
+            // While the town is still growing into its next era, its house
+            // upgrades come before more soldiers: they need wood and stone.
+            let growing = self.houses_past_era(me) < HOUSES_FOR_ERA && pl.era < LAST_ERA;
+            let spare = |r: Res| {
+                let house = if growing && matches!(r, Res::Wood | Res::Stone) { HOUSE_RESERVE } else { 0 };
+                pl.free(r) - house - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32)
+            };
             // The best unit it can train and afford: the latest era's.
             let affordable = |u: &Kind| u.era() <= pl.era && u.stats().cost.iter().all(|&(r, k)| spare(r) >= k as i32);
             let Some(unit) = self.ents[b as usize].kind.trains().iter().rev().copied().find(affordable) else { continue };
