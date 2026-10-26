@@ -914,6 +914,8 @@ function cmdButton(label, key, onClick, opts = {}) {
   b.className = "cbtn" + (opts.glyph ? " glyph" : "") + (opts.poor ? " poor" : "") + (opts.locked ? " locked" : "");
   if (opts.icon) b.append(opts.icon); else b.append(document.createTextNode(opts.glyph || ""));
   if (key) { const kb = document.createElement("kbd"); kb.textContent = key; b.append(kb); }
+  // What it makes: the resource icons in the corner.
+  if (opts.badge) { const bd = document.createElement("span"); bd.className = "badge"; bd.innerHTML = opts.badge; b.append(bd); }
   b.setAttribute("aria-label", label);
   b.onclick = onClick;
   b.onmouseenter = () => showTip(opts.tip || `<h4>${label}</h4>`);
@@ -940,14 +942,23 @@ function renderCommands(sel) {
   const add = (b, key, fn) => { box.append(b); if (key) cmdKeys[key.toLowerCase()] = fn; };
   const unitTip = k => {
     let h = `<h4>${NAMES[k]}</h4>${costHtml(k)}<p>${DESC[k] || ""}</p>`;
-    if (slotsOf(k, 1).length) h += `<p>Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span></p>`;
+    const makes = slotsOf(k, 1), takes = slotsOf(k, 2);
+    if (makes.length) h += `<p>Makes <span class="cost inline">${slotsHtml(makes, false)}</span></p>`;
+    if (takes.length) h += `<p>Takes <span class="cost inline">${slotsHtml(takes)}</span> to do it</p>`;
+    // Everything it needs before it works: workers, builders, a deposit, other buildings, an era.
+    const needs = [], workers = stat(k, 7), builders = stat(k, 9);
+    if (workers > 0) needs.push(`${workers} ${workers === 1 ? "worker" : "workers"} to run it`);
+    if (isBld(k) && builders > 1) needs.push(`${builders} builders to raise it`);
     const dep = W.kind_deposit(k);
-    if (dep >= 0) h += `<p>Build it next to ${DEP_NAMES[dep]}.</p>`;
-    if (W.kind_era(k) > W.era()) h += `<p class="short">Needs the ${ERA_NAMES[W.kind_era(k)]} era: ${W.era_progress(1)} ${HOUSE_NAMES[W.kind_era(k)].toLowerCase()}s (you have ${W.era_progress(0)}).</p>`;
-    const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
-    if (needs.length) h += `<p>Needs ${needs.map(q => `<span class="${W.has_built(q) ? "" : "short"}">${NAMES[q]}</span>`).join(" and ")}.</p>`;
+    if (dep >= 0) needs.push(`a spot next to ${DEP_NAMES[dep]}`);
+    for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(`<span class="${W.has_built(q) ? "" : "short"}">${NAMES[q]}</span>`);
+    if (W.kind_era(k) > W.era()) needs.push(`<span class="short">the ${ERA_NAMES[W.kind_era(k)]} era (${W.era_progress(1)} ${HOUSE_NAMES[W.kind_era(k)].toLowerCase()}s; you have ${W.era_progress(0)})</span>`);
+    if (needs.length) h += `<p>Needs ${needs.join(", ")}.</p>`;
     return h;
   };
+  // The resources a building makes, as small icons on its button (up to three:
+  // the Capitol makes four of the basics, which is too many to show).
+  const badgeOf = k => { const m = slotsOf(k, 1); return isBld(k) && m.length && m.length <= 3 ? m.map(([r]) => resIcon(r)).join("") : ""; };
 
   if (kinds.has(K.Worker) || kinds.has(K.Capitol)) {
     const pages = buildPages();
@@ -972,7 +983,7 @@ function renderCommands(sel) {
     for (const [k, key] of buildMenu()) {
       const fn = () => startPlacing(k);
       const locked = isBld(k) && !W.unlocked(k);
-      add(cmdButton(`Build ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), locked, tip: unitTip(k) }), key, fn);
+      add(cmdButton(`Build ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), badge: badgeOf(k), poor: !canAfford(k), locked, tip: unitTip(k) }), key, fn);
     }
   }
   const producers = mine.filter(i => TRAINS[E(i, F.kind)] && !(E(i, F.flags) & 2));
