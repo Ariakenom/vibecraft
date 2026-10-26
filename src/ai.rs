@@ -479,8 +479,27 @@ impl Game {
                 }
             }
         };
-        let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id) else { return false };
+        let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id).or_else(|| self.ai_disband_one(me, r)) else { return false };
         self.apply(me, Command::Demolish { ids: vec![id] }).is_ok()
+    }
+
+    /// Nothing left to tear down: let a soldier go. Soldiers hold wood,
+    /// iron and horses, and the town's next era is worth more than the
+    /// tenth swordsman. The one that holds most of `r`, never the last few,
+    /// and only one standing at home.
+    fn ai_disband_one(&self, me: u8, r: Res) -> Option<u32> {
+        const KEEP_SOLDIERS: u32 = 14;
+        if self.players[me as usize].soldiers <= KEEP_SOLDIERS {
+            return None;
+        }
+        let held = |k: Kind| k.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
+        let home = self.campfire(me)?;
+        self.ents
+            .iter()
+            .filter(|e| e.alive && e.owner == me && !e.is_building() && e.kind.is_military() && held(e.kind) > 0)
+            .filter(|e| ((e.x - home.0).powi(2) + (e.y - home.1).powi(2)).sqrt() < 30.0)
+            .max_by_key(|e| (held(e.kind), std::cmp::Reverse(e.id)))
+            .map(|e| e.id)
     }
 
     /// Build `kind`, or, if it's short of some resource, the producer of
