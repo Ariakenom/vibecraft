@@ -633,7 +633,7 @@ versions don't play together.
   - Z attack-move (every unit, workers too), X stop
   - H home, `.` free workers (in the town square)
   - Z on a producer: pause or resume it
-  - Ctrl+1–9 make a group, 1–9 recall it
+  - Ctrl+1–9 make a group, Shift+1–9 add the selection to it, 1–9 recall it (twice to centre the camera)
   - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, save a replay (any game, online too), copy a watch link for spectators, and
     (the host) give a computer's seat to a spectator

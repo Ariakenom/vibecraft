@@ -4081,7 +4081,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "6957f6839ff2", "base": "ead00fa3d3"};
+const BUILD_INFO = {"sim": "6957f6839ff2", "base": "1c17d6eb15"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -6422,10 +6422,17 @@ window.addEventListener("keydown", e => {
   if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
-    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+N: the selection becomes group N.
       e.preventDefault();
       groups[g] = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
       toast(`Group ${g} set`);
+    } else if (e.shiftKey) {
+      // Shift+N: add the selection to group N (no one twice).
+      e.preventDefault();
+      const mine = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
+      groups[g] = [...new Set([...(groups[g] || []), ...mine])];
+      toast(`Added to group ${g}`);
     } else if (groups[g]) {
       const now = performance.now();
       if (groups._last === g && now - groups._t < 400) focusSelection();
