@@ -71,7 +71,7 @@ const KEEP_FREE: u32 = 2;
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 60] = [
+const PLAN: [(Kind, u32); 61] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -80,6 +80,9 @@ const PLAN: [(Kind, u32); 60] = [
     (Kind::Tower, 1),
     (Kind::Quarry, 2),
     (Kind::Quarry, 3),
+    // A fourth, for slack: cottages eat every spare stone, and the Sawmill
+    // (2 stone) that gets the town out of its wood ceiling needs some.
+    (Kind::Quarry, 4),
     (Kind::FishingHut, 1),
     (Kind::HuntingLodge, 1),
     (Kind::Orchard, 1),
@@ -628,13 +631,25 @@ impl Game {
     fn ai_scout(&mut self, c: &mut Census) {
         let me = c.me;
         let (w, h) = (self.map.w as f32, self.map.h as f32);
-        // A round of the map, starting from the corner nearest home.
-        let mut legs = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)].map(|(fx, fy)| (fx * w, fy * h));
+        // First two rings round home, where a start's deposits lie (clay for
+        // brick, iron, sheep hills ... are 20 to 30 tiles out, past what the
+        // Capitol sees: playtest, the computer never found its clay, so it
+        // never made brick or a Sawmill and stood still in the Medieval era).
+        // Then a round of the map, starting from the corner nearest home.
+        let mut legs: Vec<(f32, f32)> = Vec::new();
+        for (radius, n) in [(24.0f32, 10), (33.0, 14)] {
+            for k in 0..n {
+                let a = k as f32 / n as f32 * std::f32::consts::TAU;
+                legs.push(((c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0), (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0)));
+            }
+        }
+        let mut round = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)].map(|(fx, fy)| (fx * w, fy * h));
         let first = (0..4).min_by(|&a, &b| {
-            let d = |i: usize| (legs[i].0 - c.home.0).powi(2) + (legs[i].1 - c.home.1).powi(2);
+            let d = |i: usize| (round[i].0 - c.home.0).powi(2) + (round[i].1 - c.home.1).powi(2);
             d(a).total_cmp(&d(b))
         });
-        legs.rotate_left(first.unwrap_or(0));
+        round.rotate_left(first.unwrap_or(0));
+        legs.extend(round);
         let ai = &self.ais[me as usize];
         let (scout, leg) = (ai.scout, ai.scout_leg as usize);
         if leg > legs.len() {
@@ -645,7 +660,8 @@ impl Game {
             if let Some(&id) = c.army.first() {
                 c.army.remove(0);
                 self.ais[me as usize].scout = Some(id);
-                self.order_move(id, legs[leg.min(3)].0, legs[leg.min(3)].1);
+                let l = legs[leg.min(legs.len() - 1)];
+                self.order_move(id, l.0, l.1);
             }
             return;
         };

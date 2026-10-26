@@ -476,6 +476,26 @@ fn normal_ais_reach_the_medieval_era() {
     assert!(medieval >= 5, "only {medieval} of 6 computer players reached the Medieval era in 45 minutes");
 }
 
+/// The Medieval chain (Brickworks, Sawmill) was where the computer players
+/// used to freeze: they never explored their own clay, and cottages held every
+/// spare stone so a Sawmill (2 stone) never found any. After twenty minutes
+/// most of them must have both.
+#[test]
+fn ais_get_brickworks_and_sawmills() {
+    let (mut both, mut n) = (0, 0);
+    for seed in [3, 5, 11] {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        run(&mut g, 20.0 * 60.0);
+        for p in 1..=2u8 {
+            n += 1;
+            let has = |k: Kind| g.ents.iter().any(|e| e.alive && e.owner == p && e.kind == k && e.built >= 1.0);
+            both += (has(Kind::Brickworks) && has(Kind::Sawmill)) as u32;
+        }
+    }
+    assert!(both >= 5, "only {both} of {n} computer players had a Brickworks and a Sawmill after 20 minutes");
+}
+
 #[test]
 #[ignore]
 fn watch_the_ai() {
@@ -688,6 +708,7 @@ fn gunpowder_comes_from_nitrate_and_wood() {
 fn ai_stats() {
     let minutes = std::env::var("VC_MINUTES").ok().and_then(|v| v.parse().ok()).unwrap_or(45.0);
     let (mut medieval, mut people, mut ended, mut n) = (0, 0, 0, 0);
+    let mut eras = [0u32; 8];
     for seed in 1..=12 {
         let mut g = Game::new(seed, 1, 2);
         g.set_ai(1, true);
@@ -696,10 +717,12 @@ fn ai_stats() {
             n += 1;
             medieval += (g.players[p].era >= 1) as u32;
             people += g.players[p].people;
+            eras[(g.players[p].era as usize).min(7)] += 1;
         }
         ended += (g.state != 0) as u32;
         println!("seed {seed:2}: eras {} {}, people {} {}, ended {}", g.players[1].era, g.players[2].era, g.players[1].people, g.players[2].people, g.state != 0);
     }
+    println!("players per era (Ancient first): {eras:?}");
     println!("after {minutes} min: {medieval} of {n} players Medieval, {} people on average, {ended} of 12 games over", people / n);
 }
 
