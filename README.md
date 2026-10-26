@@ -622,8 +622,8 @@ versions don't play together.
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
   quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
-  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del (twice) demolishes the
-  selected buildings, or disbands the selected units.
+  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
+  selected buildings, or disbands the selected units (units need a second press).
 - **Missile silo:** Z arms a nuke, then Z again and a click launches it
   (a ring shows the blast, and blue rings the cover of enemy air defenses).
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
