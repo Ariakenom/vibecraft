@@ -622,8 +622,8 @@ versions don't play together.
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
   quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
-  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del (twice) demolishes the
-  selected buildings, or disbands the selected units.
+  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
+  selected buildings, or disbands the selected units (units need a second press).
 - **Missile silo:** Z arms a nuke, then Z again and a click launches it
   (a ring shows the blast, and blue rings the cover of enemy air defenses).
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
@@ -633,7 +633,7 @@ versions don't play together.
   - Z attack-move (every unit, workers too), X stop
   - H home, `.` free workers (in the town square)
   - Z on a producer: pause or resume it
-  - Ctrl+1–9 make a group, 1–9 recall it
+  - Ctrl+1–9 make a group, Shift+1–9 add the selection to it, 1–9 recall it (twice to centre the camera)
   - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, save a replay (any game, online too), copy a watch link for spectators, and
     (the host) give a computer's seat to a spectator

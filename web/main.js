@@ -1030,19 +1030,20 @@ function renderCommands(sel) {
     add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
-  // Demolish your buildings, or disband your units: Delete or Shift+Q, twice.
+  // Demolish your buildings (Delete or Shift+Q, at once), or disband your
+  // units (the same keys, pressed twice: an army is hard to get back).
   const doomed = mine.filter(i => E(i, F.kind) !== K.Capitol && isBld(E(i, F.kind)) === !hasUnits).map(i => E(i, F.id));
   if (doomed.length) {
-    const key = doomed.join(","), armed = demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
+    const key = doomed.join(","), armed = hasUnits && demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
     const what = hasUnits ? "Disband" : "Demolish";
     const fn = () => {
-      if (demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
-      else { demolishArm = { key, t: performance.now() }; toast(hasUnits ? `Press ${what} again (Shift+Q) to disband ${doomed.length > 1 ? "them" : "it"}` : "Press Demolish again (Shift+Q) to tear it down"); }
+      if (!hasUnits || (demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000)) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
+      else { demolishArm = { key, t: performance.now() }; toast(`Press ${what} again (Shift+Q) to disband ${doomed.length > 1 ? "them" : "it"}`); }
       selKey = "";
     };
     const tip = hasUnits
       ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
-      : "<h4>Demolish</h4><p>Tear it down. Its slots and workers come free; anyone in a house or a training queue is lost. Press twice (Shift+Q or Delete).</p>";
+      : "<h4>Demolish</h4><p>Tear it down at once. Its slots and workers come free; anyone in a house or a training queue is lost. (Shift+Q or Delete.)</p>";
     add(cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip }), "Delete", fn);
     cmdKeys["⇧q"] = fn;
   }
@@ -1428,10 +1429,17 @@ window.addEventListener("keydown", e => {
   if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
-    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+N: the selection becomes group N.
       e.preventDefault();
       groups[g] = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
       toast(`Group ${g} set`);
+    } else if (e.shiftKey) {
+      // Shift+N: add the selection to group N (no one twice).
+      e.preventDefault();
+      const mine = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
+      groups[g] = [...new Set([...(groups[g] || []), ...mine])];
+      toast(`Added to group ${g}`);
     } else if (groups[g]) {
       const now = performance.now();
       if (groups._last === g && now - groups._t < 400) focusSelection();
