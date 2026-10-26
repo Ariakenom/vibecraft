@@ -492,7 +492,7 @@ impl Game {
         let (map, deps, bases) = map::generate(seed, n_players as usize);
         let n = (map.w * map.h) as usize;
         let handicap = match difficulty {
-            0 => 80,
+            0 => 100,
             1 => 100,
             _ => 130,
         };

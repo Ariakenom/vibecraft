@@ -837,6 +837,31 @@ function renderSelection(force) {
       box.append(b);
     }
     panel.append(box);
+    // Barracks, ranges, stables ...: what each of them is training.
+    const makers = sel.filter(i => isBld(E(i, F.kind)) && TRAINS[E(i, F.kind)] && (E(i, F.owner) === ME || observe) && !(E(i, F.flags) & 2));
+    if (makers.length) {
+      const list = document.createElement("div"); list.className = "trainlist";
+      for (const i of makers.slice(0, 12)) {
+        const id = E(i, F.id), q = W.queue_len(id);
+        const row = document.createElement("div"); row.className = "trainrow";
+        const who = iconEl(E(i, F.kind), E(i, F.owner), 28); who.title = NAMES[E(i, F.kind)]; who.className = "who";
+        row.append(who);
+        const items = document.createElement("div"); items.className = "queue";
+        if (q === 0) {
+          const idle = document.createElement("span"); idle.className = "idle"; idle.textContent = "idle"; items.append(idle);
+        }
+        for (let n = 0; n < q; n++) {
+          const b = document.createElement("button"); b.title = n === 0 ? `Training ${NAMES[W.queue_kind(id, 0)]} · ${Math.floor(E(i, F.prog) * 100)}%. Click to cancel the last unit in the queue` : `${NAMES[W.queue_kind(id, n)]}. Click to cancel the last unit in the queue`;
+          b.append(iconEl(W.queue_kind(id, n), ME, 28));
+          if (n === 0) { const bar = document.createElement("i"); bar.innerHTML = `<b style="width:${E(i, F.prog) * 100}%"></b>`; b.append(bar); }
+          b.onclick = () => issue({ c: 5, ids: [id] });
+          items.append(b);
+        }
+        row.append(items);
+        list.append(row);
+      }
+      panel.append(list);
+    }
   }
   renderCommands(sel);
 }

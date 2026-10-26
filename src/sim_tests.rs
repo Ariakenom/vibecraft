@@ -514,6 +514,27 @@ fn a_peaceful_ai_keeps_climbing_the_eras() {
     }
 }
 
+/// An Easy computer player doesn't hurry: however well its town does, no era
+/// comes before its time (`EASY_ERA_AT`), and it keeps fewer soldiers.
+#[test]
+fn easy_computer_players_pace_their_eras() {
+    let mut easy = Game::new(3, 0, 2);
+    let mut normal = Game::new(3, 1, 2);
+    for g in [&mut easy, &mut normal] {
+        g.set_ai(1, true);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        run(g, 9.5 * 60.0);
+    }
+    // The same map and economy: Normal is already past the Ancient era.
+    assert!(normal.players[1].era >= 1 || normal.players[2].era >= 1, "Normal should be Medieval by now");
+    for p in 1..=2usize {
+        assert_eq!(easy.players[p].era, 0, "Easy P{p} entered an era before {} s", EASY_ERA_AT[0]);
+        assert!(easy.players[p].soldiers * 10 <= easy.players[p].people * 2, "Easy P{p}: {} soldiers of {}", easy.players[p].soldiers, easy.players[p].people);
+    }
+}
+
 #[test]
 #[ignore]
 fn watch_the_ai() {
@@ -728,7 +749,7 @@ fn ai_stats() {
     let (mut medieval, mut people, mut ended, mut n) = (0, 0, 0, 0);
     let mut eras = [0u32; 8];
     for seed in 1..=12 {
-        let mut g = Game::new(seed, 1, 2);
+        let mut g = Game::new(seed, std::env::var("VC_DIFF").ok().and_then(|v| v.parse().ok()).unwrap_or(1), 2);
         g.set_ai(1, true);
         run(&mut g, minutes * 60.0);
         for p in 1..=2usize {
@@ -1344,7 +1365,7 @@ fn ai_peace() {
     let mut eras = [0u32; 8];
     let mut people = 0;
     for seed in 1..=12 {
-        let mut g = Game::new(seed, 1, 2);
+        let mut g = Game::new(seed, std::env::var("VC_DIFF").ok().and_then(|v| v.parse().ok()).unwrap_or(1), 2);
         g.set_ai(1, true);
         for a in g.ais.iter_mut() {
             a.next_attack = 1.0e9;

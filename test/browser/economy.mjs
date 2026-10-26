@@ -42,6 +42,18 @@ const keys = await pg.evaluate(() => {
   return [...$("cmd").querySelectorAll("button")].filter(b => /^Train/.test(b.getAttribute("aria-label"))).every(b => b.dataset.key);
 });
 check(keys, "a barracks and a range selected together: every unit has a hotkey");
+// Two barracks and a range selected together: each one's queue shows.
+const queues = await pg.evaluate(() => {
+  readWorld(); const c = findOwn(K.Capitol); const cx = E(c, F.x) | 0, cy = E(c, F.y) | 0;
+  const a = W.debug_spawn(K.Barracks, cx - 14, cy - 8), b2 = W.debug_spawn(K.Barracks, cx + 12, cy - 8), r2 = W.debug_spawn(K.Range, cx + 12, cy + 8);
+  readWorld();
+  issue({ c: 4, ids: [a], a: K.Spearman }); issue({ c: 4, ids: [a], a: K.Spearman }); issue({ c: 4, ids: [r2], a: K.Archer });
+  readWorld(); setSelection([a, b2, r2]); renderSelection(true);
+  const rows = [...document.querySelectorAll("#sel .trainrow")];
+  return { rows: rows.length, queued: rows.map(r => r.querySelectorAll(".queue button").length), idle: rows.map(r => !!r.querySelector(".idle")) };
+});
+check(queues.rows === 3, `three training buildings selected: three rows (${queues.rows})`);
+check(queues.queued.some(n => n >= 1) || queues.idle.every(Boolean), `each row shows its queue or says idle (${JSON.stringify(queues)})`);
 // Houses: an Upgrade button (Z), which says why not yet.
 const up = await pg.evaluate(() => {
   readWorld(); const c = findOwn(K.Capitol); const cx = E(c, F.x) | 0, cy = E(c, F.y) | 0;

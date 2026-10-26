@@ -60,7 +60,7 @@ struct Style {
 }
 
 const STYLES: [Style; 3] = [
-    Style { army_share: 0.2, queue: 1 },
+    Style { army_share: 0.1, queue: 1 },
     Style { army_share: 0.3, queue: 1 },
     Style { army_share: 0.4, queue: 2 },
 ];
