@@ -1316,28 +1316,51 @@ function viewQuad() {
 
 // --- Per-frame update --------------------------------------------------------
 // The Capitol's gathering spot, where free workers wait and newcomers turn
-// up: a campfire in front of its door (+z; CAMPFIRE_AHEAD in people.rs),
-// with a flame that flickers (`updateCampfires`), inside a ring of trodden
-// earth that marks the area (CAMPFIRE_AREA) where a worker counts as free.
-const CAMPFIRE = [0, 0.25, 3.2], CAMPFIRE_AREA = 3.0;
+// up: a town square in front of its door (+z; CAMPFIRE_AHEAD in people.rs).
+// Paving fills the area (CAMPFIRE_AREA) where a worker counts as free, with
+// a statue on a stepped plinth in the middle, holding a torch whose flame
+// flickers (`updateCampfires`). (Named for the campfire it replaced.)
+const CAMPFIRE = [0, 0.1, 3.2], CAMPFIRE_AREA = 3.0;
 let campfireGeo = null, flameMat = null;
 function campfire() {
   if (!campfireGeo) {
     const m = new Model();
-    for (let k = 0; k < 4; k++) { const lg = cyl(0.04, 0.04, 0.42, 6); lg.rotateZ(Math.PI / 2); lg.rotateY(k * Math.PI / 4); m.add(lg, "#5a3d22", 0, 0.05, 0); }
-    for (let k = 0; k < 7; k++) { const a = k / 7 * Math.PI * 2; m.add(new THREE.DodecahedronGeometry(0.07, 0), "#8b857a", Math.cos(a) * 0.28, 0.03, Math.sin(a) * 0.28); }
+    // Paving: a dark kerb, light stone inside, a paler inner ring, and
+    // eight spokes between the two.
+    m.add(cyl(CAMPFIRE_AREA, CAMPFIRE_AREA, 0.08, 40), "#7d766a", 0, 0.04, 0);
+    m.add(cyl(CAMPFIRE_AREA - 0.14, CAMPFIRE_AREA - 0.14, 0.1, 40), "#bdb29d", 0, 0.05, 0);
+    m.add(cyl(1.55, 1.55, 0.12, 32), "#a29a88", 0, 0.06, 0);
+    m.add(cyl(1.4, 1.4, 0.14, 32), "#d3c9b4", 0, 0.07, 0);
+    for (let k = 0; k < 8; k++) {
+      const a = k / 8 * Math.PI * 2, r = (1.55 + CAMPFIRE_AREA - 0.14) / 2;
+      m.add(box(0.12, 0.13, CAMPFIRE_AREA - 0.14 - 1.55), "#a29a88", Math.sin(a) * r, 0.065, Math.cos(a) * r, a);
+    }
+    // Stone bollards round the edge, between the spokes.
+    for (let k = 0; k < 8; k++) {
+      const a = (k + 0.5) / 8 * Math.PI * 2;
+      m.add(cyl(0.08, 0.1, 0.3, 8), "#8f887b", Math.sin(a) * (CAMPFIRE_AREA - 0.3), 0.2, Math.cos(a) * (CAMPFIRE_AREA - 0.3));
+    }
+    // The plinth: two round steps, a square block, a cap.
+    m.add(cyl(0.95, 1.0, 0.1, 20), "#b5ab98", 0, 0.19, 0);
+    m.add(cyl(0.7, 0.78, 0.12, 16), "#a89f8c", 0, 0.3, 0);
+    m.add(box(0.62, 0.62, 0.62), "#d8cfbb", 0, 0.66, 0);
+    m.add(box(0.76, 0.1, 0.76), "#bfb6a2", 0, 1.02, 0);
+    // The statue, in bronze: a robed figure with one arm up, holding a torch.
+    m.add(cone(0.3, 0.8, 10), "#a67c3d", 0, 1.47, 0);
+    m.add(cyl(0.12, 0.17, 0.3, 8), "#b98b45", 0, 1.8, 0);
+    m.add(ball(0.12, 1), "#c29650", 0, 2.05, 0);
+    const arm = box(0.07, 0.34, 0.07); arm.rotateZ(-0.35);
+    m.add(arm, "#b98b45", 0.2, 2.04, 0);
+    m.add(cyl(0.03, 0.03, 0.34, 6), "#6e4a26", 0.3, 2.28, 0);
+    m.add(cyl(0.07, 0.04, 0.08, 8), "#8a6330", 0.3, 2.46, 0);
     campfireGeo = m.build();
     flameMat = new THREE.MeshBasicMaterial({ color: "#ffb347", transparent: true, opacity: 0.9 });
   }
   const g = new THREE.Group();
   g.position.set(CAMPFIRE[0], 0, CAMPFIRE[2]);
-  const ring = new THREE.Mesh(campfireGeo, entMat); ring.receiveShadow = true; g.add(ring);
-  const area = new THREE.Mesh(new THREE.RingGeometry(CAMPFIRE_AREA - 0.12, CAMPFIRE_AREA, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#d9c9a8", transparent: true, opacity: 0.35, depthWrite: false }));
-  area.position.y = 0.04; area.renderOrder = 1; g.add(area);
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(CAMPFIRE_AREA - 0.12, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#8a7350", transparent: true, opacity: 0.18, depthWrite: false }));
-  ground.position.y = 0.03; g.add(ground);
-  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 7), flameMat);
-  flame.position.y = 0.2; flame.userData.flame = true; g.add(flame);
+  const square = new THREE.Mesh(campfireGeo, entMat); square.castShadow = true; square.receiveShadow = true; g.add(square);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 7), flameMat);
+  flame.position.set(0.3, 2.65, 0); flame.userData.flame = true; g.add(flame);
   (R3.flames ??= []).push(flame);
   return g;
 }
@@ -2156,7 +2179,7 @@ function setSmokeEmitters(list) {
 // Where smoke comes out, relative to the building's centre.
 function updateSmoke() {
   // Chimneys, the smoke hole of a hut someone lives in, the Capitol's campfire.
-  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: CAMPFIRE,
+  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: [CAMPFIRE[0] + 0.3, 2.6, CAMPFIRE[2]],
     [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55],
     [K.Townhouse]: [0.35, 1.75, -0.2], [K.PowderMill]: [-0.45, 1.1, -0.45],
     [K.Tenement]: [0.4, 2.35, -0.2], [K.SteelMill]: [-0.9, 2.65, -0.8], [K.Factory]: [1.0, 2.3, -0.9], [K.Cannery]: [0.55, 1.55, -0.35],

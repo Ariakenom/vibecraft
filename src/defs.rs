@@ -496,6 +496,9 @@ pub const MAX_SAME: usize = 7;
 /// A player enters the next era when this many of their houses have
 /// reached its tier (and keeps the era if they later drop back).
 pub const HOUSES_FOR_ERA: u32 = 10;
+/// The earliest time (seconds) an Easy computer player enters each era
+/// (Medieval, Gunpowder, Industrial, Modern, Atomic).
+pub const EASY_ERA_AT: [f32; 5] = [600.0, 1500.0, 2400.0, 3600.0, 4800.0];
 /// The last era there is content for (0 Ancient … 5 Atomic: all of them).
 pub const LAST_ERA: u8 = 5;
 

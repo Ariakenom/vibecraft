@@ -54,7 +54,16 @@ impl Game {
         // The golden angle spreads people evenly, whatever their ids.
         let a = id as f32 * 2.399_963;
         let r = 1.2 + (id % 3) as f32 * 0.5;
-        Some((cx + a.cos() * r, cy + a.sin() * r))
+        // The Capitol's front wall is `CAMPFIRE_AHEAD - half its size` behind
+        // the square's middle: a spot past it would be inside the building
+        // (playtest: workers stood in the Capitol, unable to walk out). Fold
+        // those spots to the front of the square, out of the wall's way.
+        let wall = CAMPFIRE_AHEAD - 1.5 - 0.35;
+        let (dx, mut dy) = (a.cos() * r, a.sin() * r);
+        if dy < -wall {
+            dy = -dy;
+        }
+        Some((cx + dx, cy + dy))
     }
 
     /// Is this a free worker: idle, at the campfire?
@@ -379,6 +388,10 @@ impl Game {
     fn raise_era(&mut self, owner: u8) {
         let era = self.players[owner as usize].era;
         if era >= LAST_ERA {
+            return;
+        }
+        // An Easy computer player doesn't hurry: no era before its time.
+        if self.ais.get(owner as usize).is_some_and(|a| a.on && a.difficulty == 0) && self.time < EASY_ERA_AT[era as usize] {
             return;
         }
         if self.houses_past_era(owner) >= HOUSES_FOR_ERA {

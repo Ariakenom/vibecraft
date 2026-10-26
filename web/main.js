@@ -46,7 +46,7 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo",
   [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense" };
 const DESC = {
-  [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits at the campfire. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
+  [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits in the town square. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
   [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (12 people). Ten cottages bring the Medieval era. Full, with 5 goods, you can upgrade it to a Townhouse from the Medieval era (1 more stone and 2 brick).",
   [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (18 people). Ten bring the Gunpowder era. Full, with 7 goods, you can upgrade it to a Tenement from the Gunpowder era (2 more brick).",
@@ -676,7 +676,7 @@ function renderTopBar() {
     sm.textContent = `/ ${W.supply(r)}`;
     c.classList.toggle("over", f < 0);
   }
-  // People: the free workers at the campfire, out of everyone.
+  // People: the free workers in the town square, out of everyone.
   const hungry = W.unsupplied(), freeP = W.people(0), all = W.people(4);
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
   topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${freeP}<small>/ ${all}</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
@@ -722,20 +722,20 @@ function renderResTip() {
   tip.hidden = false;
 }
 
-// Where everyone is: free at the campfire, at work, in arms.
+// Where everyone is: free in the town square, at work, in arms.
 function renderPeopleTip(tip) {
   const freeP = W.people(0), beds = W.people(1), soldiers = W.people(2), work = W.people(3), all = W.people(4);
   const line = (label, v, cls = "") => `<div class="row ${cls}"><span>${label}</span><b>${v}</b></div>`;
   let html = `<h4>People</h4>`;
-  html += line("Free, at the campfire", freeP, freeP ? "pos" : "") + line("Working", work) + line("Soldiers and recruits", soldiers);
+  html += line("Free, in the town square", freeP, freeP ? "pos" : "") + line("Working", work) + line("Soldiers and recruits", soldiers);
   const other = all - freeP - work - soldiers;
   if (other > 0) html += line("Building, or elsewhere", other);
   html += `<div class="row total"><span>Everyone</span><b>${all}</b></div>`;
   html += line("Beds", beds);
   html += all < beds
-    ? `<p>There are free beds: someone new turns up at the campfire every ${W.people(5) ? `few` : ""} seconds, sooner in a bigger town.</p>`
+    ? `<p>There are free beds: someone new turns up in the town square every ${W.people(5) ? `few` : ""} seconds, sooner in a bigger town.</p>`
     : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of goods: each kind is 2 more beds in every house that gets it (3 past the third).</p>`;
-  html += `<p class="note">Free workers go to work, build and enlist by themselves. Training a soldier takes one from the campfire.</p>`;
+  html += `<p class="note">Free workers go to work, build and enlist by themselves. Training a soldier takes one from the town square.</p>`;
   tip.innerHTML = html;
   const chip = topBar.pop.getBoundingClientRect(), app = $("app").getBoundingClientRect();
   tip.style.left = `${Math.max(8, Math.min(app.width - 270, chip.left - app.left))}px`;
@@ -820,7 +820,7 @@ function renderSelection(force) {
   } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
-    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait at the <b>campfire</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Capitol) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> to select the free workers`;
+    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait in the <b>town square</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Capitol) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> to select the free workers`;
     panel.append(d);
   } else if (sel.length === 1) {
     singleInfo(panel, sel[0]);
@@ -837,6 +837,31 @@ function renderSelection(force) {
       box.append(b);
     }
     panel.append(box);
+    // Barracks, ranges, stables ...: what each of them is training.
+    const makers = sel.filter(i => isBld(E(i, F.kind)) && TRAINS[E(i, F.kind)] && (E(i, F.owner) === ME || observe) && !(E(i, F.flags) & 2));
+    if (makers.length) {
+      const list = document.createElement("div"); list.className = "trainlist";
+      for (const i of makers.slice(0, 12)) {
+        const id = E(i, F.id), q = W.queue_len(id);
+        const row = document.createElement("div"); row.className = "trainrow";
+        const who = iconEl(E(i, F.kind), E(i, F.owner), 28); who.title = NAMES[E(i, F.kind)]; who.className = "who";
+        row.append(who);
+        const items = document.createElement("div"); items.className = "queue";
+        if (q === 0) {
+          const idle = document.createElement("span"); idle.className = "idle"; idle.textContent = "idle"; items.append(idle);
+        }
+        for (let n = 0; n < q; n++) {
+          const b = document.createElement("button"); b.title = n === 0 ? `Training ${NAMES[W.queue_kind(id, 0)]} · ${Math.floor(E(i, F.prog) * 100)}%. Click to cancel the last unit in the queue` : `${NAMES[W.queue_kind(id, n)]}. Click to cancel the last unit in the queue`;
+          b.append(iconEl(W.queue_kind(id, n), ME, 28));
+          if (n === 0) { const bar = document.createElement("i"); bar.innerHTML = `<b style="width:${E(i, F.prog) * 100}%"></b>`; b.append(bar); }
+          b.onclick = () => issue({ c: 5, ids: [id] });
+          items.append(b);
+        }
+        row.append(items);
+        list.append(row);
+      }
+      panel.append(list);
+    }
   }
   renderCommands(sel);
 }
@@ -858,7 +883,7 @@ function singleInfo(panel, i) {
   } else if (E(i, F.flags) & 2) {
     const need = stat(k, 9), got = W.builders_in(id);
     html += got < need
-      ? `<div class="statline">Waiting for builders · ${got} of ${need} here. Free workers at the campfire come by themselves.</div>`
+      ? `<div class="statline">Waiting for builders · ${got} of ${need} here. Free workers in the town square come by themselves.</div>`
       : `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
   } else if (stat(k, 10) >= 0) {
     // A house: which goods it has and which it wants; its beds.
@@ -875,20 +900,20 @@ function singleInfo(panel, i) {
     html += `<div class="statline">${takes.length ? `Takes <span class="cost inline">${slotsHtml(takes, false)}</span>, makes` : "Makes"} <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span>${need ? ` · workers <b>${E(i, F.residents)}</b> of ${need}` : ""}</div>`;
     if (owner === ME && (E(i, F.flags) & 256)) html += `<div class="statline bad">Short of ${takes.map(([r]) => RES_NAMES[r]).join(" and ")}: it makes nothing until enough is free.</div>`;
     else if (owner === ME && (E(i, F.flags) & 64)) html += `<div class="statline bad">Paused: it makes nothing and hires nobody. Press Resume, or send workers here with a right-click.</div>`;
-    else if (E(i, F.flags) & 32) html += `<div class="statline bad">Waiting for workers: when someone is free at the campfire, they come.</div>`;
+    else if (E(i, F.flags) & 32) html += `<div class="statline bad">Waiting for workers: when someone is free in the town square, they come.</div>`;
   } else if (k === K.MissileSilo) {
     const st = W.silo_state(id);
     html += st === 1 ? `<div class="statline">Arming a nuke · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`
       : st === 2 ? `<div class="statline">A nuke is armed: Launch (Z), then click a target.</div>` : `<div class="statline">Empty: Arm a nuke (Z).</div>`;
   } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
-    html += `<div class="statline">Waiting for a recruit from the campfire.</div>`;
+    html += `<div class="statline">Waiting for a recruit from the town square.</div>`;
   }
   if (k === K.Capitol && owner === ME && !(E(i, F.flags) & 2)) {
     // Newcomers: how soon the next one turns up, and the cap (beds).
     const all = W.people(4), beds = W.people(1), next = W.next_arrival();
     html += `<div class="statline">People <b>${all}</b> of ${beds} beds</div>`;
     html += next >= 0
-      ? `<div class="statline">Next newcomer at the campfire · ${Math.floor(next * 100)}%</div><div class="bar prog"><i style="width:${next * 100}%"></i></div>`
+      ? `<div class="statline">Next newcomer in the town square · ${Math.floor(next * 100)}%</div><div class="bar prog"><i style="width:${next * 100}%"></i></div>`
       : `<div class="statline bad">Every bed is taken: nobody new comes. Build huts, and give them food.</div>`;
   }
   info.innerHTML = html;
@@ -914,6 +939,8 @@ function cmdButton(label, key, onClick, opts = {}) {
   b.className = "cbtn" + (opts.glyph ? " glyph" : "") + (opts.poor ? " poor" : "") + (opts.locked ? " locked" : "");
   if (opts.icon) b.append(opts.icon); else b.append(document.createTextNode(opts.glyph || ""));
   if (key) { const kb = document.createElement("kbd"); kb.textContent = key; b.append(kb); }
+  // What it makes: the resource icons in the corner.
+  if (opts.badge) { const bd = document.createElement("span"); bd.className = "badge"; bd.innerHTML = opts.badge; b.append(bd); }
   b.setAttribute("aria-label", label);
   b.onclick = onClick;
   b.onmouseenter = () => showTip(opts.tip || `<h4>${label}</h4>`);
@@ -940,14 +967,23 @@ function renderCommands(sel) {
   const add = (b, key, fn) => { box.append(b); if (key) cmdKeys[key.toLowerCase()] = fn; };
   const unitTip = k => {
     let h = `<h4>${NAMES[k]}</h4>${costHtml(k)}<p>${DESC[k] || ""}</p>`;
-    if (slotsOf(k, 1).length) h += `<p>Makes <span class="cost inline">${slotsHtml(slotsOf(k, 1), false)}</span></p>`;
+    const makes = slotsOf(k, 1), takes = slotsOf(k, 2);
+    if (makes.length) h += `<p>Makes <span class="cost inline">${slotsHtml(makes, false)}</span></p>`;
+    if (takes.length) h += `<p>Takes <span class="cost inline">${slotsHtml(takes)}</span> to do it</p>`;
+    // Everything it needs before it works: workers, builders, a deposit, other buildings, an era.
+    const needs = [], workers = stat(k, 7), builders = stat(k, 9);
+    if (workers > 0) needs.push(`${workers} ${workers === 1 ? "worker" : "workers"} to run it`);
+    if (isBld(k) && builders > 1) needs.push(`${builders} builders to raise it`);
     const dep = W.kind_deposit(k);
-    if (dep >= 0) h += `<p>Build it next to ${DEP_NAMES[dep]}.</p>`;
-    if (W.kind_era(k) > W.era()) h += `<p class="short">Needs the ${ERA_NAMES[W.kind_era(k)]} era: ${W.era_progress(1)} ${HOUSE_NAMES[W.kind_era(k)].toLowerCase()}s (you have ${W.era_progress(0)}).</p>`;
-    const needs = []; for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(q);
-    if (needs.length) h += `<p>Needs ${needs.map(q => `<span class="${W.has_built(q) ? "" : "short"}">${NAMES[q]}</span>`).join(" and ")}.</p>`;
+    if (dep >= 0) needs.push(`a spot next to ${DEP_NAMES[dep]}`);
+    for (let n = 0, q; (q = W.requires(k, n)) >= 0; n++) needs.push(`<span class="${W.has_built(q) ? "" : "short"}">${NAMES[q]}</span>`);
+    if (W.kind_era(k) > W.era()) needs.push(`<span class="short">the ${ERA_NAMES[W.kind_era(k)]} era (${W.era_progress(1)} ${HOUSE_NAMES[W.kind_era(k)].toLowerCase()}s; you have ${W.era_progress(0)})</span>`);
+    if (needs.length) h += `<p>Needs ${needs.join(", ")}.</p>`;
     return h;
   };
+  // The resources a building makes, as small icons on its button (up to three:
+  // the Capitol makes four of the basics, which is too many to show).
+  const badgeOf = k => { const m = slotsOf(k, 1); return isBld(k) && m.length && m.length <= 3 ? m.map(([r]) => resIcon(r)).join("") : ""; };
 
   if (kinds.has(K.Worker) || kinds.has(K.Capitol)) {
     const pages = buildPages();
@@ -972,7 +1008,7 @@ function renderCommands(sel) {
     for (const [k, key] of buildMenu()) {
       const fn = () => startPlacing(k);
       const locked = isBld(k) && !W.unlocked(k);
-      add(cmdButton(`Build ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), locked, tip: unitTip(k) }), key, fn);
+      add(cmdButton(`Build ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), badge: badgeOf(k), poor: !canAfford(k), locked, tip: unitTip(k) }), key, fn);
     }
   }
   const producers = mine.filter(i => TRAINS[E(i, F.kind)] && !(E(i, F.flags) & 2));
@@ -983,15 +1019,15 @@ function renderCommands(sel) {
     add(cmdButton(`Train ${NAMES[k]}`, key, fn, { icon: iconEl(k, ME, 48), poor: !canAfford(k), locked: W.kind_era(k) > W.era(), tip: unitTip(k) + `<p>Right-click the map to set a rally point.</p>` }), key, fn);
   }
   const hasUnits = mine.some(i => !isBld(E(i, F.kind)));
-  // Producers: pause (their workers go to the campfire) or resume.
+  // Producers: pause (their workers go to the town square) or resume.
   const workplaces = mine.filter(i => isBld(E(i, F.kind)) && stat(E(i, F.kind), 7) > 0 && !(E(i, F.flags) & 2));
   if (workplaces.length && !hasUnits) {
     const paused = workplaces.every(i => E(i, F.flags) & 64);
     const ids = workplaces.map(i => E(i, F.id));
     const fn = () => { issue({ c: 10, ids, a: paused ? 1 : 0 }); Sfx.ui("command", 1); selKey = ""; };
     add(cmdButton(paused ? "Resume" : "Pause", "Z", fn, { glyph: paused ? "▶" : "❚❚", tip: paused
-      ? "<h4>Resume</h4><p>Hire workers again: free workers from the campfire come.</p>"
-      : "<h4>Pause</h4><p>Its workers go back to the campfire. It keeps its slots but makes nothing.</p>" }), "Z", fn);
+      ? "<h4>Resume</h4><p>Hire workers again: free workers from the town square come.</p>"
+      : "<h4>Pause</h4><p>Its workers go back to the town square. It keeps its slots but makes nothing.</p>" }), "Z", fn);
   }
   box.classList.toggle("dense", box.children.length > 15 && box.children.length <= 22);
   box.classList.toggle("denser", box.children.length > 22 && box.children.length <= 36);
@@ -1019,19 +1055,20 @@ function renderCommands(sel) {
     add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
-  // Demolish your buildings, or disband your units: Delete or Shift+Q, twice.
+  // Demolish your buildings (Delete or Shift+Q, at once), or disband your
+  // units (the same keys, pressed twice: an army is hard to get back).
   const doomed = mine.filter(i => E(i, F.kind) !== K.Capitol && isBld(E(i, F.kind)) === !hasUnits).map(i => E(i, F.id));
   if (doomed.length) {
-    const key = doomed.join(","), armed = demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
+    const key = doomed.join(","), armed = hasUnits && demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
     const what = hasUnits ? "Disband" : "Demolish";
     const fn = () => {
-      if (demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
-      else { demolishArm = { key, t: performance.now() }; toast(hasUnits ? `Press ${what} again (Shift+Q) to disband ${doomed.length > 1 ? "them" : "it"}` : "Press Demolish again (Shift+Q) to tear it down"); }
+      if (!hasUnits || (demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000)) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
+      else { demolishArm = { key, t: performance.now() }; toast(`Press ${what} again (Shift+Q) to disband ${doomed.length > 1 ? "them" : "it"}`); }
       selKey = "";
     };
     const tip = hasUnits
       ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
-      : "<h4>Demolish</h4><p>Tear it down. Its slots and workers come free; anyone in a house or a training queue is lost. Press twice (Shift+Q or Delete).</p>";
+      : "<h4>Demolish</h4><p>Tear it down at once. Its slots and workers come free; anyone in a house or a training queue is lost. (Shift+Q or Delete.)</p>";
     add(cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip }), "Delete", fn);
     cmdKeys["⇧q"] = fn;
   }
@@ -1096,7 +1133,7 @@ function explain(code) {
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is free at the campfire to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
+    13: "Nobody is free in the town square to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -1417,10 +1454,17 @@ window.addEventListener("keydown", e => {
   if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
-    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+N: the selection becomes group N.
       e.preventDefault();
       groups[g] = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
       toast(`Group ${g} set`);
+    } else if (e.shiftKey) {
+      // Shift+N: add the selection to group N (no one twice).
+      e.preventDefault();
+      const mine = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
+      groups[g] = [...new Set([...(groups[g] || []), ...mine])];
+      toast(`Added to group ${g}`);
     } else if (groups[g]) {
       const now = performance.now();
       if (groups._last === g && now - groups._t < 400) focusSelection();
@@ -1435,7 +1479,7 @@ window.addEventListener("keydown", e => {
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
-  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free at the campfire"); return; }
+  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free in the town square"); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
   const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
