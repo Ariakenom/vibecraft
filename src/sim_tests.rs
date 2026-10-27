@@ -535,6 +535,24 @@ fn easy_computer_players_pace_their_eras() {
     }
 }
 
+/// Each computer seat has its own skill: an Easy and a Hard player in the
+/// same game, each with its own supply and its own pace.
+#[test]
+fn each_computer_player_has_its_own_difficulty() {
+    let mut g = Game::new(3, 1, 3);
+    g.set_difficulty(2, 0);
+    g.set_difficulty(3, 2);
+    assert_eq!((g.ais[2].difficulty, g.players[2].supply_pct), (0, 100));
+    assert_eq!((g.ais[3].difficulty, g.players[3].supply_pct), (2, 130));
+    assert!(g.ais[2].next_attack > g.ais[3].next_attack, "Easy attacks later than Hard");
+    // The Easy one keeps its pace: no era before its time.
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, 9.5 * 60.0);
+    assert_eq!(g.players[2].era, 0, "Easy entered an era before {} s", EASY_ERA_AT[0]);
+}
+
 #[test]
 #[ignore]
 fn watch_the_ai() {
