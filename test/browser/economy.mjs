@@ -144,5 +144,17 @@ for (const round of [1, 2]) {
   prev = n[0];
 }
 check(pg.errors.filter(e => !/WebSocket/.test(e)).length === 0, "no page errors"); if (pg.errors.length) console.log(pg.errors);
+// The lobby: each computer seat picks its own skill, and the game gets them.
+const skills = await pg.evaluate(() => {
+  seats = ["host", "ai", "ai", "open"]; seatDiff = [1, 1, 1, 1]; renderLobby();
+  const sels = [...document.querySelectorAll("#seats select")];
+  sels[0].value = "ai:2"; sels[0].dispatchEvent(new Event("change"));
+  [...document.querySelectorAll("#seats select")][1].value = "ai:0"; [...document.querySelectorAll("#seats select")][1].dispatchEvent(new Event("change"));
+  const shown = [...document.querySelectorAll("#seats .who")].map(e => e.textContent);
+  const noGlobal = !document.getElementById("diff");
+  beginGame();
+  return { shown, noGlobal, d: [W.player_difficulty(2), W.player_difficulty(3)], n: W.n_players() };
+});
+check(skills.noGlobal && skills.n === 3 && skills.d[0] === 2 && skills.d[1] === 0, `two computer seats, Hard and Easy: the game has them so (${JSON.stringify(skills)})`);
 await b.close();
 process.exit(failed() ? 1 : 0);
