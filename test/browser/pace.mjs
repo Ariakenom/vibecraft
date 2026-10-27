@@ -28,16 +28,18 @@ await guest2.waitForFunction(() => mp && running && mp.offset !== null, null, { 
 const spec = await open(b, "#watch-" + code);
 await spec.evaluate(() => { window.toastLog = []; const t = window.toast; window.toast = (m, k) => { toastLog.push(m); return t(m, k); }; });
 await spec.waitForFunction(() => watcher && watcher.loaded, null, { timeout: 30000 });
-check(await host.evaluate(() => !$("pauseBtn").hidden && !$("speedBtn").hidden) && await guest.evaluate(() => $("pauseBtn").hidden && $("speedBtn").hidden), "the host has pause and speed; the guest doesn't");
+check(await host.evaluate(() => !$("pauseBtn").hidden && !$("speedBox").hidden) && await guest.evaluate(() => $("pauseBtn").hidden && $("speedBox").hidden), "the host has pause and speed; the guest doesn't");
 await guest.keyboard.press("p");
 await sleep(500);
 check(await host.evaluate(() => mp.pace() === 1) && await told(guest, "Only the host"), "a guest's P does nothing (and says so)");
 
 // Ticks per second on a page, measured over `ms`.
 const rateOf = async (pg, ms = 2000) => { const at = () => pg.evaluate(() => mp ? mp.live : watcher.k); const a = await at(); await sleep(ms); return (await at() - a) * 1000 / ms; };
-await host.click("#speedBtn"); await host.click("#speedBtn");
+const setSpeed = (pg, v) => pg.evaluate(v => { const s = $("speedSlider"); s.value = String(v); s.dispatchEvent(new Event("input")); }, v);
+await setSpeed(host, 2);
 await guest.waitForFunction(() => mp.pace() === 2, null, { timeout: 5000 });
-check(await guest.evaluate(() => !$("speedBtn").hidden && $("speedBtn").disabled && $("speedBtn").textContent === "2×") && await told(guest, "speed to 2×"), "the host sets 2×: the guest sees it");
+check(await guest.evaluate(() => !$("speedBox").hidden && $("speedSlider").disabled && $("speedLabel").textContent === "2×") && await told(guest, "speed to 2×"), "the host sets 2×: the guest sees it");
+check(await host.evaluate(() => $("speedSlider").max === "2"), "online the slider goes up to 2×");
 await sleep(3000);
 const [hr, gr, sr] = await Promise.all([rateOf(host), rateOf(guest), rateOf(spec, 4000)]);
 check(hr > 34 && hr < 46 && gr > 34 && gr < 46, `both run at about 40 ticks a second (host ${hr.toFixed(1)}, guest ${gr.toFixed(1)})`);
@@ -104,7 +106,7 @@ const hr2 = await rateOf(host);
 check(hr2 > 34, `the host plays on at full speed meanwhile (${hr2.toFixed(1)} ticks a second)`);
 check(await host.evaluate(w => mp.server.window <= w + 1, win0), "the slow guest's late orders don't make everyone's window longer");
 check(await told(guest, "can't keep up"), "the guest is told too");
-await host.click("#speedBtn"); // 2× -> 1×
+await setSpeed(host, 1); // 2× -> 1×
 await guest.waitForFunction(() => mp.pace() === 1, null, { timeout: 15000 });
 check(true, "the host goes back to 1×");
 check(await host.evaluate(() => toastLog.filter(m => / left\./.test(m)).length === 1), "...and only once (not again when the computer takes over)");

@@ -266,8 +266,9 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
 - **A guest's clock** is the host's tick count plus half the round trip,
   taken from the most hopeful recent message and adjusted gently. The host
   measures how far off each guest's clock is (shown in the trace).
-- **Pause and speed.** The host can pause (P) and set the speed (1×, 1.5×,
-  2×) for everyone. The simulation doesn't change: only how many ticks come
+- **Pause and speed.** The speed is a slider in the top bar: up to 10× when
+  playing alone; online the host can pause (P) and set 1×, 1.5× or 2× for
+  everyone. The simulation doesn't change: only how many ticks come
   a second. The server's clock runs at `rate` (0 while paused), the frames
   carry it, and guests' clocks follow it (a new rate restarts their
   estimate). Orders given while paused go in once it runs again. The

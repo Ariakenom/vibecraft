@@ -1860,9 +1860,10 @@ function enterWorld(local = 0) {
   knownUnlocked = new Set(BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k)));
   acc = 0; selKey = ""; titleSpin = false; topBar = null; $("techScreen").hidden = true;
   // Online, only the host pauses or changes the speed (syncPaceUi).
-  $("pauseBtn").hidden = !!local; $("speedBtn").hidden = !!local; $("restartBtn").hidden = !!local;
+  $("pauseBtn").hidden = !!local; $("speedBox").hidden = !!local; $("restartBtn").hidden = !!local;
   $("quitBtn").textContent = local ? "Leave game" : "New game";
-  if (local || speed > 2) { speed = 1; $("speedBtn").textContent = "1×"; }
+  if (local) speed = 1;
+  syncSpeedUi();
   renderTopBar(); renderSelection(true);
   // Start recording (a replay, and what spectators are sent). Single player:
   // me against the computer. Multiplayer fills in who's who when it starts.
@@ -1923,9 +1924,7 @@ function showEndStats(opts = {}) {
     row("Units and buildings lost", p => W.player_stat(p, 1)) +
     row("Buildings built", p => W.player_stat(p, 2)) +
     `<tr><th>Game time</th><td colspan="${ps.length}">${fmtTime(W.game_time())}</td></tr>`;
-  $("againBtn").textContent = mp || lastWasMultiplayer ? "Back to menu" : "Play again";
-  $("againBtn").hidden = !!opts.watching;
-  $("toMenuBtn").textContent = opts.watching ? "Stop watching" : "Change difficulty";
+  $("againBtn").textContent = opts.watching ? "Stop watching" : "Main menu";
   $("replayBtn").hidden = !Rec.replay;
   $("replayDlBtn").hidden = !Rec.replay;
   $("endScreen").hidden = false;
@@ -2490,7 +2489,7 @@ function finishMultiplayer() {
   mp = null;
   paused = false; speed = 1; lastPace = 1; slowFor.clear(); announced.clear();
   $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
-  $("speedBtn").textContent = "1×"; $("speedBtn").disabled = false;
+  syncSpeedUi();
   $("netBtn").hidden = true; $("netTrace").hidden = true;
   $("netWait").hidden = true;
 }
@@ -2514,10 +2513,8 @@ function syncPaceUi() {
   $("pauseBtn").textContent = host && paused ? "Resume" : "Pause";
   $("pauseBtn").title = "Pause the game for everyone (P)";
   // Guests: the speed shows, when it isn't the usual one.
-  $("speedBtn").hidden = !host && (rate === 1 || rate === 0);
-  $("speedBtn").disabled = !host;
-  $("speedBtn").textContent = `${host ? speed : rate}×`;
-  $("speedBtn").title = host ? "Game speed, for everyone" : "Game speed, set by the host";
+  $("speedBox").hidden = !host && (rate === 1 || rate === 0);
+  syncSpeedUi();
 }
 // A guest: the host paused, resumed, or changed the speed.
 let lastPace = 1;
@@ -2699,13 +2696,11 @@ function renderSaveList() {
 window.addEventListener("pointerdown", () => Sfx.init(), { capture: true });
 window.addEventListener("keydown", () => Sfx.init(), { capture: true });
 function syncSoundBtn() {
-  $("soundBtn").textContent = Sfx.muted ? "Sound off" : "Sound on";
   for (const id of ["volume", "menuVolume"]) {
     $(id).value = String(Math.round(Sfx.volume * 100));
     $(id).classList.toggle("off", Sfx.muted);
   }
 }
-$("soundBtn").onclick = () => { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); };
 for (const id of ["volume", "menuVolume"]) {
   $(id).addEventListener("input", e => {
     Sfx.setVolume(e.target.value / 100);
@@ -2734,22 +2729,34 @@ const toMenu = () => {
 };
 $("startBtn").onclick = beginGame;
 $("leaveLobbyBtn").onclick = () => openOwnLobby();
-$("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endScreen").hidden = true; newGame(undefined, 0, lastPlayers); running = true; Rec.real = true; };
-$("toMenuBtn").onclick = toMenu;
+$("againBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
-// Watching the rest of a single-player game, it can go faster.
-$("speedBtn").onclick = () => {
+// Game speed: a slider. Alone, up to 10x; online the host picks one of
+// NET.SPEEDS for everyone, and the others see it.
+function syncSpeedUi() {
+  const sl = $("speedSlider"), guest = !!mp && !mp.server;
+  const shown = guest ? mp.pace() : speed;
+  sl.max = String(mp ? Math.max(...NET.SPEEDS) : 10);
+  sl.value = String(shown);
+  sl.disabled = guest;
+  $("speedLabel").textContent = `${shown}×`;
+  $("speedBox").title = !mp ? "Game speed" : guest ? "Game speed, set by the host" : "Game speed, for everyone";
+}
+$("speedSlider").addEventListener("input", e => {
+  const v = +e.target.value;
   if (mp) { // the host sets everyone's speed
-    if (!mp.server) return;
-    speed = NET.SPEEDS[(NET.SPEEDS.indexOf(speed) + 1) % NET.SPEEDS.length];
+    if (!mp.server || !NET.SPEEDS.includes(v)) return syncSpeedUi();
+    speed = v;
     if (!paused) mp.server.setRate(speed);
     syncPaceUi();
     return;
   }
-  const steps = observe ? [1, 2, 4, 8] : [1, 1.5, 2];
-  speed = steps[(steps.indexOf(speed) + 1) % steps.length];
-  $("speedBtn").textContent = `${speed}×`;
-};
+  speed = v;
+  syncSpeedUi();
+});
+// Let go: the keys go back to the game (arrows would move the slider).
+$("speedSlider").addEventListener("change", e => e.target.blur());
+syncSpeedUi();
 function cheatsToast(on) {
   toast(on ? "Cheat mode on: every player a person plays can build and train anything, of any era, free." : "Cheat mode off.", "good");
   selKey = "";

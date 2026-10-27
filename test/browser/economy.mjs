@@ -52,6 +52,22 @@ const queues = await pg.evaluate(() => {
   const rows = [...document.querySelectorAll("#sel .trainrow")];
   return { rows: rows.length, queued: rows.map(r => r.querySelectorAll(".queue button").length), idle: rows.map(r => !!r.querySelector(".idle")) };
 });
+// The bottom bar keeps its size and never scrolls, whatever is selected.
+const hud = await page_hud();
+async function page_hud() {
+  return pg.evaluate(() => {
+    const sizes = new Set(), scroll = [];
+    const measure = () => { renderSelection(true); const h = $("hud").getBoundingClientRect(), c = $("cmd").getBoundingClientRect(), s = $("sel"); sizes.add(`${Math.round(h.width)}x${Math.round(h.height)} cmd ${Math.round(c.width)}`); if (getComputedStyle(s).overflowY !== "hidden" || getComputedStyle(s).overflowX !== "hidden") scroll.push("sel scrolls"); };
+    readWorld();
+    const all = []; for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME) all.push(E(i, F.id));
+    for (const pick of [[], all.slice(0, 1), all.slice(0, 3), all.slice(0, 12), all, [findOwn(K.Capitol)].map(i => E(i, F.id))]) { setSelection(pick); measure(); }
+    return { sizes: [...sizes], scroll };
+  });
+}
+check(hud.sizes.length === 1 && hud.scroll.length === 0, `the bottom bar keeps one size and doesn't scroll (${JSON.stringify(hud)})`);
+// Speed: a slider up to 10x when playing alone; the sound button is gone.
+const sp = await pg.evaluate(() => { const s = $("speedSlider"); s.value = "10"; s.dispatchEvent(new Event("input")); const r = [s.max, speed, $("speedLabel").textContent, !!document.getElementById("soundBtn")]; s.value = "1"; s.dispatchEvent(new Event("input")); return r; });
+check(sp[0] === "10" && sp[1] === 10 && sp[2] === "10×" && !sp[3], `a speed slider up to 10×, and no sound button (${sp})`);
 check(queues.rows === 3, `three training buildings selected: three rows (${queues.rows})`);
 check(queues.queued.some(n => n >= 1) || queues.idle.every(Boolean), `each row shows its queue or says idle (${JSON.stringify(queues)})`);
 // Houses: an Upgrade button (Z), which says why not yet.

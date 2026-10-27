@@ -81,7 +81,7 @@ check(await host.evaluate(() => $("endTitle").textContent === "Surrendered" && /
 await guest.waitForSelector("#endScreen:not([hidden])", { timeout: 20000 });
 check(await guest.evaluate(() => /Red/.test($("endWhy").textContent)), "the guest, watching, gets the end screen too");
 await w1.waitForSelector("#endScreen:not([hidden])", { timeout: 20000 });
-check(await w1.evaluate(() => observe.over && /Red won/.test($("endWhy").textContent) && !$("replayBtn").hidden && $("againBtn").hidden), "spectators: game over, Red won, with Watch the replay");
+check(await w1.evaluate(() => observe.over && /Red won/.test($("endWhy").textContent) && !$("replayBtn").hidden && $("againBtn").textContent === "Stop watching"), "spectators: game over, Red won, with Watch the replay and Stop watching");
 
 // Replays: the guest's (an online game) and the spectator's (joined halfway).
 const replayCheck = async (pg, label, offset = 0) => {
