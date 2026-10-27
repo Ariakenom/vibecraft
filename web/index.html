@@ -53,11 +53,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .res.lots .chip svg { width: 13px; height: 13px; }
 #top:has(.res.lots) { gap: 10px; }
 #top:has(.res.many) .brand { display: none; }
-/* A crowded bar: the slider drops down under the sound button instead
-   (on hover, or while it has focus), and the menu has one too. */
-#top:has(.res.many) .vol { position: relative; }
-#top:has(.res.many) #volume { display: none; position: absolute; top: 100%; right: 0; margin-top: 4px; padding: 8px 10px; width: 120px; background: #1b1610f4; border: 1px solid var(--line); border-radius: 3px; z-index: 6; }
-#top:has(.res.many) .vol:hover #volume, #top:has(.res.many) .vol:focus-within #volume { display: block; }
+/* A crowded bar: narrower sliders (the menu has a volume slider too). */
+#top:has(.res.many) #volume { width: 56px; }
+#top:has(.res.many) #speedSlider { width: 56px; }
 .res .era { background: transparent; border: 1px solid var(--line); border-radius: 3px; padding: 1px 9px; font: 400 14px var(--display); letter-spacing: .04em; color: var(--bronze); cursor: pointer; }
 .res .era:hover { border-color: var(--bronze); }
 #restip { position: absolute; top: calc(100% + 4px); width: 260px; background: #1b1610f4; border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; z-index: 6; font-size: 13px; line-height: 1.45; box-shadow: 0 8px 24px #0008; }
@@ -77,9 +75,15 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .clock { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 44px; text-align: right; }
 .tbtn { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 3px 10px; font-size: 13px; cursor: pointer; min-width: 40px; }
 .tbtn:hover { border-color: var(--bronze); }
-.vol { display: flex; align-items: center; gap: 8px; }
+.vol { display: flex; align-items: center; gap: 6px; }
+.volicon { width: 16px; height: 16px; color: var(--muted); flex: none; }
 #volume { width: 90px; accent-color: var(--bronze); cursor: pointer; }
 #volume.off { opacity: .45; }
+.speed { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.speed[hidden] { display: none; }
+#speedSlider { width: 90px; accent-color: var(--bronze); cursor: pointer; }
+#speedSlider:disabled { opacity: .6; cursor: default; }
+#speedLabel { min-width: 3.2em; font-variant-numeric: tabular-nums; color: var(--ink); }
 .menu-vol { align-items: center; gap: 12px; }
 .menu-vol input { width: 180px; accent-color: var(--bronze); cursor: pointer; }
 .menu-vol input.off { opacity: .45; }
@@ -98,9 +102,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); background: #1b1610e0; border: 1px solid var(--line); padding: 5px 12px; border-radius: 3px; font-size: 13px; color: var(--ink); pointer-events: none; white-space: nowrap; }
 
 /* ---- HUD ---- */
-#hud { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: 160px; gap: 12px; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: linear-gradient(var(--panel-hi), var(--panel) 30%); border-top: 2px solid var(--line); box-shadow: 0 -2px 0 #0007; z-index: 3; }
+#hud { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: 160px; gap: 12px; padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: linear-gradient(var(--panel-hi), var(--panel) 30%); border-top: 2px solid var(--line); box-shadow: 0 -2px 0 #0007; z-index: 3; }
 #mini { width: 150px; height: 150px; border: 1px solid var(--line); background: #000; display: block; cursor: pointer; touch-action: none; }
-#sel { min-width: 0; min-height: 0; display: flex; gap: 14px; align-items: flex-start; border: 1px solid var(--line); background: #1a150f; border-radius: 3px; padding: 10px 12px; overflow: hidden auto; }
+#sel { min-width: 0; min-height: 0; display: flex; gap: 14px; align-items: flex-start; border: 1px solid var(--line); background: #1a150f; border-radius: 3px; padding: 10px 12px; overflow: hidden; }
 #sel .portrait { width: 72px; height: 72px; flex: none; background: #2a2219; border: 1px solid var(--line); border-radius: 3px; }
 #sel .info { min-width: 0; flex: 1; display: grid; gap: 5px; align-content: start; }
 #sel h3 { margin: 0; font-family: var(--display); font-weight: 400; font-size: 18px; letter-spacing: .03em; }
@@ -133,19 +137,20 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .tips h3 { color: var(--ink); }
 
 /* Always room for three rows of five, whatever is selected, so the bar never changes size. */
-#cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 270px; }
+/* One width whatever is selected, so the bar never changes size. */
+#cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 340px; }
 #cmd .cbtn.page { font: 400 16px var(--display); color: var(--muted); }
 /* The nuke's flash: white over everything, fading out. */
 #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 50; }
 #flash.on { animation: nukeflash 2.2s ease-out; }
 @keyframes nukeflash { 0% { opacity: 0.95; } 15% { opacity: 0.85; } 100% { opacity: 0; } }
 #cmd .cbtn.page.on { color: var(--bronze); border-color: var(--bronze); background: #3d3020; }
-#cmd.dense { grid-template-columns: repeat(7, 40px); grid-auto-rows: 40px; gap: 4px; width: 304px; }
+#cmd.dense { grid-template-columns: repeat(7, 40px); grid-auto-rows: 40px; gap: 4px; }
 #cmd.dense .cbtn canvas { width: 38px; height: 38px; }
-#cmd.denser { grid-template-columns: repeat(9, 34px); grid-auto-rows: 34px; gap: 3px; width: 330px; }
+#cmd.denser { grid-template-columns: repeat(9, 34px); grid-auto-rows: 34px; gap: 3px; }
 #cmd.denser .cbtn canvas { width: 32px; height: 32px; }
 #cmd.denser .cbtn kbd { font-size: 10px; }
-#cmd.densest { grid-template-columns: repeat(11, 29px); grid-auto-rows: 29px; gap: 2px; width: 340px; }
+#cmd.densest { grid-template-columns: repeat(11, 29px); grid-auto-rows: 29px; gap: 2px; }
 #cmd.densest .cbtn canvas { width: 27px; height: 27px; }
 #cmd.densest .cbtn kbd { font-size: 9px; }
 .cbtn { position: relative; padding: 0; background: linear-gradient(#3a3023, #282017); border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
@@ -416,11 +421,11 @@ body.observing #hint { display: none; }
     <span class="chip watching" id="watchCount" title="Spectators watching this game" hidden></span>
     <span class="clock" id="clock">0:00</span>
     <span class="vol">
-      <button class="tbtn" id="soundBtn" title="Sound on or off (M)">Sound on</button>
-      <input type="range" id="volume" min="0" max="100" step="1" aria-label="Volume" title="Volume">
+      <svg class="volicon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.6a6 6 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>
+      <input type="range" id="volume" min="0" max="100" step="1" aria-label="Volume" title="Volume (M mutes)">
     </span>
     <button class="tbtn" id="pauseBtn" aria-pressed="false" title="Pause (P)">Pause</button>
-    <button class="tbtn" id="speedBtn" title="Game speed">1×</button>
+    <label class="speed" id="speedBox" title="Game speed"><input type="range" id="speedSlider" min="1" max="10" step="0.5" value="1" aria-label="Game speed"><span id="speedLabel">1×</span></label>
     <button class="tbtn" id="chatBtn" title="Chat (Enter)" hidden>Chat</button>
     <button class="tbtn" id="netBtn" title="Network details (F8)" hidden>Net</button>
     <button class="tbtn" id="menuBtn" title="Menu">Menu</button>
@@ -475,13 +480,6 @@ body.observing #hint { display: none; }
       <section class="lobby" aria-labelledby="seatsTitle">
         <div class="lobby-head">
           <h2 id="seatsTitle">Players</h2>
-          <div class="skill"><span id="diffLabel">Computer skill</span>
-            <div class="seg" id="diff" aria-labelledby="diffLabel">
-              <button data-d="0" aria-pressed="false">Easy</button>
-              <button data-d="1" aria-pressed="true">Normal</button>
-              <button data-d="2" aria-pressed="false">Hard</button>
-            </div>
-          </div>
         </div>
         <ol class="seats" id="seats"></ol>
         <div class="row" id="nameRow">
@@ -526,7 +524,7 @@ body.observing #hint { display: none; }
         <div><dt><kbd class="k">Ctrl</kbd>/<kbd class="k">Shift</kbd> + <kbd class="k">1</kbd>–<kbd class="k">9</kbd></dt><dd>Make a group; <kbd class="k">1</kbd>–<kbd class="k">9</kbd> recalls</dd></div>
         <div><dt><kbd class="k">W</kbd><kbd class="k">A</kbd><kbd class="k">S</kbd><kbd class="k">D</kbd>, edges</dt><dd>Move the camera; wheel zooms</dd></div>
         <div><dt>Middle-drag</dt><dd>Rotate and tilt the camera</dd></div>
-        <div><dt><kbd class="k">M</kbd></dt><dd>Sound on or off</dd></div>
+        <div><dt><kbd class="k">M</kbd></dt><dd>Mute or unmute</dd></div>
         <div><dt><kbd class="k">Ctrl</kbd> + <kbd class="k">S</kbd></dt><dd>Save the game (Menu loads)</dd></div>
       </dl>
       <p class="note">Counters hold in every era: foot soldiers (spears, swords, muskets, rifles) beat riders and tanks; riders and tanks beat archers, crossbows and machine guns; those beat foot soldiers. Siege smashes buildings, and fighters rule the air. Your Capitol and towers shoot back. Everything you have holds its resources while it exists: lose a producer and your newest units that need it lose health. Grow from village to empire by building (<kbd class="k">K</kbd> shows the tech tree), and win by conquest.</p>
@@ -538,10 +536,9 @@ body.observing #hint { display: none; }
       <h1><span id="endTitle">Victory</span><small id="endWhy"></small></h1>
       <table class="stats" id="endStats"></table>
       <div class="row">
-        <button class="go" id="againBtn">Play again</button>
+        <button class="go" id="againBtn">Main menu</button>
         <button class="ghost" id="replayBtn" hidden>Watch the replay</button>
         <button class="ghost" id="replayDlBtn" hidden title="A .vibecraft file you can keep, send, or open with Load from a file">Download the replay</button>
-        <button class="ghost" id="toMenuBtn">Change difficulty</button>
       </div>
     </div>
   </div>

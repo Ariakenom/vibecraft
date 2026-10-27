@@ -36,9 +36,11 @@ await host.click("#surrenderBtn"); await host.click("#surrenderBtn");
 await host.waitForSelector("#endScreen:not([hidden])", { timeout: 10000 });
 await friend.waitForSelector("#endScreen:not([hidden])", { timeout: 15000 });
 check(await friend.evaluate(() => /Red won/.test($("endWhy").textContent) && /another game/.test($("endWhy").textContent) && !$("replayBtn").hidden), "the spectator sees the end, and that the next game will show");
-await host.click("#againBtn"); // Play again
+await host.click("#againBtn"); // Main menu
+await host.waitForSelector("#startScreen:not([hidden])", { timeout: 10000 });
+await host.click("#startBtn"); // and a new game
 await friend.waitForFunction(g => watcher && watcher.loaded && watcher.game !== g, firstGame, { timeout: 20000 });
-check(await friend.evaluate(() => $("endScreen").hidden && observe.kind === "watch" && !observe.over), "the host plays again: the spectator is watching the new game");
+check(await friend.evaluate(() => $("endScreen").hidden && observe.kind === "watch" && !observe.over), "the host goes to the menu and starts another game: the spectator is watching the new game");
 // Stop watching: back to my own lobby.
 await friend.click("#obsExit");
 await friend.waitForFunction(() => !watcher && room && !guestOf && !$("startScreen").hidden && roomCode, null, { timeout: 10000 });

@@ -1836,6 +1836,7 @@ function newGame(seedArg, local = 0, players = 2) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
   W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
+  else for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
   enterWorld(local);
 }
 
@@ -1860,9 +1861,10 @@ function enterWorld(local = 0) {
   knownUnlocked = new Set(BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k)));
   acc = 0; selKey = ""; titleSpin = false; topBar = null; $("techScreen").hidden = true;
   // Online, only the host pauses or changes the speed (syncPaceUi).
-  $("pauseBtn").hidden = !!local; $("speedBtn").hidden = !!local; $("restartBtn").hidden = !!local;
+  $("pauseBtn").hidden = !!local; $("speedBox").hidden = !!local; $("restartBtn").hidden = !!local;
   $("quitBtn").textContent = local ? "Leave game" : "New game";
-  if (local || speed > 2) { speed = 1; $("speedBtn").textContent = "1×"; }
+  if (local) speed = 1;
+  syncSpeedUi();
   renderTopBar(); renderSelection(true);
   // Start recording (a replay, and what spectators are sent). Single player:
   // me against the computer. Multiplayer fills in who's who when it starts.
@@ -1923,9 +1925,7 @@ function showEndStats(opts = {}) {
     row("Units and buildings lost", p => W.player_stat(p, 1)) +
     row("Buildings built", p => W.player_stat(p, 2)) +
     `<tr><th>Game time</th><td colspan="${ps.length}">${fmtTime(W.game_time())}</td></tr>`;
-  $("againBtn").textContent = mp || lastWasMultiplayer ? "Back to menu" : "Play again";
-  $("againBtn").hidden = !!opts.watching;
-  $("toMenuBtn").textContent = opts.watching ? "Stop watching" : "Change difficulty";
+  $("againBtn").textContent = opts.watching ? "Stop watching" : "Main menu";
   $("replayBtn").hidden = !Rec.replay;
   $("replayDlBtn").hidden = !Rec.replay;
   $("endScreen").hidden = false;
@@ -1977,6 +1977,11 @@ function renderNetStatus() {
 // A seat is a string, which is also how it travels: "host", "ai", "open", or
 // "f:<token>" for a friend.
 let seats = ["host", "ai", "open", "open"];
+// Each computer seat's skill (0 Easy, 1 Normal, 2 Hard), by seat.
+let seatDiff = [1, 1, 1, 1];
+// The last game's, by player slot: for Restart.
+let slotDiffs = {};
+const SKILL = ["Easy", "Normal", "Hard"];
 let room = null;        // the lobby's room (and then the game's)
 let roomCode = null;    // my own lobby's code, kept for the whole visit so my link keeps working
 let guestOf = null;     // as a guest: { code, host (the host's presence, or null), lostAt }
@@ -2039,7 +2044,7 @@ function renderLobby() {
     who.textContent = nm ? nm + (mine ? " (you)" : "") : s === "host" ? (guest ? "Host" : "You")
       : s === "f:" + myToken ? "You"
       : isFriend(s) ? "Friend"
-      : s === "ai" ? "Computer"
+      : s === "ai" ? (guest ? `Computer · ${SKILL[(guestOf.host && guestOf.host.seatDiff || [])[i] ?? 1] || "Normal"}` : "Computer") // the host's picker shows the skill
       : room ? "Open for a friend" : "Empty";
     if (slot) who.style.color = PLIGHT[slot];
     li.append(sw, who);
@@ -2047,12 +2052,14 @@ function renderLobby() {
       // The host decides who sits where.
       const sel = document.createElement("select");
       sel.setAttribute("aria-label", `Seat ${i + 1}`);
-      const opts = isFriend(s) ? [["friend", "Friend"], ["ai", "Give to computer"], ["open", "Remove"]]
-        : [["ai", "Computer"], ["open", room ? "Open" : "Empty"]];
+      // A computer seat picks its own skill.
+      const ais = SKILL.map((n, d) => [`ai:${d}`, `Computer · ${n}`]);
+      const opts = isFriend(s) ? [["friend", "Friend"], ["ai:1", "Give to computer"], ["open", "Remove"]]
+        : [...ais, ["open", room ? "Open" : "Empty"]];
       for (const [v, label] of opts) {
         const o = document.createElement("option");
         o.value = v; o.textContent = label;
-        o.selected = v === s || (v === "friend" && isFriend(s));
+        o.selected = (s === "ai" && v === `ai:${seatDiff[i]}`) || v === s || (v === "friend" && isFriend(s));
         sel.append(o);
       }
       sel.onchange = () => setSeat(i, sel.value);
@@ -2075,20 +2082,19 @@ function renderLobby() {
   $("inviteRow").hidden = !link;
   $("lobbyWatchLink").hidden = !link;
   if (link && $("inviteLink").value !== link) $("inviteLink").value = link;
-  const diff = guest && guestOf.host ? guestOf.host.diff : difficulty;
-  for (const b of $("diff").children) { b.disabled = guest; b.setAttribute("aria-pressed", String(+b.dataset.d === diff)); }
 }
 
 function setSeat(i, v) {
   const s = seats[i];
   if (isFriend(s)) { if (v === "friend") return; kicked.add(s.slice(2)); }
+  if (v.startsWith("ai:")) { seatDiff[i] = Math.max(0, Math.min(2, +v.slice(3) || 0)); v = "ai"; }
   seats[i] = v;
   lobbyChanged();
 }
 function lobbyChanged() { publishLobby(); renderLobby(); }
 function publishLobby() {
   if (!room || guestOf) return;
-  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, name: myName, names: mp ? pnames : null, seats, diff: difficulty, playing: inGame(), kicked: [...kicked].slice(-20) });
+  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, name: myName, names: mp ? pnames : null, seats, seatDiff, playing: inGame(), kicked: [...kicked].slice(-20) });
 }
 
 // The host's view of the room: seat whoever has arrived, free the seats of
@@ -2232,6 +2238,9 @@ function beginGame() {
   if (guestOf || mp) return;
   const active = seats.filter(s => s !== "open");
   if (active.length < 2) return;
+  // Each computer's skill, by the player slot its seat gets.
+  slotDiffs = {};
+  seats.forEach((s, i) => { if (s === "ai") slotDiffs[slotOf(i, seats)] = seatDiff[i]; });
   if (!room || !active.some(isFriend)) {
     lastWasMultiplayer = false; lastPlayers = active.length;
     $("startScreen").hidden = true;
@@ -2243,7 +2252,7 @@ function beginGame() {
   const slots = {}, ai = [];
   const names = { 1: myName };
   active.forEach((s, k) => { if (isFriend(s)) { slots[s.slice(2)] = k + 1; names[k + 1] = peerNames.get(s.slice(2)) || ""; } else if (s === "ai") ai.push(k + 1); });
-  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: (Math.random() * 1e9) >>> 0, n: active.length, slots, ai, diff: difficulty, host: myToken };
+  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: (Math.random() * 1e9) >>> 0, n: active.length, slots, ai, diffs: slotDiffs, host: myToken };
   // Keep telling the guests until all of them have answered.
   const send = () => room && room.emit("start", settings);
   send();
@@ -2261,11 +2270,10 @@ function beginGame() {
 
 function startMultiplayer(me, d, seq) {
   const n = Math.max(2, Math.min(4, d.n | 0));
-  difficulty = [0, 1, 2].includes(d.diff) ? d.diff : 1;
   $("startScreen").hidden = true;
   newGame(d.seed >>> 0, me, n);
   const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
-  for (const s of ai) W.set_ai(s, 1);
+  for (const s of ai) { W.set_ai(s, 1); W.set_difficulty(s, [0, 1, 2].includes(d.diffs && d.diffs[s]) ? d.diffs[s] : 1); }
   // Record from here: the start everyone shares, then the confirmed bundles.
   const who = {};
   for (let p = 1; p <= n; p++) who[p] = ai.includes(p) ? "computer" : "human";
@@ -2490,7 +2498,7 @@ function finishMultiplayer() {
   mp = null;
   paused = false; speed = 1; lastPace = 1; slowFor.clear(); announced.clear();
   $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
-  $("speedBtn").textContent = "1×"; $("speedBtn").disabled = false;
+  syncSpeedUi();
   $("netBtn").hidden = true; $("netTrace").hidden = true;
   $("netWait").hidden = true;
 }
@@ -2514,10 +2522,8 @@ function syncPaceUi() {
   $("pauseBtn").textContent = host && paused ? "Resume" : "Pause";
   $("pauseBtn").title = "Pause the game for everyone (P)";
   // Guests: the speed shows, when it isn't the usual one.
-  $("speedBtn").hidden = !host && (rate === 1 || rate === 0);
-  $("speedBtn").disabled = !host;
-  $("speedBtn").textContent = `${host ? speed : rate}×`;
-  $("speedBtn").title = host ? "Game speed, for everyone" : "Game speed, set by the host";
+  $("speedBox").hidden = !host && (rate === 1 || rate === 0);
+  syncSpeedUi();
 }
 // A guest: the host paused, resumed, or changed the speed.
 let lastPace = 1;
@@ -2699,13 +2705,11 @@ function renderSaveList() {
 window.addEventListener("pointerdown", () => Sfx.init(), { capture: true });
 window.addEventListener("keydown", () => Sfx.init(), { capture: true });
 function syncSoundBtn() {
-  $("soundBtn").textContent = Sfx.muted ? "Sound off" : "Sound on";
   for (const id of ["volume", "menuVolume"]) {
     $(id).value = String(Math.round(Sfx.volume * 100));
     $(id).classList.toggle("off", Sfx.muted);
   }
 }
-$("soundBtn").onclick = () => { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); };
 for (const id of ["volume", "menuVolume"]) {
   $(id).addEventListener("input", e => {
     Sfx.setVolume(e.target.value / 100);
@@ -2716,11 +2720,6 @@ for (const id of ["volume", "menuVolume"]) {
   $(id).addEventListener("change", e => { Sfx.init(); Sfx.ui("queued"); e.target.blur(); });
 }
 syncSoundBtn();
-$("diff").addEventListener("click", e => {
-  const b = e.target.closest("button"); if (!b || guestOf) return;
-  difficulty = +b.dataset.d;
-  lobbyChanged();
-});
 // Back to the lobby: a host reopens theirs (which also clears what the last
 // game left in the room); a guest goes back to their host's.
 const toMenu = () => {
@@ -2734,22 +2733,34 @@ const toMenu = () => {
 };
 $("startBtn").onclick = beginGame;
 $("leaveLobbyBtn").onclick = () => openOwnLobby();
-$("againBtn").onclick = () => { if (lastWasMultiplayer) return toMenu(); $("endScreen").hidden = true; newGame(undefined, 0, lastPlayers); running = true; Rec.real = true; };
-$("toMenuBtn").onclick = toMenu;
+$("againBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
-// Watching the rest of a single-player game, it can go faster.
-$("speedBtn").onclick = () => {
+// Game speed: a slider. Alone, up to 10x; online the host picks one of
+// NET.SPEEDS for everyone, and the others see it.
+function syncSpeedUi() {
+  const sl = $("speedSlider"), guest = !!mp && !mp.server;
+  const shown = guest ? mp.pace() : speed;
+  sl.max = String(mp ? Math.max(...NET.SPEEDS) : 10);
+  sl.value = String(shown);
+  sl.disabled = guest;
+  $("speedLabel").textContent = `${shown}×`;
+  $("speedBox").title = !mp ? "Game speed" : guest ? "Game speed, set by the host" : "Game speed, for everyone";
+}
+$("speedSlider").addEventListener("input", e => {
+  const v = +e.target.value;
   if (mp) { // the host sets everyone's speed
-    if (!mp.server) return;
-    speed = NET.SPEEDS[(NET.SPEEDS.indexOf(speed) + 1) % NET.SPEEDS.length];
+    if (!mp.server || !NET.SPEEDS.includes(v)) return syncSpeedUi();
+    speed = v;
     if (!paused) mp.server.setRate(speed);
     syncPaceUi();
     return;
   }
-  const steps = observe ? [1, 2, 4, 8] : [1, 1.5, 2];
-  speed = steps[(steps.indexOf(speed) + 1) % steps.length];
-  $("speedBtn").textContent = `${speed}×`;
-};
+  speed = v;
+  syncSpeedUi();
+});
+// Let go: the keys go back to the game (arrows would move the slider).
+$("speedSlider").addEventListener("change", e => e.target.blur());
+syncSpeedUi();
 function cheatsToast(on) {
   toast(on ? "Cheat mode on: every player a person plays can build and train anything, of any era, free." : "Cheat mode off.", "good");
   selKey = "";

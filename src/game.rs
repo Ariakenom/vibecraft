@@ -485,17 +485,19 @@ pub struct Game {
     idle_cursor: u32,
 }
 
+/// A computer player's supply, in percent, at each difficulty: Hard gets a
+/// bonus (Easy plays slower instead, see `EASY_ERA_AT`).
+pub fn handicap(difficulty: u32) -> u16 {
+    if difficulty >= 2 { 130 } else { 100 }
+}
+
 impl Game {
     /// A new game: player 1 is the human, the rest are computer players.
     pub fn new(seed: u32, difficulty: u32, n_players: u8) -> Game {
         let n_players = n_players.clamp(2, MAX_PLAYERS as u8);
         let (map, deps, bases) = map::generate(seed, n_players as usize);
         let n = (map.w * map.h) as usize;
-        let handicap = match difficulty {
-            0 => 100,
-            1 => 100,
-            _ => 130,
-        };
+        let handicap = handicap(difficulty);
         // Player 1 is the human; the computer players get the handicap.
         let players = (0..=n_players).map(|p| Player::new(if p > 1 { handicap } else { 100 })).collect();
         // Each AI thinks on a slightly different tick, so they don't all spike at once.
@@ -711,6 +713,21 @@ impl Game {
                 self.players[player as usize].supply_pct = 100;
             }
         }
+    }
+
+    /// How well one computer player plays (0 Easy, 1 Normal, 2 Hard): each
+    /// seat in the lobby picks its own. Its next attack, wave size and
+    /// supply come from it; at the start of a game, before the recording.
+    pub fn set_difficulty(&mut self, player: u8, difficulty: u32) {
+        let d = difficulty.min(2);
+        if player < 1 || player as usize >= self.players.len() {
+            return;
+        }
+        if let Some(ai) = self.ais.get_mut(player as usize) {
+            let fresh = Ai::new(d, ai.on, 0.0);
+            (ai.difficulty, ai.next_attack, ai.wave_size) = (fresh.difficulty, fresh.next_attack, fresh.wave_size);
+        }
+        self.players[player as usize].supply_pct = handicap(d);
     }
 
     /// Players 1..=n, for `for p in self.player_ids()`.

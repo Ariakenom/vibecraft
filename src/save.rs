@@ -34,7 +34,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 11: the Atomic era: silos, nukes in flight, craters.
 /// 12: Capitols can be founded (the first is marked); AI waves gather.
 /// 13: cheat mode.
-const VERSION: u32 = 13;
+/// 14: maps vary more from seed to seed (the same seed draws another map).
+const VERSION: u32 = 14;
 
 // ---------------------------------------------------------------------------
 // Writer

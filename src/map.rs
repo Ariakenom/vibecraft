@@ -197,6 +197,15 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     let bases: Vec<(i32, i32)> = base_order.iter().take(players).map(|s| s.apply(b1.0, b1.1, w, h)).collect();
     let all_bases: Vec<(f32, f32)> = images(b1.0, b1.1).map(|(x, y)| (x as f32 + 0.5, y as f32 + 0.5)).collect();
     let centre = (w as f32 / 2.0, h as f32 / 2.0);
+    // Each seed has a character of its own (playtest: maps looked alike):
+    // big lakes or small ponds, high or low water, hills, thick or thin
+    // forest. `pick(k, lo, hi)` is a number of the seed's in lo..hi.
+    let pick = |k: i32, lo: f32, hi: f32| lo + (hi - lo) * hash(k, 911, seed);
+    let land_scale = pick(1, 10.0, 22.0);
+    let water_at = pick(2, 0.31, 0.36);
+    let hill_at = pick(3, 0.66, 0.77);
+    let wood_scale = pick(4, 5.0, 9.5);
+    let wood_at = pick(5, 0.54, 0.66);
 
     // "Canonical" coordinates: a tile and all its images share one noise
     // sample, which is what makes the map symmetric.
@@ -210,7 +219,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         for x in 0..w {
             let i = (y * w + x) as usize;
             let (cx, cy) = canon(x, y);
-            let mut ht = fbm(cx as f32 / 15.0, cy as f32 / 15.0, seed);
+            let mut ht = fbm(cx as f32 / land_scale, cy as f32 / land_scale, seed);
             let p = (x as f32 + 0.5, y as f32 + 0.5);
             // Raise ground around every base and along roads to the middle,
             // so nobody spawns in a lake and the map is always connected.
@@ -232,11 +241,11 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 let wobble = hash(cx, cy, seed ^ 0x5EA) * 0.03;
                 ht = ht.min(0.24 + 0.035 * edge as f32 + wobble);
             }
-            terrain[i] = if ht < 0.34 {
+            terrain[i] = if ht < water_at {
                 WATER
-            } else if ht < 0.375 {
+            } else if ht < water_at + 0.035 {
                 SAND
-            } else if ht > 0.70 {
+            } else if ht > hill_at {
                 HILL
             } else {
                 GRASS
@@ -244,9 +253,9 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             shade[i] = (ht.clamp(0.0, 1.0) * 255.0) as u8;
 
             // Forests from a second noise layer.
-            let f = fbm(cx as f32 / 7.0 + 40.0, cy as f32 / 7.0 + 40.0, seed ^ 0xBEEF);
+            let f = fbm(cx as f32 / wood_scale + 40.0, cy as f32 / wood_scale + 40.0, seed ^ 0xBEEF);
             let near_base = all_bases.iter().any(|&b| dist(p, b) < 11.0);
-            if (terrain[i] == GRASS || terrain[i] == HILL) && f > 0.6 && hash(cx, cy, seed ^ 7) < 0.82 && !near_base && road > 2.5 {
+            if (terrain[i] == GRASS || terrain[i] == HILL) && f > wood_at && hash(cx, cy, seed ^ 7) < 0.82 && !near_base && road > 2.5 {
                 feat[i] = Feat::Tree;
             }
         }
@@ -293,6 +302,26 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         (64, 58, Feat::Oil, 1.3),
         (16, 26, Feat::Bauxite, 1.4),
     ];
+    let mirror = hash(6, 911, seed) < 0.5;
+    let flip = |dx: i32, dy: i32| if mirror { (-dy, -dx) } else { (dx, dy) };
+    // (First, so the clusters below keep clear of it.)
+    // A pond by every base, so every start has fish: houses need three
+    // different foods to grow, and the others are few.
+    let pond = { let (dx, dy) = flip(-5, 12); (b1.0 + dx, b1.1 + dy) };
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let (x, y) = (pond.0 + dx, pond.1 + dy);
+            if (dx * dx + dy * dy) as f32 > 2.6 || x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
+                continue;
+            }
+            for (px, py) in images(x, y) {
+                let i = (py * w + px) as usize;
+                terrain[i] = WATER;
+                shade[i] = shade[i].min(70);
+                feat[i] = Feat::None;
+            }
+        }
+    }
     // A cluster that would sit in a lake moves to the nearest dry ground
     // instead (playtest: deposits stood on islands of their own). Every
     // image of a spot looks the same, so checking one is enough.
@@ -324,7 +353,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // dry spot; failing that, where it was meant to go.
     let on_land = |terrain: &[u8], feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| -> (i32, i32) {
         let mut dry_only = None;
-        for ring in 0..=14 {
+        for ring in 0..=22 {
             for k in 0..(8 * ring).max(1) {
                 let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
                 if dry(terrain, cx + dx, cy + dy, r) {
@@ -383,29 +412,29 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             }
         }
     };
-    for (dx, dy, f, r) in clusters {
-        let s = |v: i32| (v as f32 * SPREAD).round() as i32;
-        place(b1.0 + s(dx), b1.1 + s(dy), f, r);
+    // The start's layout differs from seed to seed: mirrored across the
+    // line to the middle (which keeps the road clear) or not, and every
+    // cluster turned and moved out or in a little. Every base still gets
+    // the same, so it stays fair.
+    for (k, &(dx, dy, f, r)) in clusters.iter().enumerate() {
+        let (dx, dy) = flip(dx, dy);
+        let turn = (hash(k as i32, 17, seed) - 0.5) * 0.5;
+        let out = 0.9 + hash(k as i32, 23, seed) * 0.25;
+        let (fx, fy) = (dx as f32 * out * SPREAD, dy as f32 * out * SPREAD);
+        let (fx, fy) = (fx * turn.cos() - fy * turn.sin(), fx * turn.sin() + fy * turn.cos());
+        place(b1.0 + fx.round() as i32, b1.1 + fy.round() as i32, f, r);
     }
-    for (x, y, f, r) in neutral {
-        place(x * w / 80, y * h / 80, f, r);
+    // Out on the map: the same spots, a little moved, and which deposit is
+    // where shuffled.
+    let mut kinds: Vec<(Feat, f32)> = neutral.iter().map(|&(_, _, f, r)| (f, r)).collect();
+    for i in (1..kinds.len()).rev() {
+        let j = (hash(i as i32, 31, seed) * (i + 1) as f32) as usize;
+        kinds.swap(i, j.min(i));
     }
-    // A pond by every base, so every start has fish: houses need three
-    // different foods to grow, and the others are few.
-    let pond = (b1.0 - 5, b1.1 + 12);
-    for dy in -2..=2 {
-        for dx in -2..=2 {
-            let (x, y) = (pond.0 + dx, pond.1 + dy);
-            if (dx * dx + dy * dy) as f32 > 2.6 || x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
-                continue;
-            }
-            for (px, py) in images(x, y) {
-                let i = (py * w + px) as usize;
-                terrain[i] = WATER;
-                shade[i] = shade[i].min(70);
-                feat[i] = Feat::None;
-            }
-        }
+    for (k, (&(x, y, _, _), &(f, r))) in neutral.iter().zip(&kinds).enumerate() {
+        let jx = ((hash(k as i32, 41, seed) - 0.5) * 10.0).round() as i32;
+        let jy = ((hash(k as i32, 43, seed) - 0.5) * 10.0).round() as i32;
+        place((x + jx).clamp(6, 74) * w / 80, (y + jy).clamp(6, 74) * h / 80, f, r);
     }
     // Clear the town sites themselves.
     for &(bx, by) in &all_bases {
@@ -444,6 +473,20 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             }
         }
     }
+
+    // Half the maps are mirrored left to right, so the starts sit on the
+    // other diagonal (top left and bottom right). Still symmetric and fair.
+    let bases = if hash(7, 911, seed) < 0.5 {
+        for y in 0..h {
+            let row = (y * w) as usize..((y + 1) * w) as usize;
+            terrain[row.clone()].reverse();
+            shade[row.clone()].reverse();
+            feat[row].reverse();
+        }
+        bases.into_iter().map(|(x, y)| (w - 1 - x, y)).collect()
+    } else {
+        bases
+    };
 
     // Turn features into deposits and mark blocked tiles.
     let mut deps = Vec::new();

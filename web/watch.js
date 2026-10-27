@@ -217,7 +217,7 @@ function startObserving(kind) {
   $("obsExit").textContent = kind === "replay" ? "Exit replay" : kind === "watch" ? "Stop watching" : "Leave game";
   // Pause and speed: in a replay they're on the bar; a live game can't be.
   $("pauseBtn").hidden = kind !== "out" || !!mp;
-  $("speedBtn").hidden = kind !== "out" || !!mp;
+  $("speedBox").hidden = kind !== "out" || !!mp;
   renderScoreboard(true);
   renderSelection(true);
 }

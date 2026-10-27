@@ -949,6 +949,21 @@ thread_local! {
 pub extern "C" fn game_seed() -> u32 {
     game(|g| g.seed)
 }
+/// One computer player's difficulty (0 easy, 1 normal, 2 hard), set per
+/// seat at the start of a game, on every computer alike.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_difficulty(player: u32, difficulty: u32) {
+    with(|w| {
+        for g in std::iter::once(&mut w.game).chain(w.other.as_mut()) {
+            g.set_difficulty(player.min(4) as u8, difficulty);
+        }
+    })
+}
+/// Player `p`'s computer difficulty (0 easy, 1 normal, 2 hard).
+#[unsafe(no_mangle)]
+pub extern "C" fn player_difficulty(p: u32) -> u32 {
+    game(|g| g.ais.get(p as usize).map_or(1, |a| a.difficulty))
+}
 /// The computer players' difficulty: 0 easy, 1 normal, 2 hard.
 #[unsafe(no_mangle)]
 pub extern "C" fn game_difficulty() -> u32 {
