@@ -93,6 +93,8 @@ const LUXURY_RESERVE: i32 = 4;
 const HOUSE_RESERVE: i32 = 4;
 /// Supply the computer keeps ahead of use in wood, stone and brick.
 const RAW_MARGIN: i32 = 6;
+/// Wood and stone every other project leaves free for the next quarry or sawmill.
+const MATERIAL_RESERVE: i32 = 2;
 
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
@@ -250,10 +252,12 @@ impl Game {
         if kind == Kind::Brickworks && self.unlocked(me, Kind::Kiln) {
             return 2;
         }
-        // Wood, stone and brick pay for everything, the army included: as
-        // many as it takes for the supply to stay `RAW_MARGIN` ahead of use.
-        if matches!(kind, Kind::LumberCamp | Kind::Quarry | Kind::Sawmill | Kind::Stoneworks | Kind::Brickworks | Kind::Kiln) {
-            let Some(&(res, out)) = kind.stats().produces.first() else { return hard };
+        // Materials (wood, stone, brick, iron, coal, steel ...) pay for
+        // everything, the army included: as many of their producers as it
+        // takes for the supply to stay `RAW_MARGIN` ahead of use. (Houses'
+        // goods follow the target instead.)
+        let material = kind.stats().produces.first().filter(|&&(r, _)| !r.is_house_good() && kind.house_tier().is_none() && kind != Kind::Capitol);
+        if let Some(&(res, out)) = material {
             let pl = &self.players[me as usize];
             let built = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind && e.built >= 1.0).count() as i32;
             let others = pl.supply[res.idx()] as i32 - built * out as i32;
@@ -498,7 +502,10 @@ impl Game {
                 return step;
             }
         }
-        let mut by_supply = goods.clone();
+        // Producers of goods for a house that lacks one, or for the next
+        // house when none of a good is spare. More than that only hold slots
+        // (and get torn down again for them).
+        let mut by_supply: Vec<Res> = goods.iter().copied().filter(|&r| lacking || p.spare(r) <= 0).collect();
         by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in by_supply {
             let Some(k) = self.ai_producer(c.me, r) else { continue };
@@ -510,7 +517,7 @@ impl Game {
         }
         // The target's goods have nowhere to go: any other the houses can use.
         c.relax = true;
-        let mut others = all.clone();
+        let mut others = if lacking { all.clone() } else { Vec::new() };
         others.retain(|r| !goods.contains(r));
         others.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in others {
@@ -561,6 +568,7 @@ impl Game {
         let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == c.me && e.crewed && e.built >= 1.0 && unneeded(e.kind)).map(|e| e.id) else {
             return false;
         };
+        ailog!("P{} release (few free workers): tear down {:?}", c.me, self.ents[id as usize].kind);
         self.apply(c.me, Command::Demolish { ids: vec![id] }).is_ok()
     }
 
@@ -585,13 +593,14 @@ impl Game {
                 Kind::Brickworks => g.unlocked(me, Kind::Kiln) && g.count_of(me, Kind::Kiln) == 0 && g.count_of(me, Kind::Brickworks) > 1,
                 // A food or cloth producer nobody is eating from holds
                 // slots a house upgrade needs. Never the raw materials.
+                // Only past what the town needs, though: one the target
+                // wants would be rebuilt at once with the slots it gave up
+                // (playtest: a Printer torn down and rebuilt every 20 s).
                 k => {
                     let st = k.stats();
-                    e.crewed
-                        && e.built >= 1.0
-                        && st.workers > 0
-                        && (g.count_of(me, k) > g.ai_max(me, k) || (!matches!(k, Kind::Sawmill | Kind::Brickworks) || g.count_of(me, k) > 2) && !matches!(k, Kind::Quarry | Kind::LumberCamp | Kind::Kiln | Kind::IronMine | Kind::Stoneworks | Kind::Farm))
-                        && st.produces.iter().all(|&(q, n)| g.players[me as usize].spare(q) >= n as i32)
+                    let n = g.count_of(me, k);
+                    let over = n > g.ai_max(me, k);
+                    e.crewed && e.built >= 1.0 && st.workers > 0 && over && st.produces.iter().all(|&(q, n)| g.players[me as usize].spare(q) >= n as i32)
                 }
             }
         };
@@ -599,7 +608,7 @@ impl Game {
             ailog!("  free up {r:?}: nothing to spare");
             return false;
         };
-        ailog!("  free up {r:?}: tear down {:?}", self.ents[id as usize].kind);
+        ailog!("  P{me} free up {r:?}: tear down {:?} (t {:.0})", self.ents[id as usize].kind, self.time);
         self.apply(me, Command::Demolish { ids: vec![id] }).is_ok()
     }
 
@@ -654,6 +663,18 @@ impl Game {
         if self.ai_short_of(me, what).is_some() || !self.unlocked(me, what) {
             ailog!("  project {kind:?}: {what:?} short of {:?} (unlocked {})", self.ai_short_of(me, what), self.unlocked(me, what));
             return Step::Blocked; // short of something nothing makes yet
+        }
+        // Everything but the material producers leaves the last wood and
+        // stone: a quarry costs wood, a sawmill stone, and with both used
+        // up neither can be built again (playtest: towns stood still with
+        // every slot of both held).
+        let makes_material = what.stats().produces.first().is_some_and(|&(r, _)| !r.is_house_good());
+        if !makes_material && self.players[me as usize].era >= 1 {
+            let p = &self.players[me as usize];
+            if let Some(&(r, k)) = what.stats().cost.iter().find(|&&(r, k)| matches!(r, Res::Wood | Res::Stone) && p.free(r) - (k as i32) < MATERIAL_RESERVE) {
+                ailog!("  project {kind:?}: {what:?} would leave less than {MATERIAL_RESERVE} {r:?} (needs {k})");
+                return Step::Blocked;
+            }
         }
         // Its builders and its crew, and some free workers kept back.
         let st = what.stats();

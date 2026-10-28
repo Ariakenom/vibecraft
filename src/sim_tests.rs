@@ -1486,12 +1486,39 @@ fn diag_ai() {
         }
     }
     println!("{}", census(&g, me));
-    crate::ai::ai_log_start();
     for _ in 0..turns {
+        crate::ai::ai_log_start();
         g.ai_think(me);
+        for l in crate::ai::ai_log_take() {
+            println!("  {l}");
+        }
         run(&mut g, 0.5);
     }
-    for l in crate::ai::ai_log_take() {
+}
+
+#[test]
+#[ignore]
+fn diag_sites() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (seed, me, minutes) = (env("VC_SEED", 2), env("VC_P", 1) as u8, env("VC_MINUTES", 40));
+    let mut g = Game::new(seed, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, minutes as f32 * 60.0);
+    let cap = g.home_capitol(me).unwrap();
+    println!("home {:.0},{:.0} campfire {:?}", g.ents[cap].x, g.ents[cap].y, g.campfire(me));
+    crate::ai::ai_log_start();
+    run(&mut g, 60.0);
+    for l in crate::ai::ai_log_take().iter().filter(|l| l.contains("tear down") || l.contains("placed")) {
         println!("  {l}");
+    }
+    for round in 0..3 {
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0) {
+            let coming: Vec<String> = g.ents.iter().filter(|w| w.alive && w.order == Order::Build(e.id)).map(|w| format!("({:.0},{:.0} {:?})", w.x, w.y, w.goal.is_some())).collect();
+            println!("r{round} site {:?} #{} at {},{} built {:.2} builders_in {} coming {:?}", e.kind, e.id, e.tx, e.ty, e.built, e.builders_in, coming);
+        }
+        run(&mut g, 20.0);
     }
 }
