@@ -95,6 +95,8 @@ const HOUSE_RESERVE: i32 = 4;
 const RAW_MARGIN: i32 = 6;
 /// Wood and stone every other project leaves free for the next quarry or sawmill.
 const MATERIAL_RESERVE: i32 = 2;
+/// Foundations near home the computer builds at once.
+const PARALLEL: usize = 4;
 
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
@@ -395,7 +397,9 @@ impl Game {
         // builders. Far-off ones don't hold the town up: their builders may
         // be cut down on the way, again and again.
         let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| (self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 30.0).collect();
-        let busy = near.iter().any(|&b| self.builders_missing(b) > 0) || near.len() >= 2;
+        // A few at once while there are hands for them (playtest: the
+        // computer built one thing at a time with a crowd standing idle).
+        let busy = near.len() >= PARALLEL || c.spare == 0;
         let p = self.players[me as usize];
         // Beds ahead of people: grow before the houses are full.
         let tight = p.people + 2 >= p.beds;
@@ -561,9 +565,10 @@ impl Game {
     /// its workers come free. Food in houses counts as used.
     fn ai_release(&mut self, c: &Census) -> bool {
         let p = self.players[c.me as usize];
+        // (Not one the town still wants: it would be rebuilt at once.)
         let unneeded = |k: Kind| {
             let st = k.stats();
-            st.workers > 0 && st.produces.iter().all(|&(r, n)| p.spare(r) >= n as i32)
+            st.workers > 0 && st.produces.iter().all(|&(r, n)| p.spare(r) >= n as i32) && self.count_of(c.me, k) > self.ai_max(c.me, k)
         };
         let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == c.me && e.crewed && e.built >= 1.0 && unneeded(e.kind)).map(|e| e.id) else {
             return false;
@@ -817,7 +822,9 @@ impl Game {
             }
             // While the town is still growing into its next era, its house
             // upgrades come before more soldiers: they need wood and stone.
-            let growing = self.houses_past_era(me) < HOUSES_FOR_ERA && pl.era < LAST_ERA;
+            // (Not the first soldier: it's the scout, and a town that never
+            // looks round never finds its clay or iron.)
+            let growing = self.houses_past_era(me) < HOUSES_FOR_ERA && pl.era < LAST_ERA && army > 0;
             let spare = |r: Res| {
                 let house = if growing && matches!(r, Res::Wood | Res::Stone) { HOUSE_RESERVE } else { 0 };
                 pl.free(r) - house - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32)
