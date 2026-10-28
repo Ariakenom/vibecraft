@@ -1397,3 +1397,101 @@ fn ai_peace() {
     }
     println!("players per era {eras:?}, {} people on average, era sum {}", people / 24, eras.iter().enumerate().map(|(e, n)| e as u32 * n).sum::<u32>());
 }
+
+/// How fast the computer climbs the eras when nobody attacks it: when each
+/// player reaches each era, over 12 maps (two at a time, one per core).
+/// `cargo test --release ai_pace -- --ignored --nocapture`; VC_MINUTES (50),
+/// VC_DIFF (1), VC_SEEDS (12). The score is minutes to each era summed over
+/// eras and players, an era not reached counting as the whole run: lower is
+/// better.
+#[test]
+#[ignore]
+fn ai_pace() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (minutes, diff, seeds) = (env("VC_MINUTES", 50), env("VC_DIFF", 1), env("VC_SEEDS", 12));
+    let one = |seed: u32| {
+        let mut g = Game::new(seed, diff, 2);
+        g.set_ai(1, true);
+        g.set_difficulty(1, diff);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        let mut at = [[f32::NAN; 6]; 3];
+        for s in 0..minutes * 6 {
+            run(&mut g, 10.0);
+            for p in 1..=2usize {
+                let e = g.players[p].era as usize;
+                for k in 1..=e {
+                    if at[p][k].is_nan() {
+                        at[p][k] = (s + 1) as f32 / 6.0;
+                    }
+                }
+            }
+        }
+        (seed, at, [g.players[1].people, g.players[2].people])
+    };
+    let mut results = Vec::new();
+    let all: Vec<u32> = (1..=seeds).collect();
+    for pair in all.chunks(2) {
+        let got: Vec<_> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        results.extend(got);
+    }
+    let mut score = 0.0;
+    let mut times: Vec<Vec<f32>> = vec![Vec::new(); 6];
+    for (seed, at, people) in &results {
+        let f = |p: usize| (1..=5).map(|e| if at[p][e].is_nan() { "  -  ".to_string() } else { format!("{:5.1}", at[p][e]) }).collect::<Vec<_>>().join(" ");
+        println!("seed {seed:2}: P1 {} ({} people) | P2 {} ({} people)", f(1), people[0], f(2), people[1]);
+        for p in 1..=2 {
+            for e in 1..=5 {
+                let t = at[p][e];
+                score += if t.is_nan() { minutes as f32 } else { t };
+                if !t.is_nan() {
+                    times[e].push(t);
+                }
+            }
+        }
+    }
+    let n = results.len() * 2;
+    for e in 1..=5 {
+        let mut v = times[e].clone();
+        v.sort_by(f32::total_cmp);
+        let med = if v.is_empty() { f32::NAN } else { v[v.len() / 2] };
+        println!("era {e}: {:2} of {n} reached it, median {med:.1} min", v.len());
+    }
+    println!("score {score:.0} (lower is better)");
+}
+
+/// Why one computer player is where it is: its town after VC_MINUTES (20) on
+/// VC_SEED (9), nobody attacking, and its reasons over its next few turns.
+/// `cargo test --release diag_ai -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn diag_ai() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (seed, me, minutes, turns) = (env("VC_SEED", 9), env("VC_P", 1) as u8, env("VC_MINUTES", 20), env("VC_TURNS", 6));
+    let mut g = Game::new(seed, env("VC_DIFF", 1), 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for m in 1..=minutes {
+        run(&mut g, 60.0);
+        if m % env("VC_EVERY", 5) == 0 {
+            let p = &g.players[me as usize];
+            let mut by: std::collections::BTreeMap<String, u32> = Default::default();
+            for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some()) {
+                *by.entry(format!("{:?}", e.kind)).or_default() += 1;
+            }
+            println!("{m:2}m era {} people {}/{} soldiers {} houses {by:?}", p.era, p.people, p.beds, p.soldiers);
+        }
+    }
+    println!("{}", census(&g, me));
+    crate::ai::ai_log_start();
+    for _ in 0..turns {
+        g.ai_think(me);
+        run(&mut g, 0.5);
+    }
+    for l in crate::ai::ai_log_take() {
+        println!("  {l}");
+    }
+}

@@ -16,6 +16,25 @@
 
 use crate::defs::*;
 use crate::econ;
+
+// A log of the computer's reasons, for diagnosing it in tests: off (None)
+// in the game, so nothing is formatted or kept.
+thread_local! {
+    static AI_LOG: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+macro_rules! ailog {
+    ($($t:tt)*) => { AI_LOG.with(|l| if let Some(v) = l.borrow_mut().as_mut() { v.push(format!($($t)*)); }) };
+}
+/// Start keeping the computer's reasons (tests only).
+#[cfg(test)]
+pub fn ai_log_start() {
+    AI_LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
+}
+/// What it kept since `ai_log_start`, and stop keeping.
+#[cfg(test)]
+pub fn ai_log_take() -> Vec<String> {
+    AI_LOG.with(|l| l.borrow_mut().take().unwrap_or_default())
+}
 use crate::game::*;
 
 #[derive(Clone)]
@@ -379,8 +398,10 @@ impl Game {
         // Beds and the plan take turns, so neither starves the other.
         let mut acted = busy;
         let plan_turn = self.ais[me as usize].last_grew;
+        ailog!("economy: people {}/{} spare {} busy {busy} tight {tight} plan_turn {plan_turn} era {} houses past {}", p.people, p.beds, c.spare, p.era, self.houses_past_era(me));
         if !acted && (tight || c.spare == 0) && !plan_turn {
             let step = self.ai_grow(c);
+            ailog!("grow -> {step:?}");
             acted = step != Step::Blocked;
             if step == Step::Started {
                 self.ais[me as usize].last_grew = true;
@@ -401,6 +422,7 @@ impl Game {
                 }
             }
             let step = if acted { Step::Waiting } else { self.ai_project(kind, c, false) };
+            ailog!("plan {kind:?} (have {} want {n}): {step:?}", c.have[kind as usize]);
             if step == Step::Started {
                 self.ais[me as usize].last_grew = false;
             }
@@ -432,6 +454,7 @@ impl Game {
         let p = self.players[c.me as usize];
         // A house ready to grow a tier but for its materials: make them.
         if let Some(r) = self.upgrade_short(c.me) {
+            ailog!("grow: an upgrade waits for {r:?}");
             // Every way of making it, the best first: one may have nowhere
             // to stand (no free clay), another want a slot it can free.
             let mut tried: Vec<Kind> = Vec::new();
@@ -442,6 +465,7 @@ impl Game {
                     continue;
                 }
                 let step = self.ai_project(k, c, true);
+                ailog!("grow: {r:?} from {k:?}: {step:?}");
                 if step != Step::Blocked {
                     return step;
                 }
@@ -467,6 +491,7 @@ impl Game {
         let houses = self.ents.iter().filter(|e| e.alive && e.owner == c.me && e.kind.house_tier().is_some()).count() as u32;
         let few = p.era < LAST_ERA && houses < HOUSES_FOR_ERA + 1;
         let hut_first = (!lacking || few) && goods.iter().any(|&r| p.spare(r) > 0);
+        ailog!("grow: goods {goods:?} lacking {lacking} houses {houses} hut_first {hut_first} spare {:?}", goods.iter().map(|&r| (r, p.spare(r))).collect::<Vec<_>>());
         if hut_first {
             let step = self.ai_project(Kind::Hut, c, true);
             if step != Step::Blocked {
@@ -478,6 +503,7 @@ impl Game {
         for r in by_supply {
             let Some(k) = self.ai_producer(c.me, r) else { continue };
             let step = self.ai_project(k, c, true);
+            ailog!("grow: good {r:?} (supply {}) from {k:?}: {step:?}", p.supply[r.idx()]);
             if step != Step::Blocked {
                 return step;
             }
@@ -569,7 +595,11 @@ impl Game {
                 }
             }
         };
-        let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id).or_else(|| self.ai_disband_one(me, r)) else { return false };
+        let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id).or_else(|| self.ai_disband_one(me, r)) else {
+            ailog!("  free up {r:?}: nothing to spare");
+            return false;
+        };
+        ailog!("  free up {r:?}: tear down {:?}", self.ents[id as usize].kind);
         self.apply(me, Command::Demolish { ids: vec![id] }).is_ok()
     }
 
@@ -600,6 +630,7 @@ impl Game {
     fn ai_project(&mut self, kind: Kind, c: &mut Census, for_beds: bool) -> Step {
         let me = c.me;
         if !c.relax && self.count_of(me, kind) >= self.ai_max(me, kind) {
+            ailog!("  project {kind:?}: has {} of max {}", self.count_of(me, kind), self.ai_max(me, kind));
             return Step::Blocked; // the town has all of these it needs
         }
         let mut what = kind;
@@ -611,6 +642,7 @@ impl Game {
             // round (a sawmill needs stone, a quarry needs wood, the best
             // wood is a sawmill): make room instead.
             if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) {
+                ailog!("  project {kind:?}: {what:?} short of {short:?}, {p:?} at its max {}: free up", self.ai_max(me, p));
                 return if self.ai_free_up(me, short) { Step::Started } else { Step::Blocked };
             }
             if !self.unlocked(me, p) {
@@ -620,6 +652,7 @@ impl Game {
             what = p;
         }
         if self.ai_short_of(me, what).is_some() || !self.unlocked(me, what) {
+            ailog!("  project {kind:?}: {what:?} short of {:?} (unlocked {})", self.ai_short_of(me, what), self.unlocked(me, what));
             return Step::Blocked; // short of something nothing makes yet
         }
         // Its builders and its crew, and some free workers kept back.
@@ -627,11 +660,14 @@ impl Game {
         let keep = if for_beds { 0 } else { KEEP_FREE };
         // (Builders become its crew when it's done.)
         if c.spare < (st.builders.max(st.workers)) as u32 + keep {
+            ailog!("  project {kind:?}: {what:?} waits for workers ({} spare)", c.spare);
             return Step::Waiting;
         }
         if !self.ai_place(what, c) {
+            ailog!("  project {kind:?}: nowhere to put {what:?}");
             return Step::Blocked;
         }
+        ailog!("  project {kind:?}: placed {what:?}");
         Step::Started
     }
 
@@ -673,7 +709,14 @@ impl Game {
                 self.find_spot_where(me, kind, bx, by, 5, 40, &c.reach, &clear).or_else(|| self.find_spot(me, kind, bx, by, 5, 40, &c.reach))
             }
         };
-        let Some((tx, ty)) = spot else { return false };
+        let Some((tx, ty)) = spot else {
+            if let Some(dep) = kind.stats().needs_deposit {
+                let seen = self.deps.iter().filter(|d| d.kind == dep && self.explored_by(me, d.tx, d.ty)).count();
+                let all = self.deps.iter().filter(|d| d.kind == dep).count();
+                ailog!("  place {kind:?}: {dep:?} tiles explored {seen} of {all}, none with room");
+            }
+            return false;
+        };
         // Builders come from the campfire by themselves.
         match self.place(me, kind, tx, ty, &[]) {
             Ok(id) => {
@@ -777,7 +820,6 @@ impl Game {
         // brick, iron, sheep hills ... are 20 to 30 tiles out, past what the
         // Capitol sees: playtest, the computer never found its clay, so it
         // never made brick or a Sawmill and stood still in the Medieval era).
-        // Then a round of the map, starting from the corner nearest home.
         let mut legs: Vec<(f32, f32)> = Vec::new();
         for (radius, n) in [(24.0f32, 10), (33.0, 14)] {
             for k in 0..n {
@@ -785,28 +827,44 @@ impl Game {
                 legs.push(((c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0), (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0)));
             }
         }
-        let mut round = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)].map(|(fx, fy)| (fx * w, fy * h));
-        let first = (0..4).min_by(|&a, &b| {
-            let d = |i: usize| (round[i].0 - c.home.0).powi(2) + (round[i].1 - c.home.1).powi(2);
-            d(a).total_cmp(&d(b))
-        });
-        round.rotate_left(first.unwrap_or(0));
-        legs.extend(round);
         let ai = &self.ais[me as usize];
         let (scout, leg) = (ai.scout, ai.scout_leg as usize);
-        if leg > legs.len() {
-            return; // done
-        }
+        // Where to look next: a ring leg, then the nearest ground nobody has
+        // seen that our workers could walk to (a town runs out of stone and
+        // clay round its start: playtest, a third of the map's stone was
+        // never found, so its houses stopped growing).
+        let next = |g: &Game, from: (f32, f32), leg: usize| -> Option<(f32, f32)> {
+            if leg < legs.len() {
+                return Some(legs[leg]);
+            }
+            let m = &g.map;
+            let mut best: Option<(f32, (f32, f32))> = None;
+            for ty in (2..m.h - 2).step_by(3) {
+                for tx in (2..m.w - 2).step_by(3) {
+                    if g.explored_by(me, tx, ty) || !c.reach[m.idx(tx, ty)] {
+                        continue;
+                    }
+                    let (x, y) = (tx as f32 + 0.5, ty as f32 + 0.5);
+                    let d = (x - c.home.0).hypot(y - c.home.1) + 0.5 * (x - from.0).hypot(y - from.1);
+                    if best.is_none_or(|(b, _)| d < b) {
+                        best = Some((d, (x, y)));
+                    }
+                }
+            }
+            best.map(|(_, p)| p)
+        };
         let Some(id) = scout.filter(|&id| self.alive(id)) else {
             // Pick one: the first soldier we have.
             if let Some(&id) = c.army.first() {
-                c.army.remove(0);
-                self.ais[me as usize].scout = Some(id);
-                let l = legs[leg.min(legs.len() - 1)];
-                self.order_move(id, l.0, l.1);
+                if let Some(l) = next(self, (self.ents[id as usize].x, self.ents[id as usize].y), leg) {
+                    c.army.remove(0);
+                    self.ais[me as usize].scout = Some(id);
+                    self.order_move(id, l.0, l.1);
+                }
             }
             return;
         };
+        c.army.retain(|&a| a != id);
         // A scout that stopped to fight (soldiers fight what they see when
         // they stand still) goes on instead: it's there to look, and one
         // rider picking off workers for minutes isn't an attack.
@@ -815,15 +873,15 @@ impl Game {
             return;
         }
         let ai = &mut self.ais[me as usize];
-        ai.scout_leg += 1;
-        if ai.scout_leg as usize >= legs.len() {
-            // Round done: back home, and into the army.
-            ai.scout_leg = legs.len() as u8 + 1;
-            ai.scout = None;
-            self.order_move(id, c.home.0, c.home.1 + 4.0);
-        } else {
-            let (x, y) = legs[ai.scout_leg as usize];
-            self.order_move(id, x, y);
+        ai.scout_leg = ai.scout_leg.saturating_add(1).min(legs.len() as u8);
+        let leg = ai.scout_leg as usize;
+        match next(self, (self.ents[id as usize].x, self.ents[id as usize].y), leg) {
+            Some((x, y)) => self.order_move(id, x, y),
+            None => {
+                // Everything in reach is seen: back home, and into the army.
+                self.ais[me as usize].scout = None;
+                self.order_move(id, c.home.0, c.home.1 + 4.0);
+            }
         }
     }
 
