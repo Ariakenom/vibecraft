@@ -1102,6 +1102,11 @@ impl Game {
     }
 
     pub fn spot_free(&self, kind: Kind, tx: i32, ty: i32, owner: u8, margin: i32) -> bool {
+        self.spot_free_but(kind, tx, ty, owner, margin, -1)
+    }
+
+    /// `spot_free`, as if building `except` (an index into `ents`) were gone.
+    pub(crate) fn spot_free_but(&self, kind: Kind, tx: i32, ty: i32, owner: u8, margin: i32, except: i32) -> bool {
         let s = kind.stats().size;
         for y in ty - margin..ty + s + margin {
             for x in tx - margin..tx + s + margin {
@@ -1110,7 +1115,7 @@ impl Game {
                 }
                 let i = self.map.idx(x, y);
                 let inner = x >= tx && y >= ty && x < tx + s && y < ty + s;
-                if self.map.bld_at[i] >= 0 || (inner && (self.map.terrain[i] == map::WATER || self.map.dep_at[i] >= 0)) {
+                if (self.map.bld_at[i] >= 0 && self.map.bld_at[i] != except) || (inner && (self.map.terrain[i] == map::WATER || self.map.dep_at[i] >= 0)) {
                     return false;
                 }
             }

@@ -790,7 +790,17 @@ impl Game {
                 _ => None,
             };
             if let Some(old) = old.filter(|_| self.ai_short_of(me, kind).is_none()) {
-                if let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == me && e.kind == old && e.built >= 1.0).map(|e| e.id) {
+                // One whose ground would take the new one (it's bigger).
+                let s = kind.stats().size;
+                let room = |g: &Game, b: &Entity| {
+                    let bs = b.kind.stats().size;
+                    (b.ty - s..=b.ty + bs).any(|ty| {
+                        (b.tx - s..=b.tx + bs).any(|tx| {
+                            g.explored_by(me, tx, ty) && g.explored_by(me, tx + s - 1, ty + s - 1) && g.spot_free_but(kind, tx, ty, me, 1, b.id as i32) && g.near_deposit(kind, tx, ty) && touches(&g.map, &c.reach, tx, ty, s)
+                        })
+                    })
+                };
+                if let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == me && e.kind == old && e.built >= 1.0 && room(self, e)).map(|e| e.id) {
                     ailog!("  place {kind:?}: no room, make way: tear down a {old:?}");
                     let _ = self.apply(me, Command::Demolish { ids: vec![id] });
                     return false;
