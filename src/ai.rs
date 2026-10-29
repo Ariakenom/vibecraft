@@ -421,7 +421,7 @@ impl Game {
         // Beds and the plan take turns, so neither starves the other.
         let mut acted = busy;
         let plan_turn = self.ais[me as usize].last_grew;
-        ailog!("economy: people {}/{} spare {} busy {busy} tight {tight} plan_turn {plan_turn} era {} houses past {}", p.people, p.beds, c.spare, p.era, self.houses_past_era(me));
+        ailog!("economy: P{me} people {}/{} spare {} busy {busy} tight {tight} plan_turn {plan_turn} era {} houses past {}", p.people, p.beds, c.spare, p.era, self.houses_past_era(me));
         if !acted && (tight || c.spare == 0) && !plan_turn {
             let step = self.ai_grow(c);
             ailog!("grow -> {step:?}");

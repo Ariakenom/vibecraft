@@ -553,6 +553,21 @@ fn each_computer_player_has_its_own_difficulty() {
     assert_eq!(g.players[2].era, 0, "Easy entered an era before {} s", EASY_ERA_AT[0]);
 }
 
+/// Left in peace, both computers climb all the way: the Atomic era within
+/// 25 minutes on this map (`ai_pace` measures it over 24 maps).
+#[test]
+fn peaceful_computers_reach_the_atomic_era() {
+    let mut g = Game::new(10, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, 25.0 * 60.0);
+    for p in 1..=2usize {
+        assert_eq!(g.players[p].era, 5, "P{p} is in era {} after 25 minutes: {}", g.players[p].era, census(&g, p as u8));
+    }
+}
+
 #[test]
 #[ignore]
 fn watch_the_ai() {
@@ -1686,4 +1701,122 @@ fn diag_army() {
     let mut cnt: std::collections::BTreeMap<String, u32> = Default::default();
     for k in iron_users { *cnt.entry(k).or_default() += 1; }
     println!("holding iron: {cnt:?}");
+}
+
+/// What the computer's houses wait for, era by era: seconds summed over
+/// houses, every 5 s. VC_SEED, VC_P, VC_MINUTES.
+#[test]
+#[ignore]
+fn diag_phases() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 7), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    // per era: [not full, lacking goods, short of materials, waiting for the era, top tier]
+    let mut t = [[0.0f32; 5]; 6];
+    let mut houses_n = [0u32; 6];
+    let mut people_short = [0.0f32; 6];
+    let mut era_start = [0.0f32; 6];
+    let mut last_era = 0;
+    for _ in 0..env("VC_MINUTES", 30) * 12 {
+        run(&mut g, 5.0);
+        let p = &g.players[me as usize];
+        let era = p.era as usize;
+        if era != last_era {
+            era_start[era] = g.time;
+            last_era = era;
+        }
+        if era >= 5 {
+            break;
+        }
+        if p.people < p.beds {
+            people_short[era] += 5.0;
+        }
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some()) {
+            let tier = e.kind.house_tier().unwrap();
+            houses_n[era] += 1;
+            let k = if e.kind.upgrade().is_none() {
+                4
+            } else if e.kind.upgrade().unwrap().house_tier().unwrap() > p.era + 1 {
+                3
+            } else if e.residents < e.beds() {
+                0
+            } else if e.goods.count_ones() < house_max_goods(tier) as u32 {
+                1
+            } else {
+                2
+            };
+            t[era][k] += 5.0;
+        }
+    }
+    for e in 0..5 {
+        let n = (houses_n[e] as f32 / 12.0).max(1.0);
+        println!("era {e} (from {:.1} min): house-seconds not full {:.0}, lacking goods {:.0}, short of materials {:.0}, waiting for the era {:.0} | town short of people {:.0} s | ~{n:.0} houses", era_start[e] / 60.0, t[e][0], t[e][1], t[e][2], t[e][3], people_short[e]);
+    }
+}
+
+/// How the computer's turns went over VC_MINUTES (12): how often it was busy
+/// (enough foundations), built, waited or was blocked.
+#[test]
+#[ignore]
+fn diag_turns() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 7), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    let mut counts: std::collections::BTreeMap<String, u32> = Default::default();
+    for _ in 0..env("VC_MINUTES", 12) * 60 * 2 {
+        crate::ai::ai_log_start();
+        run(&mut g, 0.5);
+        let log = crate::ai::ai_log_take();
+        // Only this player's turn: from its "economy" line to the next one.
+        let mut mine = false;
+        for l in &log {
+            if l.starts_with("economy:") {
+                mine = l.contains(&format!("P{me} "));
+                if mine {
+                    let busy = l.contains("busy true");
+                    *counts.entry(if busy { "turn: busy".into() } else { "turn: free".into() }).or_default() += 1;
+                }
+            } else if mine && (l.starts_with("grow ->") || l.starts_with("plan ") || l.starts_with("low on")) {
+                let key = l.split(':').next().unwrap_or("").split(' ').take(2).collect::<Vec<_>>().join(" ");
+                let res = if l.contains("Started") { "Started" } else if l.contains("Waiting") { "Waiting" } else { "Blocked" };
+                *counts.entry(format!("{key} {res}")).or_default() += 1;
+            }
+        }
+    }
+    for (k, v) in counts {
+        println!("{k:30} {v}");
+    }
+}
+
+/// Milliseconds a tick takes in a big late game (both computers at it).
+#[test]
+#[ignore]
+fn diag_tick_time() {
+    let mut g = Game::new(7, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for m in [5, 10, 20, 30] {
+        let until = m as f32 * 60.0;
+        while g.time < until {
+            g.tick();
+            g.events.clear();
+        }
+        let t0 = std::time::Instant::now();
+        for _ in 0..400 {
+            g.tick();
+            g.events.clear();
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / 400.0;
+        println!("{m:2} min: {:.3} ms a tick, {} entities, people {} {}", ms, g.ents.iter().filter(|e| e.alive).count(), g.players[1].people, g.players[2].people);
+    }
 }
