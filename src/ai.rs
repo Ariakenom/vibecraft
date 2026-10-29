@@ -80,7 +80,7 @@ struct Style {
 
 const STYLES: [Style; 3] = [
     Style { army_share: 0.1, queue: 1 },
-    Style { army_share: 0.3, queue: 1 },
+    Style { army_share: 0.2, queue: 1 },
     Style { army_share: 0.4, queue: 2 },
 ];
 
@@ -233,10 +233,6 @@ fn target(era: u8) -> &'static econ::Plan {
     &PLANS.get_or_init(|| (1..=5).map(econ::era_plan).chain(std::iter::once(econ::silo_plan())).collect())[era.min(5) as usize]
 }
 
-/// Kinds the computer keeps one of for its army, whatever the target says:
-/// iron for swordsmen, horses for riders.
-const ARMY_SUPPLY: [Kind; 2] = [Kind::IronMine, Kind::Pasture];
-
 fn house_goods(era: u8) -> Vec<Res> {
     Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && producer_of(*r).is_some_and(|k| k.era() <= era)).collect()
 }
@@ -244,9 +240,11 @@ fn house_goods(era: u8) -> Vec<Res> {
 // A second `impl Game` block, in a different file. Rust lets you split a
 // type's methods across modules, which keeps the AI code out of game.rs.
 impl Game {
-    /// The most of `kind` this player's town needs now: what `target` has,
-    /// plus one, and never past `MAX_SAME`. Houses and fields have no limit,
-    /// nor do the soldiers' buildings (the plan and a reserve keep those).
+    /// The most of `kind` this player's town needs now, never past
+    /// `MAX_SAME`: for producers of materials (wood, stone, brick, iron,
+    /// steel ...) as many as keep the supply ahead of use; for the houses'
+    /// goods, what `target` has, plus one; huts and farms a few past the
+    /// next era's needs. The soldiers' buildings have their plan and reserve.
     fn ai_max(&self, me: u8, kind: Kind) -> usize {
         let mut hard = Self::max_of(kind);
         // A dozen houses are all the next era asks for; more huts only hold
@@ -284,9 +282,7 @@ impl Game {
             return hard;
         }
         let want = target(self.players[me as usize].era).count(kind) as usize;
-        let army = ARMY_SUPPLY.contains(&kind) as usize;
-        let wide = if want > 0 { want + 1 } else { 0 };
-        hard.min(wide.max(army))
+        hard.min(if want > 0 { want + 1 } else { 0 })
     }
 
     /// The producer to build for more of `r`: of those `me` may build now
@@ -707,17 +703,24 @@ impl Game {
         let mut seen = vec![kind];
         for _ in 0..3 {
             let Some(short) = self.ai_needs(me, what) else { break };
-            let Some(p) = self.ai_producer(me, short) else { break };
-            // Every producer of it is at the limit, or the chain comes back
-            // round (a sawmill needs stone, a quarry needs wood, the best
-            // wood is a sawmill): make room instead.
-            if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) {
-                ailog!("  project {kind:?}: {what:?} short of {short:?}, {p:?} at its max {}: free up", self.ai_max(me, p));
+            // The best producer of it that can go: not at its limit, not
+            // back round the chain (a Stoneworks needs brick, a Kiln stone):
+            // then a lesser one (a quarry, for wood) rather than none.
+            let mut skip: Vec<Kind> = Vec::new();
+            let p = loop {
+                let Some(p) = self.ai_producer_ex(me, short, &skip) else { break None };
+                if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) || !self.unlocked(me, p) {
+                    skip.push(p);
+                    continue;
+                }
+                break Some(p);
+            };
+            let Some(p) = p else {
+                // Every producer of it is at the limit, or the chain comes
+                // back round: make room instead.
+                ailog!("  project {kind:?}: {what:?} short of {short:?}, no producer can go ({skip:?}): free up");
                 return if self.ai_free_up(me, short) { Step::Started } else { Step::Blocked };
-            }
-            if !self.unlocked(me, p) {
-                break;
-            }
+            };
             seen.push(p);
             what = p;
         }
