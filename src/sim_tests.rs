@@ -1522,3 +1522,57 @@ fn diag_sites() {
         run(&mut g, 20.0);
     }
 }
+
+#[test]
+#[ignore]
+fn diag_losses() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let mut g = Game::new(env("VC_SEED", 9), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for m in 1..=env("VC_MINUTES", 25) {
+        run(&mut g, 60.0);
+        let lost: Vec<u32> = (1..=2).map(|p| g.players[p].lost).collect();
+        let cap: Vec<bool> = (1..=2u8).map(|p| g.home_capitol(p).is_some()).collect();
+        let away: Vec<usize> = (1..=2u8).map(|p| {
+            let o = 3 - p;
+            let Some(c) = g.home_capitol(o) else { return 0 };
+            let (cx, cy) = (g.ents[c].x, g.ents[c].y);
+            g.ents.iter().filter(|e| e.alive && e.owner == p && e.kind.is_military() && (e.x - cx).hypot(e.y - cy) < 30.0).count()
+        }).collect();
+        println!("{m:2}m lost {lost:?} capitols {cap:?} soldiers in the other's town {away:?}");
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_capitol() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 9), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_FROM", 23) as f32 * 60.0);
+    let caps: Vec<usize> = g.ents.iter().enumerate().filter(|(_, e)| e.alive && e.owner == me && e.kind == Kind::Capitol).map(|(i, _)| i).collect();
+    println!("capitols of P{me}: {:?}", caps.iter().map(|&i| (g.ents[i].tx, g.ents[i].ty, g.ents[i].starting, g.ents[i].hp)).collect::<Vec<_>>());
+    crate::ai::ai_log_start();
+    for t in 0..(4 * 60 * 2) {
+        run(&mut g, 0.5);
+        let gone: Vec<usize> = caps.iter().copied().filter(|&i| !g.ents[i].alive || g.ents[i].owner != me).collect();
+        if !gone.is_empty() || t % 60 == 0 {
+            println!("t {:.0}: capitols alive {:?} home {:?}", g.time, caps.iter().map(|&i| (g.ents[i].alive, g.ents[i].hp as i32)).collect::<Vec<_>>(), g.home_capitol(me));
+            if !gone.is_empty() {
+                for l in crate::ai::ai_log_take().iter().rev().take(30).rev() {
+                    println!("  {l}");
+                }
+                break;
+            }
+            crate::ai::ai_log_take();
+            crate::ai::ai_log_start();
+        }
+    }
+}

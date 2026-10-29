@@ -93,8 +93,17 @@ const LUXURY_RESERVE: i32 = 4;
 const HOUSE_RESERVE: i32 = 4;
 /// Supply the computer keeps ahead of use in wood, stone and brick.
 const RAW_MARGIN: i32 = 6;
-/// Wood and stone every other project leaves free for the next quarry or sawmill.
-const MATERIAL_RESERVE: i32 = 2;
+/// What every project but the material producers leaves free from the
+/// Medieval era: enough for the next quarry (wood), Kiln (stone) and
+/// Stoneworks (brick).
+fn reserve_of(r: Res) -> i32 {
+    match r {
+        Res::Wood | Res::Stone => 2,
+        _ => 0,
+    }
+}
+/// How far the scout keeps from other towns' buildings it has seen.
+const SCOUT_KEEP_AWAY: f32 = 26.0;
 /// Foundations near home the computer builds at once.
 const PARALLEL: usize = 4;
 
@@ -319,7 +328,8 @@ impl Game {
         }
         if state == 0 {
             let _ = self.apply(me, Command::Arm { id });
-        } else if state == 2 {
+        } else if state == 2 && self.time >= self.ais[me as usize].next_attack {
+            // (Not before its first attack is due, like the army.)
             if let Some((x, y)) = self.target_for(me, home.0, home.1) {
                 let _ = self.apply(me, Command::Launch { id, x, y });
             }
@@ -561,6 +571,22 @@ impl Game {
         self.short_of(me, kind).or_else(|| kind.stats().consumes.iter().find(|&&(r, k)| p.spare(r) < k as i32).map(|&(r, _)| r))
     }
 
+    /// `ai_short_of`, and from the Medieval era also the last wood and
+    /// stone: every project but the material producers leaves
+    /// `reserve_of` each, so a quarry (wood) or sawmill (stone) can
+    /// always be built (playtest: towns stood still with both used up). Short
+    /// of the reserve, the project waits for the material's producer.
+    fn ai_needs(&self, me: u8, kind: Kind) -> Option<Res> {
+        self.ai_short_of(me, kind).or_else(|| {
+            let p = &self.players[me as usize];
+            let material = kind.stats().produces.first().is_some_and(|&(r, _)| !r.is_house_good());
+            if material || p.era < 1 {
+                return None;
+            }
+            kind.stats().cost.iter().find(|&&(r, k)| p.free(r) - (k as i32) < reserve_of(r)).map(|&(r, _)| r)
+        })
+    }
+
     /// Tear down the newest crewed producer whose whole output is spare, so
     /// its workers come free. Food in houses counts as used.
     fn ai_release(&mut self, c: &Census) -> bool {
@@ -650,7 +676,7 @@ impl Game {
         let mut what = kind;
         let mut seen = vec![kind];
         for _ in 0..3 {
-            let Some(short) = self.ai_short_of(me, what) else { break };
+            let Some(short) = self.ai_needs(me, what) else { break };
             let Some(p) = self.ai_producer(me, short) else { break };
             // Every producer of it is at the limit, or the chain comes back
             // round (a sawmill needs stone, a quarry needs wood, the best
@@ -665,21 +691,9 @@ impl Game {
             seen.push(p);
             what = p;
         }
-        if self.ai_short_of(me, what).is_some() || !self.unlocked(me, what) {
-            ailog!("  project {kind:?}: {what:?} short of {:?} (unlocked {})", self.ai_short_of(me, what), self.unlocked(me, what));
+        if self.ai_needs(me, what).is_some() || !self.unlocked(me, what) {
+            ailog!("  project {kind:?}: {what:?} short of {:?} (unlocked {})", self.ai_needs(me, what), self.unlocked(me, what));
             return Step::Blocked; // short of something nothing makes yet
-        }
-        // Everything but the material producers leaves the last wood and
-        // stone: a quarry costs wood, a sawmill stone, and with both used
-        // up neither can be built again (playtest: towns stood still with
-        // every slot of both held).
-        let makes_material = what.stats().produces.first().is_some_and(|&(r, _)| !r.is_house_good());
-        if !makes_material && self.players[me as usize].era >= 1 {
-            let p = &self.players[me as usize];
-            if let Some(&(r, k)) = what.stats().cost.iter().find(|&&(r, k)| matches!(r, Res::Wood | Res::Stone) && p.free(r) - (k as i32) < MATERIAL_RESERVE) {
-                ailog!("  project {kind:?}: {what:?} would leave less than {MATERIAL_RESERVE} {r:?} (needs {k})");
-                return Step::Blocked;
-            }
         }
         // Its builders and its crew, and some free workers kept back.
         let st = what.stats();
@@ -866,10 +880,16 @@ impl Game {
                 return Some(legs[leg]);
             }
             let m = &g.map;
+            // Not into anyone's town: a scout there brings their army out
+            // (and the fighting back home). Towns it has seen buildings of.
+            let towns: Vec<(f32, f32)> = g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && g.explored_by(me, e.tx, e.ty)).map(|e| (e.x, e.y)).collect();
             let mut best: Option<(f32, (f32, f32))> = None;
             for ty in (2..m.h - 2).step_by(3) {
                 for tx in (2..m.w - 2).step_by(3) {
                     if g.explored_by(me, tx, ty) || !c.reach[m.idx(tx, ty)] {
+                        continue;
+                    }
+                    if towns.iter().any(|&(x, y)| (x - tx as f32).hypot(y - ty as f32) < SCOUT_KEEP_AWAY) {
                         continue;
                     }
                     let (x, y) = (tx as f32 + 0.5, ty as f32 + 0.5);
