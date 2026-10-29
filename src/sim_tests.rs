@@ -1882,3 +1882,69 @@ fn diag_goods() {
         println!("{k:24} {v:.0}");
     }
 }
+
+/// The table for a difficulty: when the computers reach each era (median),
+/// how many reach it, and their armies at 20 and 40 minutes (how many, and
+/// of which kinds). Peaceful, VC_SEEDS maps (24), VC_DIFF, 50 minutes.
+/// `cargo test --release ai_report -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn ai_report() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (diff, seeds) = (env("VC_DIFF", 1), env("VC_SEEDS", 24));
+    let army = |g: &Game, p: u8| -> Vec<Kind> { g.ents.iter().filter(|e| e.alive && e.owner == p && !e.is_building() && e.kind.is_military()).map(|e| e.kind).collect() };
+    let one = |seed: u32| {
+        let mut g = Game::new(seed, diff, 2);
+        g.set_ai(1, true);
+        g.set_difficulty(1, diff);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        let mut at = [[f32::NAN; 6]; 3];
+        let (mut at20, mut at40) = (Vec::new(), Vec::new());
+        for s in 0..50 * 6 {
+            run(&mut g, 10.0);
+            for p in 1..=2usize {
+                for k in 1..=g.players[p].era as usize {
+                    if at[p][k].is_nan() {
+                        at[p][k] = (s + 1) as f32 / 6.0;
+                    }
+                }
+            }
+            if s + 1 == 20 * 6 {
+                at20 = (1..=2u8).map(|p| army(&g, p)).collect();
+            }
+            if s + 1 == 40 * 6 {
+                at40 = (1..=2u8).map(|p| army(&g, p)).collect();
+            }
+        }
+        (at, at20, at40)
+    };
+    let all: Vec<u32> = (1..=seeds).collect();
+    let mut res = Vec::new();
+    for pair in all.chunks(2) {
+        let got: Vec<_> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        res.extend(got);
+    }
+    let n = res.len() * 2;
+    for e in 1..=5 {
+        let mut v: Vec<f32> = res.iter().flat_map(|(at, _, _)| [at[1][e], at[2][e]]).filter(|t| !t.is_nan()).collect();
+        v.sort_by(f32::total_cmp);
+        let med = if v.is_empty() { "-".to_string() } else { format!("{:.1}", v[v.len() / 2]) };
+        println!("REPORT era {e}: {} of {n}, median {med}", v.len());
+    }
+    for (label, pick) in [("20", 1usize), ("40", 2)] {
+        let armies: Vec<&Vec<Kind>> = res.iter().flat_map(|r| if pick == 1 { r.1.iter() } else { r.2.iter() }).collect();
+        let total: usize = armies.iter().map(|a| a.len()).sum();
+        let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+        for a in &armies {
+            for k in a.iter() {
+                *kinds.entry(format!("{k:?}")).or_default() += 1;
+            }
+        }
+        let mut kv: Vec<(String, usize)> = kinds.into_iter().collect();
+        kv.sort_by(|a, b| b.1.cmp(&a.1));
+        let mix: Vec<String> = kv.iter().take(5).map(|(k, c)| format!("{k} {:.0}%", *c as f32 * 100.0 / total.max(1) as f32)).collect();
+        println!("REPORT army at {label} min: {:.0} soldiers on average; {}", total as f32 / armies.len().max(1) as f32, mix.join(", "));
+    }
+}
