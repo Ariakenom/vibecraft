@@ -773,6 +773,22 @@ impl Game {
             }
         };
         let Some((tx, ty)) = spot else {
+            // The deposit is taken up by the old kind that makes the same
+            // (quarries on all the stone, playtest: a Stoneworks makes more
+            // than two of them but had nowhere to stand): make way.
+            let old = match kind {
+                Kind::Stoneworks => Some(Kind::Quarry),
+                Kind::Kiln => Some(Kind::Brickworks),
+                Kind::Sawmill => Some(Kind::LumberCamp),
+                _ => None,
+            };
+            if let Some(old) = old.filter(|_| self.ai_short_of(me, kind).is_none()) {
+                if let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == me && e.kind == old && e.built >= 1.0).map(|e| e.id) {
+                    ailog!("  place {kind:?}: no room, make way: tear down a {old:?}");
+                    let _ = self.apply(me, Command::Demolish { ids: vec![id] });
+                    return false;
+                }
+            }
             if let Some(dep) = kind.stats().needs_deposit {
                 let seen = self.deps.iter().filter(|d| d.kind == dep && self.explored_by(me, d.tx, d.ty)).count();
                 let all = self.deps.iter().filter(|d| d.kind == dep).count();
