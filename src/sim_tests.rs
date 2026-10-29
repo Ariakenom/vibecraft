@@ -1423,7 +1423,7 @@ fn ai_peace() {
 #[ignore]
 fn ai_pace() {
     let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-    let (minutes, diff, seeds) = (env("VC_MINUTES", 50), env("VC_DIFF", 1), env("VC_SEEDS", 12));
+    let (minutes, diff, seeds, first) = (env("VC_MINUTES", 50), env("VC_DIFF", 1), env("VC_SEEDS", 12), env("VC_SEED0", 1));
     let one = |seed: u32| {
         let mut g = Game::new(seed, diff, 2);
         g.set_ai(1, true);
@@ -1446,7 +1446,7 @@ fn ai_pace() {
         (seed, at, [g.players[1].people, g.players[2].people])
     };
     let mut results = Vec::new();
-    let all: Vec<u32> = (1..=seeds).collect();
+    let all: Vec<u32> = (first..first + seeds).collect();
     for pair in all.chunks(2) {
         let got: Vec<_> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
         results.extend(got);
@@ -1842,5 +1842,43 @@ fn diag_opening() {
         }
         let goods: Vec<String> = Res::ALL.iter().filter(|r| r.is_house_good() && p.supply[r.idx()] > 0).map(|r| format!("{r:?} {}/{}", p.used[r.idx()] + p.housed[r.idx()], p.supply[r.idx()])).collect();
         println!("{:4.1}m people {}/{} free {} soldiers {} wood {}/{} stone {}/{} | {} | {:?}", k as f32 / 2.0, p.people, p.beds, p.free, p.soldiers, p.used[0], p.supply[0], p.used[1], p.supply[1], goods.join(" "), by);
+    }
+}
+
+/// Which goods the computer is short of while its houses lack goods: for
+/// each good the town could use, seconds with none of it spare while a
+/// house lacks a good. VC_SEEDS maps, VC_MINUTES (20).
+#[test]
+#[ignore]
+fn diag_goods() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let mut short: std::collections::BTreeMap<String, f32> = Default::default();
+    for seed in 1..=env("VC_SEEDS", 6) {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        for _ in 0..env("VC_MINUTES", 20) * 12 {
+            run(&mut g, 5.0);
+            for me in 1..=2u8 {
+                let p = &g.players[me as usize];
+                if p.era >= 5 {
+                    continue;
+                }
+                let lacking = g.ents.iter().any(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| (e.goods.count_ones() as u32) < house_max_goods(t) as u32 && e.kind.upgrade().is_some()));
+                if !lacking {
+                    continue;
+                }
+                for r in Res::ALL.iter().filter(|r| r.is_house_good() && r.era() <= p.era) {
+                    if p.spare(*r) <= 0 {
+                        *short.entry(format!("era {} {r:?}", p.era)).or_default() += 5.0;
+                    }
+                }
+            }
+        }
+    }
+    for (k, v) in short {
+        println!("{k:24} {v:.0}");
     }
 }
