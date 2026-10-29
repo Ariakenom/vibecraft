@@ -1639,3 +1639,26 @@ fn ai_stalls() {
         }
     }
 }
+
+#[test]
+#[ignore]
+fn diag_kind() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let kind = Kind::from_u32(env("VC_KIND", Kind::Sawmill as u32)).unwrap();
+    let mut g = Game::new(env("VC_SEED", 4), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_MINUTES", 20) as f32 * 60.0);
+    for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind) {
+        let workers = g.ents.iter().filter(|w| w.alive && (w.order == Order::Work(e.id) || w.order == Order::Build(e.id))).count();
+        println!("{kind:?} #{} at {},{} built {:.2} crewed {} hired {} hiring {} fed {} builders_in {} workers/builders ordered {}", e.id, e.tx, e.ty, e.built, e.crewed, e.hired, e.hiring, e.fed, e.builders_in, workers);
+    }
+    let p = &g.players[me as usize];
+    println!("free workers {} people {} beds {}", p.free, p.people, p.beds);
+    let (cx, cy) = g.campfire(me).unwrap();
+    let reach = g.reach_for_tests(cx, cy);
+    println!("tiles reachable from the campfire: {} of {}", reach.iter().filter(|&&b| b).count(), reach.len());
+}

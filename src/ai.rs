@@ -274,7 +274,10 @@ impl Game {
             let pl = &self.players[me as usize];
             let built = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind && e.built >= 1.0).count() as i32;
             let others = pl.supply[res.idx()] as i32 - built * out as i32;
-            let need = pl.used[res.idx()] as i32 + RAW_MARGIN - others;
+            // (Building materials well ahead; the rest, horses, iron ...
+            // only just: idle pastures held the wood a quarry needed.)
+            let margin = if matches!(res, Res::Wood | Res::Stone | Res::Brick) { RAW_MARGIN } else { 2 };
+            let need = pl.used[res.idx()] as i32 + margin - others;
             return hard.min((need.max(0) as usize).div_ceil(out as usize));
         }
         if kind == Kind::Farm || hard == usize::MAX || matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Tower) {
@@ -340,6 +343,10 @@ impl Game {
 
     /// Every tile a unit can walk to from (x, y), moving like the path
     /// finder does (eight ways, no cutting corners past walls).
+    #[cfg(test)]
+    pub fn reach_for_tests(&self, x: f32, y: f32) -> Vec<bool> {
+        self.reachable_from(x, y)
+    }
     fn reachable_from(&self, x: f32, y: f32) -> Vec<bool> {
         let m = &self.map;
         let mut seen = vec![false; (m.w * m.h) as usize];
