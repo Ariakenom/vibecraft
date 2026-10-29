@@ -675,19 +675,19 @@ impl Game {
 
     /// Nothing left to tear down: let a soldier go. Soldiers hold wood,
     /// iron and horses, and the town's next era is worth more than the
-    /// tenth swordsman. The one that holds most of `r`, never the last few,
-    /// and only one standing at home.
+    /// tenth swordsman. The one that holds most of `r`, never the last few.
     fn ai_disband_one(&self, me: u8, r: Res) -> Option<u32> {
         const KEEP_SOLDIERS: u32 = 14;
         if self.players[me as usize].soldiers <= KEEP_SOLDIERS {
             return None;
         }
         let held = |k: Kind| k.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
-        let home = self.campfire(me)?;
+        // Wherever it stands (an army out on watch held all the iron the
+        // steel mills needed), as long as it isn't fighting.
         self.ents
             .iter()
             .filter(|e| e.alive && e.owner == me && !e.is_building() && e.kind.is_military() && held(e.kind) > 0)
-            .filter(|e| ((e.x - home.0).powi(2) + (e.y - home.1).powi(2)).sqrt() < 30.0)
+            .filter(|e| !matches!(e.order, Order::Attack { .. }) && Some(e.id) != self.ais[me as usize].scout)
             .max_by_key(|e| (held(e.kind), std::cmp::Reverse(e.id)))
             .map(|e| e.id)
     }

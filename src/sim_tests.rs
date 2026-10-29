@@ -1662,3 +1662,28 @@ fn diag_kind() {
     let reach = g.reach_for_tests(cx, cy);
     println!("tiles reachable from the campfire: {} of {}", reach.iter().filter(|&&b| b).count(), reach.len());
 }
+
+#[test]
+#[ignore]
+fn diag_army() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 16), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_MINUTES", 50) as f32 * 60.0);
+    let home = g.campfire(me).unwrap();
+    let mut by: std::collections::BTreeMap<String, (u32, u32)> = Default::default();
+    for e in g.ents.iter().filter(|e| e.alive && e.owner == me && !e.is_building() && e.kind.is_military()) {
+        let t = by.entry(format!("{:?}", e.kind)).or_default();
+        t.0 += 1;
+        t.1 += ((e.x - home.0).hypot(e.y - home.1) < 30.0) as u32;
+    }
+    println!("soldiers {} (kind: total, near home) {by:?}", g.players[me as usize].soldiers);
+    let iron_users: Vec<String> = g.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.stats().cost.iter().any(|&(r, _)| r == Res::Iron)).map(|e| format!("{:?}", e.kind)).collect();
+    let mut cnt: std::collections::BTreeMap<String, u32> = Default::default();
+    for k in iron_users { *cnt.entry(k).or_default() += 1; }
+    println!("holding iron: {cnt:?}");
+}
