@@ -1576,3 +1576,66 @@ fn diag_capitol() {
         }
     }
 }
+
+#[test]
+#[ignore]
+fn diag_scout() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 13), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_MINUTES", 15) as f32 * 60.0);
+    for _ in 0..6 {
+        if let Some(id) = g.ais[me as usize].scout {
+            let e = &g.ents[id as usize];
+            let goal = match e.order { Order::Move { x, y } => Some((x, y)), _ => None };
+            let pass = goal.map(|(x, y)| (g.map.passable(x as i32, y as i32), g.map.terrain[g.map.idx(x as i32, y as i32)], g.explored_by(me, x as i32, y as i32)));
+            println!("t {:.0} scout #{id} {:?} at {:.1},{:.1} order {:?} goal passable/terrain/explored {:?} path {} stuck {:.1}", g.time, e.kind, e.x, e.y, e.order, pass, e.path.len(), e.stuck);
+        }
+        run(&mut g, 10.0);
+    }
+}
+
+/// Why the computer players that didn't reach the Atomic era stopped: the
+/// main reasons from one turn of each, after VC_MINUTES (50), peaceful.
+#[test]
+#[ignore]
+fn ai_stalls() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (minutes, seeds) = (env("VC_MINUTES", 50), env("VC_SEEDS", 24));
+    let one = |seed: u32| {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        run(&mut g, minutes as f32 * 60.0);
+        let mut out = Vec::new();
+        for p in 1..=2u8 {
+            if g.players[p as usize].era >= 5 {
+                continue;
+            }
+            let mut h = g.clone();
+            crate::ai::ai_log_start();
+            h.ai_think(p);
+            let log = crate::ai::ai_log_take();
+            let keep: Vec<String> = log.iter().filter(|l| l.contains("upgrade waits") || l.contains("nowhere") || l.contains("tiles explored") || l.contains("short of") || l.contains("nothing to spare") || l.contains("waits for workers")).take(6).cloned().collect();
+            let pl = &g.players[p as usize];
+            let raw: Vec<String> = [Res::Wood, Res::Stone, Res::Brick, Res::Iron, Res::Coal, Res::Steel, Res::Aluminum].iter().filter(|r| pl.supply[r.idx()] > 0).map(|r| format!("{r:?} {}/{}", pl.used[r.idx()], pl.supply[r.idx()])).collect();
+            out.push(format!("seed {seed} P{p} era {} people {}/{} past {} | {}\n      {}", pl.era, pl.people, pl.beds, g.houses_past_era(p), raw.join(" "), keep.join("\n      ")));
+        }
+        out
+    };
+    let all: Vec<u32> = (1..=seeds).collect();
+    for pair in all.chunks(2) {
+        let got: Vec<Vec<String>> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        for v in got {
+            for l in v {
+                println!("{l}");
+            }
+        }
+    }
+}

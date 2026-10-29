@@ -104,6 +104,8 @@ fn reserve_of(r: Res) -> i32 {
 }
 /// How far the scout keeps from other towns' buildings it has seen.
 const SCOUT_KEEP_AWAY: f32 = 26.0;
+/// A material with fewer free than this gets a producer first.
+const LOW_MATERIAL: i32 = 4;
 /// Foundations near home the computer builds at once.
 const PARALLEL: usize = 4;
 
@@ -423,6 +425,27 @@ impl Game {
             acted = step != Step::Blocked;
             if step == Step::Started {
                 self.ais[me as usize].last_grew = true;
+            }
+        }
+        // Materials first: one running low gets a producer before goods and
+        // houses take the rest of the others (playtest: wood, stone and brick
+        // ran out together, and then none of their producers could be built).
+        if !acted {
+            for r in [Res::Wood, Res::Stone, Res::Brick, Res::Iron, Res::Coal, Res::Steel, Res::Aluminum] {
+                let pl = self.players[me as usize];
+                if pl.used[r.idx()] == 0 || pl.free(r) >= LOW_MATERIAL {
+                    continue;
+                }
+                let Some(k) = self.ai_producer(me, r) else { continue };
+                if !self.unlocked(me, k) || self.count_of(me, k) >= self.ai_max(me, k) {
+                    continue;
+                }
+                let step = self.ai_project(k, c, false);
+                ailog!("low on {r:?} ({} free): {k:?} {step:?}", pl.free(r));
+                if step != Step::Blocked {
+                    acted = true;
+                    break;
+                }
             }
         }
         // The plan: the first project that isn't impossible.
@@ -902,10 +925,11 @@ impl Game {
             best.map(|(_, p)| p)
         };
         let Some(id) = scout.filter(|&id| self.alive(id)) else {
-            // Pick one: the first soldier we have.
-            if let Some(&id) = c.army.first() {
+            ailog!("scout: none (leg {leg}, army {})", c.army.len());
+            // Pick one: the newest soldier (an older one may be walled in).
+            if let Some(&id) = c.army.last() {
                 if let Some(l) = next(self, (self.ents[id as usize].x, self.ents[id as usize].y), leg) {
-                    c.army.remove(0);
+                    c.army.pop();
                     self.ais[me as usize].scout = Some(id);
                     self.order_move(id, l.0, l.1);
                 }
@@ -917,6 +941,18 @@ impl Game {
         // they stand still) goes on instead: it's there to look, and one
         // rider picking off workers for minutes isn't an attack.
         let fighting = matches!(self.ents[id as usize].order, Order::Attack { auto: true, .. });
+        ailog!("scout #{id} at {:.0},{:.0} leg {} order {:?}", self.ents[id as usize].x, self.ents[id as usize].y, self.ais[me as usize].scout_leg, self.ents[id as usize].order);
+        // Walled in (the town grew round it): no way there, and it isn't
+        // arriving. Another soldier looks instead.
+        let e = &self.ents[id as usize];
+        if let Order::Move { x, y } = e.order {
+            if e.path.is_empty() && (e.x - x).hypot(e.y - y) > 1.5 && e.repath <= 0.0 {
+                ailog!("scout #{id} can't get there: another one");
+                self.ais[me as usize].scout = None;
+                self.order_move(id, c.home.0, c.home.1 + 4.0);
+                return;
+            }
+        }
         if self.ents[id as usize].order != Order::Idle && !fighting {
             return;
         }
