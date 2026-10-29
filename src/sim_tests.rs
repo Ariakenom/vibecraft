@@ -1820,3 +1820,27 @@ fn diag_tick_time() {
         println!("{m:2} min: {:.3} ms a tick, {} entities, people {} {}", ms, g.ents.iter().filter(|e| e.alive).count(), g.players[1].people, g.players[2].people);
     }
 }
+
+/// The first minutes of one computer town, every 30 s.
+#[test]
+#[ignore]
+fn diag_opening() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 7), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for k in 1..=env("VC_HALVES", 12) {
+        run(&mut g, 30.0);
+        let p = &g.players[me as usize];
+        let mut by: std::collections::BTreeMap<String, u32> = Default::default();
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building()) {
+            let n = format!("{:?}{}", e.kind, if e.built < 1.0 { "*" } else { "" });
+            *by.entry(n).or_default() += 1;
+        }
+        let goods: Vec<String> = Res::ALL.iter().filter(|r| r.is_house_good() && p.supply[r.idx()] > 0).map(|r| format!("{r:?} {}/{}", p.used[r.idx()] + p.housed[r.idx()], p.supply[r.idx()])).collect();
+        println!("{:4.1}m people {}/{} free {} soldiers {} wood {}/{} stone {}/{} | {} | {:?}", k as f32 / 2.0, p.people, p.beds, p.free, p.soldiers, p.used[0], p.supply[0], p.used[1], p.supply[1], goods.join(" "), by);
+    }
+}
