@@ -932,10 +932,17 @@ impl Game {
         // clay round its start: playtest, a third of the map's stone was
         // never found, so its houses stopped growing).
         let next = |g: &Game, from: (f32, f32), leg: usize| -> Option<(f32, f32)> {
-            if leg < legs.len() {
-                return Some(legs[leg]);
-            }
             let m = &g.map;
+            // A ring point in the sea or a forest: the nearest ground our
+            // workers can walk to (playtest: a scout walked round and round
+            // the coast for a point in the water).
+            for &(lx, ly) in legs.iter().skip(leg) {
+                let (cx, cy) = (lx as i32, ly as i32);
+                let near = (0..=6).find_map(|r| (0..(8 * r).max(1)).map(|k| if r == 0 { (0, 0) } else { ring_point(r, k) }).find(|&(dx, dy)| m.inside(cx + dx, cy + dy) && c.reach[m.idx(cx + dx, cy + dy)]));
+                if let Some((dx, dy)) = near {
+                    return Some(((cx + dx) as f32 + 0.5, (cy + dy) as f32 + 0.5));
+                }
+            }
             // Not into anyone's town: a scout there brings their army out
             // (and the fighting back home). Towns it has seen buildings of.
             let towns: Vec<(f32, f32)> = g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && g.explored_by(me, e.tx, e.ty)).map(|e| (e.x, e.y)).collect();
@@ -980,8 +987,10 @@ impl Game {
         let e = &self.ents[id as usize];
         if let Order::Move { x, y } = e.order {
             if e.path.is_empty() && (e.x - x).hypot(e.y - y) > 1.5 && e.repath <= 0.0 {
-                ailog!("scout #{id} can't get there: another one");
-                self.ais[me as usize].scout = None;
+                ailog!("scout #{id} can't get there: another one, somewhere else");
+                let ai = &mut self.ais[me as usize];
+                ai.scout = None;
+                ai.scout_leg = ai.scout_leg.saturating_add(1).min(legs.len() as u8);
                 self.order_move(id, c.home.0, c.home.1 + 4.0);
                 return;
             }
