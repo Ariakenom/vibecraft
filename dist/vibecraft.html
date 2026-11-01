@@ -139,6 +139,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 /* Always room for three rows of five, whatever is selected, so the bar never changes size. */
 /* One width whatever is selected, so the bar never changes size. */
 #cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 340px; }
+#cmd .cbtn.end { grid-column: -2; }
 #cmd .cbtn.page { font: 400 16px var(--display); color: var(--muted); }
 /* The nuke's flash: white over everything, fading out. */
 #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 50; }
@@ -4112,7 +4113,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "0735e78fcc62", "base": "76ef359bd9"};
+const BUILD_INFO = {"sim": "0735e78fcc62", "base": "7442d07a6c"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -6091,8 +6092,18 @@ function renderCommands(sel) {
     add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
+  if (hasUnits) { // every unit, workers too
+    const fn = () => setAmode(true);
+    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
+  }
+  if (hasUnits) {
+    const fn = () => issue({ c: 3, ids: myIds(false) });
+    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
+  }
   // Demolish your buildings (Delete or Shift+Q, at once), or disband your
   // units (the same keys, pressed twice: an army is hard to get back).
+  // Always last, in the bottom-right corner (class "end"), so it never slides
+  // into the place of a button that just went away (a silo's Arm a nuke).
   const doomed = mine.filter(i => E(i, F.kind) !== K.Capitol && isBld(E(i, F.kind)) === !hasUnits).map(i => E(i, F.id));
   if (doomed.length) {
     const key = doomed.join(","), armed = hasUnits && demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
@@ -6105,16 +6116,10 @@ function renderCommands(sel) {
     const tip = hasUnits
       ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
       : "<h4>Demolish</h4><p>Tear it down at once. Its slots and workers come free; anyone in a house or a training queue is lost. (Shift+Q or Delete.)</p>";
-    add(cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip }), "Delete", fn);
+    const b = cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip });
+    b.classList.add("end");
+    add(b, "Delete", fn);
     cmdKeys["⇧q"] = fn;
-  }
-  if (hasUnits) { // every unit, workers too
-    const fn = () => setAmode(true);
-    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
-  }
-  if (hasUnits) {
-    const fn = () => issue({ c: 3, ids: myIds(false) });
-    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
   }
 }
 

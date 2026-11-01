@@ -1055,8 +1055,18 @@ function renderCommands(sel) {
     add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
+  if (hasUnits) { // every unit, workers too
+    const fn = () => setAmode(true);
+    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
+  }
+  if (hasUnits) {
+    const fn = () => issue({ c: 3, ids: myIds(false) });
+    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
+  }
   // Demolish your buildings (Delete or Shift+Q, at once), or disband your
   // units (the same keys, pressed twice: an army is hard to get back).
+  // Always last, in the bottom-right corner (class "end"), so it never slides
+  // into the place of a button that just went away (a silo's Arm a nuke).
   const doomed = mine.filter(i => E(i, F.kind) !== K.Capitol && isBld(E(i, F.kind)) === !hasUnits).map(i => E(i, F.id));
   if (doomed.length) {
     const key = doomed.join(","), armed = hasUnits && demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
@@ -1069,16 +1079,10 @@ function renderCommands(sel) {
     const tip = hasUnits
       ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
       : "<h4>Demolish</h4><p>Tear it down at once. Its slots and workers come free; anyone in a house or a training queue is lost. (Shift+Q or Delete.)</p>";
-    add(cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip }), "Delete", fn);
+    const b = cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip });
+    b.classList.add("end");
+    add(b, "Delete", fn);
     cmdKeys["⇧q"] = fn;
-  }
-  if (hasUnits) { // every unit, workers too
-    const fn = () => setAmode(true);
-    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
-  }
-  if (hasUnits) {
-    const fn = () => issue({ c: 3, ids: myIds(false) });
-    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
   }
 }
 
