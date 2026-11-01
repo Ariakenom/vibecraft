@@ -553,6 +553,21 @@ fn each_computer_player_has_its_own_difficulty() {
     assert_eq!(g.players[2].era, 0, "Easy entered an era before {} s", EASY_ERA_AT[0]);
 }
 
+/// Left in peace, both computers climb all the way: the Atomic era within
+/// 25 minutes on this map (`ai_pace` measures it over 24 maps).
+#[test]
+fn peaceful_computers_reach_the_atomic_era() {
+    let mut g = Game::new(10, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, 25.0 * 60.0);
+    for p in 1..=2usize {
+        assert_eq!(g.players[p].era, 5, "P{p} is in era {} after 25 minutes: {}", g.players[p].era, census(&g, p as u8));
+    }
+}
+
 #[test]
 #[ignore]
 fn watch_the_ai() {
@@ -1396,4 +1411,540 @@ fn ai_peace() {
         println!("seed {seed:2}: eras {} {} people {} {}", a.era, b.era, a.people, b.people);
     }
     println!("players per era {eras:?}, {} people on average, era sum {}", people / 24, eras.iter().enumerate().map(|(e, n)| e as u32 * n).sum::<u32>());
+}
+
+/// How fast the computer climbs the eras when nobody attacks it: when each
+/// player reaches each era, over 12 maps (two at a time, one per core).
+/// `cargo test --release ai_pace -- --ignored --nocapture`; VC_MINUTES (50),
+/// VC_DIFF (1), VC_SEEDS (12). The score is minutes to each era summed over
+/// eras and players, an era not reached counting as the whole run: lower is
+/// better.
+#[test]
+#[ignore]
+fn ai_pace() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (minutes, diff, seeds, first) = (env("VC_MINUTES", 50), env("VC_DIFF", 1), env("VC_SEEDS", 12), env("VC_SEED0", 1));
+    let one = |seed: u32| {
+        let mut g = Game::new(seed, diff, 2);
+        g.set_ai(1, true);
+        g.set_difficulty(1, diff);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        let mut at = [[f32::NAN; 6]; 3];
+        for s in 0..minutes * 6 {
+            run(&mut g, 10.0);
+            for p in 1..=2usize {
+                let e = g.players[p].era as usize;
+                for k in 1..=e {
+                    if at[p][k].is_nan() {
+                        at[p][k] = (s + 1) as f32 / 6.0;
+                    }
+                }
+            }
+        }
+        (seed, at, [g.players[1].people, g.players[2].people])
+    };
+    let mut results = Vec::new();
+    let all: Vec<u32> = (first..first + seeds).collect();
+    for pair in all.chunks(2) {
+        let got: Vec<_> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        results.extend(got);
+    }
+    let mut score = 0.0;
+    let mut times: Vec<Vec<f32>> = vec![Vec::new(); 6];
+    for (seed, at, people) in &results {
+        let f = |p: usize| (1..=5).map(|e| if at[p][e].is_nan() { "  -  ".to_string() } else { format!("{:5.1}", at[p][e]) }).collect::<Vec<_>>().join(" ");
+        println!("seed {seed:2}: P1 {} ({} people) | P2 {} ({} people)", f(1), people[0], f(2), people[1]);
+        for p in 1..=2 {
+            for e in 1..=5 {
+                let t = at[p][e];
+                score += if t.is_nan() { minutes as f32 } else { t };
+                if !t.is_nan() {
+                    times[e].push(t);
+                }
+            }
+        }
+    }
+    let n = results.len() * 2;
+    for e in 1..=5 {
+        let mut v = times[e].clone();
+        v.sort_by(f32::total_cmp);
+        let med = if v.is_empty() { f32::NAN } else { v[v.len() / 2] };
+        println!("era {e}: {:2} of {n} reached it, median {med:.1} min", v.len());
+    }
+    println!("score {score:.0} (lower is better)");
+}
+
+/// Why one computer player is where it is: its town after VC_MINUTES (20) on
+/// VC_SEED (9), nobody attacking, and its reasons over its next few turns.
+/// `cargo test --release diag_ai -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn diag_ai() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (seed, me, minutes, turns) = (env("VC_SEED", 9), env("VC_P", 1) as u8, env("VC_MINUTES", 20), env("VC_TURNS", 6));
+    let mut g = Game::new(seed, env("VC_DIFF", 1), 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for m in 1..=minutes {
+        run(&mut g, 60.0);
+        if m % env("VC_EVERY", 5) == 0 {
+            let p = &g.players[me as usize];
+            let mut by: std::collections::BTreeMap<String, u32> = Default::default();
+            for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some()) {
+                *by.entry(format!("{:?}", e.kind)).or_default() += 1;
+            }
+            println!("{m:2}m era {} people {}/{} soldiers {} houses {by:?}", p.era, p.people, p.beds, p.soldiers);
+        }
+    }
+    println!("{}", census(&g, me));
+    for _ in 0..turns {
+        crate::ai::ai_log_start();
+        g.ai_think(me);
+        for l in crate::ai::ai_log_take() {
+            println!("  {l}");
+        }
+        run(&mut g, 0.5);
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_sites() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (seed, me, minutes) = (env("VC_SEED", 2), env("VC_P", 1) as u8, env("VC_MINUTES", 40));
+    let mut g = Game::new(seed, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, minutes as f32 * 60.0);
+    let cap = g.home_capitol(me).unwrap();
+    println!("home {:.0},{:.0} campfire {:?}", g.ents[cap].x, g.ents[cap].y, g.campfire(me));
+    crate::ai::ai_log_start();
+    run(&mut g, 60.0);
+    for l in crate::ai::ai_log_take().iter().filter(|l| l.contains("tear down") || l.contains("placed")) {
+        println!("  {l}");
+    }
+    for round in 0..3 {
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0) {
+            let coming: Vec<String> = g.ents.iter().filter(|w| w.alive && w.order == Order::Build(e.id)).map(|w| format!("({:.0},{:.0} {:?})", w.x, w.y, w.goal.is_some())).collect();
+            println!("r{round} site {:?} #{} at {},{} built {:.2} builders_in {} coming {:?}", e.kind, e.id, e.tx, e.ty, e.built, e.builders_in, coming);
+        }
+        run(&mut g, 20.0);
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_losses() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let mut g = Game::new(env("VC_SEED", 9), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for m in 1..=env("VC_MINUTES", 25) {
+        run(&mut g, 60.0);
+        let lost: Vec<u32> = (1..=2).map(|p| g.players[p].lost).collect();
+        let cap: Vec<bool> = (1..=2u8).map(|p| g.home_capitol(p).is_some()).collect();
+        let away: Vec<usize> = (1..=2u8).map(|p| {
+            let o = 3 - p;
+            let Some(c) = g.home_capitol(o) else { return 0 };
+            let (cx, cy) = (g.ents[c].x, g.ents[c].y);
+            g.ents.iter().filter(|e| e.alive && e.owner == p && e.kind.is_military() && (e.x - cx).hypot(e.y - cy) < 30.0).count()
+        }).collect();
+        println!("{m:2}m lost {lost:?} capitols {cap:?} soldiers in the other's town {away:?}");
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_capitol() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 9), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_FROM", 23) as f32 * 60.0);
+    let caps: Vec<usize> = g.ents.iter().enumerate().filter(|(_, e)| e.alive && e.owner == me && e.kind == Kind::Capitol).map(|(i, _)| i).collect();
+    println!("capitols of P{me}: {:?}", caps.iter().map(|&i| (g.ents[i].tx, g.ents[i].ty, g.ents[i].starting, g.ents[i].hp)).collect::<Vec<_>>());
+    crate::ai::ai_log_start();
+    for t in 0..(4 * 60 * 2) {
+        run(&mut g, 0.5);
+        let gone: Vec<usize> = caps.iter().copied().filter(|&i| !g.ents[i].alive || g.ents[i].owner != me).collect();
+        if !gone.is_empty() || t % 60 == 0 {
+            println!("t {:.0}: capitols alive {:?} home {:?}", g.time, caps.iter().map(|&i| (g.ents[i].alive, g.ents[i].hp as i32)).collect::<Vec<_>>(), g.home_capitol(me));
+            if !gone.is_empty() {
+                for l in crate::ai::ai_log_take().iter().rev().take(30).rev() {
+                    println!("  {l}");
+                }
+                break;
+            }
+            crate::ai::ai_log_take();
+            crate::ai::ai_log_start();
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_scout() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 13), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_MINUTES", 15) as f32 * 60.0);
+    for _ in 0..6 {
+        if let Some(id) = g.ais[me as usize].scout {
+            let e = &g.ents[id as usize];
+            let goal = match e.order { Order::Move { x, y } => Some((x, y)), _ => None };
+            let pass = goal.map(|(x, y)| (g.map.passable(x as i32, y as i32), g.map.terrain[g.map.idx(x as i32, y as i32)], g.explored_by(me, x as i32, y as i32)));
+            println!("t {:.0} scout #{id} {:?} at {:.1},{:.1} order {:?} goal passable/terrain/explored {:?} path {} stuck {:.1}", g.time, e.kind, e.x, e.y, e.order, pass, e.path.len(), e.stuck);
+        }
+        run(&mut g, 10.0);
+    }
+}
+
+/// Why the computer players that didn't reach the Atomic era stopped: the
+/// main reasons from one turn of each, after VC_MINUTES (50), peaceful.
+#[test]
+#[ignore]
+fn ai_stalls() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (minutes, seeds) = (env("VC_MINUTES", 50), env("VC_SEEDS", 24));
+    let one = |seed: u32| {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        run(&mut g, minutes as f32 * 60.0);
+        let mut out = Vec::new();
+        for p in 1..=2u8 {
+            if g.players[p as usize].era >= 5 {
+                continue;
+            }
+            let mut h = g.clone();
+            crate::ai::ai_log_start();
+            h.ai_think(p);
+            let log = crate::ai::ai_log_take();
+            let keep: Vec<String> = log.iter().filter(|l| l.contains("upgrade waits") || l.contains("nowhere") || l.contains("tiles explored") || l.contains("short of") || l.contains("nothing to spare") || l.contains("waits for workers")).take(6).cloned().collect();
+            let pl = &g.players[p as usize];
+            let raw: Vec<String> = [Res::Wood, Res::Stone, Res::Brick, Res::Iron, Res::Coal, Res::Steel, Res::Aluminum].iter().filter(|r| pl.supply[r.idx()] > 0).map(|r| format!("{r:?} {}/{}", pl.used[r.idx()], pl.supply[r.idx()])).collect();
+            out.push(format!("seed {seed} P{p} era {} people {}/{} past {} | {}\n      {}", pl.era, pl.people, pl.beds, g.houses_past_era(p), raw.join(" "), keep.join("\n      ")));
+        }
+        out
+    };
+    let all: Vec<u32> = (1..=seeds).collect();
+    for pair in all.chunks(2) {
+        let got: Vec<Vec<String>> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        for v in got {
+            for l in v {
+                println!("{l}");
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_kind() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let kind = Kind::from_u32(env("VC_KIND", Kind::Sawmill as u32)).unwrap();
+    let mut g = Game::new(env("VC_SEED", 4), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_MINUTES", 20) as f32 * 60.0);
+    for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind) {
+        let workers = g.ents.iter().filter(|w| w.alive && (w.order == Order::Work(e.id) || w.order == Order::Build(e.id))).count();
+        println!("{kind:?} #{} at {},{} built {:.2} crewed {} hired {} hiring {} fed {} builders_in {} workers/builders ordered {}", e.id, e.tx, e.ty, e.built, e.crewed, e.hired, e.hiring, e.fed, e.builders_in, workers);
+    }
+    let p = &g.players[me as usize];
+    println!("free workers {} people {} beds {}", p.free, p.people, p.beds);
+    let (cx, cy) = g.campfire(me).unwrap();
+    let reach = g.reach_for_tests(cx, cy);
+    println!("tiles reachable from the campfire: {} of {}", reach.iter().filter(|&&b| b).count(), reach.len());
+}
+
+#[test]
+#[ignore]
+fn diag_army() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 16), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    run(&mut g, env("VC_MINUTES", 50) as f32 * 60.0);
+    let home = g.campfire(me).unwrap();
+    let mut by: std::collections::BTreeMap<String, (u32, u32)> = Default::default();
+    for e in g.ents.iter().filter(|e| e.alive && e.owner == me && !e.is_building() && e.kind.is_military()) {
+        let t = by.entry(format!("{:?}", e.kind)).or_default();
+        t.0 += 1;
+        t.1 += ((e.x - home.0).hypot(e.y - home.1) < 30.0) as u32;
+    }
+    println!("soldiers {} (kind: total, near home) {by:?}", g.players[me as usize].soldiers);
+    let iron_users: Vec<String> = g.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.stats().cost.iter().any(|&(r, _)| r == Res::Iron)).map(|e| format!("{:?}", e.kind)).collect();
+    let mut cnt: std::collections::BTreeMap<String, u32> = Default::default();
+    for k in iron_users { *cnt.entry(k).or_default() += 1; }
+    println!("holding iron: {cnt:?}");
+}
+
+/// What the computer's houses wait for, era by era: seconds summed over
+/// houses, every 5 s. VC_SEED, VC_P, VC_MINUTES.
+#[test]
+#[ignore]
+fn diag_phases() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 7), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    // per era: [not full, lacking goods, short of materials, waiting for the era, top tier]
+    let mut t = [[0.0f32; 5]; 6];
+    let mut houses_n = [0u32; 6];
+    let mut people_short = [0.0f32; 6];
+    let mut era_start = [0.0f32; 6];
+    let mut last_era = 0;
+    for _ in 0..env("VC_MINUTES", 30) * 12 {
+        run(&mut g, 5.0);
+        let p = &g.players[me as usize];
+        let era = p.era as usize;
+        if era != last_era {
+            era_start[era] = g.time;
+            last_era = era;
+        }
+        if era >= 5 {
+            break;
+        }
+        if p.people < p.beds {
+            people_short[era] += 5.0;
+        }
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some()) {
+            let tier = e.kind.house_tier().unwrap();
+            houses_n[era] += 1;
+            let k = if e.kind.upgrade().is_none() {
+                4
+            } else if e.kind.upgrade().unwrap().house_tier().unwrap() > p.era + 1 {
+                3
+            } else if e.residents < e.beds() {
+                0
+            } else if e.goods.count_ones() < house_max_goods(tier) as u32 {
+                1
+            } else {
+                2
+            };
+            t[era][k] += 5.0;
+        }
+    }
+    for e in 0..5 {
+        let n = (houses_n[e] as f32 / 12.0).max(1.0);
+        println!("era {e} (from {:.1} min): house-seconds not full {:.0}, lacking goods {:.0}, short of materials {:.0}, waiting for the era {:.0} | town short of people {:.0} s | ~{n:.0} houses", era_start[e] / 60.0, t[e][0], t[e][1], t[e][2], t[e][3], people_short[e]);
+    }
+}
+
+/// How the computer's turns went over VC_MINUTES (12): how often it was busy
+/// (enough foundations), built, waited or was blocked.
+#[test]
+#[ignore]
+fn diag_turns() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 7), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    let mut counts: std::collections::BTreeMap<String, u32> = Default::default();
+    for _ in 0..env("VC_MINUTES", 12) * 60 * 2 {
+        crate::ai::ai_log_start();
+        run(&mut g, 0.5);
+        let log = crate::ai::ai_log_take();
+        // Only this player's turn: from its "economy" line to the next one.
+        let mut mine = false;
+        for l in &log {
+            if l.starts_with("economy:") {
+                mine = l.contains(&format!("P{me} "));
+                if mine {
+                    let busy = l.contains("busy true");
+                    *counts.entry(if busy { "turn: busy".into() } else { "turn: free".into() }).or_default() += 1;
+                }
+            } else if mine && (l.starts_with("grow ->") || l.starts_with("plan ") || l.starts_with("low on")) {
+                let key = l.split(':').next().unwrap_or("").split(' ').take(2).collect::<Vec<_>>().join(" ");
+                let res = if l.contains("Started") { "Started" } else if l.contains("Waiting") { "Waiting" } else { "Blocked" };
+                *counts.entry(format!("{key} {res}")).or_default() += 1;
+            }
+        }
+    }
+    for (k, v) in counts {
+        println!("{k:30} {v}");
+    }
+}
+
+/// Milliseconds a tick takes in a big late game (both computers at it).
+#[test]
+#[ignore]
+fn diag_tick_time() {
+    let mut g = Game::new(7, 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for m in [5, 10, 20, 30] {
+        let until = m as f32 * 60.0;
+        while g.time < until {
+            g.tick();
+            g.events.clear();
+        }
+        let t0 = std::time::Instant::now();
+        for _ in 0..400 {
+            g.tick();
+            g.events.clear();
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0 / 400.0;
+        println!("{m:2} min: {:.3} ms a tick, {} entities, people {} {}", ms, g.ents.iter().filter(|e| e.alive).count(), g.players[1].people, g.players[2].people);
+    }
+}
+
+/// The first minutes of one computer town, every 30 s.
+#[test]
+#[ignore]
+fn diag_opening() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let me = env("VC_P", 1) as u8;
+    let mut g = Game::new(env("VC_SEED", 7), 1, 2);
+    g.set_ai(1, true);
+    for a in g.ais.iter_mut() {
+        a.next_attack = 1.0e9;
+    }
+    for k in 1..=env("VC_HALVES", 12) {
+        run(&mut g, 30.0);
+        let p = &g.players[me as usize];
+        let mut by: std::collections::BTreeMap<String, u32> = Default::default();
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building()) {
+            let n = format!("{:?}{}", e.kind, if e.built < 1.0 { "*" } else { "" });
+            *by.entry(n).or_default() += 1;
+        }
+        let goods: Vec<String> = Res::ALL.iter().filter(|r| r.is_house_good() && p.supply[r.idx()] > 0).map(|r| format!("{r:?} {}/{}", p.used[r.idx()] + p.housed[r.idx()], p.supply[r.idx()])).collect();
+        println!("{:4.1}m people {}/{} free {} soldiers {} wood {}/{} stone {}/{} | {} | {:?}", k as f32 / 2.0, p.people, p.beds, p.free, p.soldiers, p.used[0], p.supply[0], p.used[1], p.supply[1], goods.join(" "), by);
+    }
+}
+
+/// Which goods the computer is short of while its houses lack goods: for
+/// each good the town could use, seconds with none of it spare while a
+/// house lacks a good. VC_SEEDS maps, VC_MINUTES (20).
+#[test]
+#[ignore]
+fn diag_goods() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let mut short: std::collections::BTreeMap<String, f32> = Default::default();
+    for seed in 1..=env("VC_SEEDS", 6) {
+        let mut g = Game::new(seed, 1, 2);
+        g.set_ai(1, true);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        for _ in 0..env("VC_MINUTES", 20) * 12 {
+            run(&mut g, 5.0);
+            for me in 1..=2u8 {
+                let p = &g.players[me as usize];
+                if p.era >= 5 {
+                    continue;
+                }
+                let lacking = g.ents.iter().any(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| (e.goods.count_ones() as u32) < house_max_goods(t) as u32 && e.kind.upgrade().is_some()));
+                if !lacking {
+                    continue;
+                }
+                for r in Res::ALL.iter().filter(|r| r.is_house_good() && r.era() <= p.era) {
+                    if p.spare(*r) <= 0 {
+                        *short.entry(format!("era {} {r:?}", p.era)).or_default() += 5.0;
+                    }
+                }
+            }
+        }
+    }
+    for (k, v) in short {
+        println!("{k:24} {v:.0}");
+    }
+}
+
+/// The table for a difficulty: when the computers reach each era (median),
+/// how many reach it, and their armies at 20 and 40 minutes (how many, and
+/// of which kinds). Peaceful, VC_SEEDS maps (24), VC_DIFF, 50 minutes.
+/// `cargo test --release ai_report -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn ai_report() {
+    let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (diff, seeds) = (env("VC_DIFF", 1), env("VC_SEEDS", 24));
+    let army = |g: &Game, p: u8| -> Vec<Kind> { g.ents.iter().filter(|e| e.alive && e.owner == p && !e.is_building() && e.kind.is_military()).map(|e| e.kind).collect() };
+    let one = |seed: u32| {
+        let mut g = Game::new(seed, diff, 2);
+        g.set_ai(1, true);
+        g.set_difficulty(1, diff);
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        let mut at = [[f32::NAN; 6]; 3];
+        let (mut at20, mut at40) = (Vec::new(), Vec::new());
+        for s in 0..50 * 6 {
+            run(&mut g, 10.0);
+            for p in 1..=2usize {
+                for k in 1..=g.players[p].era as usize {
+                    if at[p][k].is_nan() {
+                        at[p][k] = (s + 1) as f32 / 6.0;
+                    }
+                }
+            }
+            if s + 1 == 20 * 6 {
+                at20 = (1..=2u8).map(|p| army(&g, p)).collect();
+            }
+            if s + 1 == 40 * 6 {
+                at40 = (1..=2u8).map(|p| army(&g, p)).collect();
+            }
+        }
+        (at, at20, at40)
+    };
+    let all: Vec<u32> = (1..=seeds).collect();
+    let mut res = Vec::new();
+    for pair in all.chunks(2) {
+        let got: Vec<_> = std::thread::scope(|sc| pair.iter().map(|&s| sc.spawn(move || one(s))).collect::<Vec<_>>().into_iter().map(|h| h.join().unwrap()).collect());
+        res.extend(got);
+    }
+    let n = res.len() * 2;
+    for e in 1..=5 {
+        let mut v: Vec<f32> = res.iter().flat_map(|(at, _, _)| [at[1][e], at[2][e]]).filter(|t| !t.is_nan()).collect();
+        v.sort_by(f32::total_cmp);
+        let med = if v.is_empty() { "-".to_string() } else { format!("{:.1}", v[v.len() / 2]) };
+        println!("REPORT era {e}: {} of {n}, median {med}", v.len());
+    }
+    for (label, pick) in [("20", 1usize), ("40", 2)] {
+        let armies: Vec<&Vec<Kind>> = res.iter().flat_map(|r| if pick == 1 { r.1.iter() } else { r.2.iter() }).collect();
+        let total: usize = armies.iter().map(|a| a.len()).sum();
+        let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+        for a in &armies {
+            for k in a.iter() {
+                *kinds.entry(format!("{k:?}")).or_default() += 1;
+            }
+        }
+        let mut kv: Vec<(String, usize)> = kinds.into_iter().collect();
+        kv.sort_by(|a, b| b.1.cmp(&a.1));
+        let mix: Vec<String> = kv.iter().take(5).map(|(k, c)| format!("{k} {:.0}%", *c as f32 * 100.0 / total.max(1) as f32)).collect();
+        println!("REPORT army at {label} min: {:.0} soldiers on average; {}", total as f32 / armies.len().max(1) as f32, mix.join(", "));
+    }
 }

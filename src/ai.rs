@@ -16,6 +16,25 @@
 
 use crate::defs::*;
 use crate::econ;
+
+// A log of the computer's reasons, for diagnosing it in tests: off (None)
+// in the game, so nothing is formatted or kept.
+thread_local! {
+    static AI_LOG: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+macro_rules! ailog {
+    ($($t:tt)*) => { AI_LOG.with(|l| if let Some(v) = l.borrow_mut().as_mut() { v.push(format!($($t)*)); }) };
+}
+/// Start keeping the computer's reasons (tests only).
+#[cfg(test)]
+pub fn ai_log_start() {
+    AI_LOG.with(|l| *l.borrow_mut() = Some(Vec::new()));
+}
+/// What it kept since `ai_log_start`, and stop keeping.
+#[cfg(test)]
+pub fn ai_log_take() -> Vec<String> {
+    AI_LOG.with(|l| l.borrow_mut().take().unwrap_or_default())
+}
 use crate::game::*;
 
 #[derive(Clone)]
@@ -61,7 +80,7 @@ struct Style {
 
 const STYLES: [Style; 3] = [
     Style { army_share: 0.1, queue: 1 },
-    Style { army_share: 0.3, queue: 1 },
+    Style { army_share: 0.2, queue: 1 },
     Style { army_share: 0.4, queue: 2 },
 ];
 
@@ -74,6 +93,21 @@ const LUXURY_RESERVE: i32 = 4;
 const HOUSE_RESERVE: i32 = 4;
 /// Supply the computer keeps ahead of use in wood, stone and brick.
 const RAW_MARGIN: i32 = 6;
+/// What every project but the material producers leaves free from the
+/// Medieval era: enough for the next quarry (wood), Kiln (stone) and
+/// Stoneworks (brick).
+fn reserve_of(r: Res) -> i32 {
+    match r {
+        Res::Wood | Res::Stone => 2,
+        _ => 0,
+    }
+}
+/// How far the scout keeps from other towns' buildings it has seen.
+const SCOUT_KEEP_AWAY: f32 = 26.0;
+/// A material with fewer free than this gets a producer first.
+const LOW_MATERIAL: i32 = 4;
+/// Foundations near home the computer builds at once.
+const PARALLEL: usize = 4;
 
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
@@ -199,10 +233,6 @@ fn target(era: u8) -> &'static econ::Plan {
     &PLANS.get_or_init(|| (1..=5).map(econ::era_plan).chain(std::iter::once(econ::silo_plan())).collect())[era.min(5) as usize]
 }
 
-/// Kinds the computer keeps one of for its army, whatever the target says:
-/// iron for swordsmen, horses for riders.
-const ARMY_SUPPLY: [Kind; 2] = [Kind::IronMine, Kind::Pasture];
-
 fn house_goods(era: u8) -> Vec<Res> {
     Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && producer_of(*r).is_some_and(|k| k.era() <= era)).collect()
 }
@@ -210,9 +240,11 @@ fn house_goods(era: u8) -> Vec<Res> {
 // A second `impl Game` block, in a different file. Rust lets you split a
 // type's methods across modules, which keeps the AI code out of game.rs.
 impl Game {
-    /// The most of `kind` this player's town needs now: what `target` has,
-    /// plus one, and never past `MAX_SAME`. Houses and fields have no limit,
-    /// nor do the soldiers' buildings (the plan and a reserve keep those).
+    /// The most of `kind` this player's town needs now, never past
+    /// `MAX_SAME`: for producers of materials (wood, stone, brick, iron,
+    /// steel ...) as many as keep the supply ahead of use; for the houses'
+    /// goods, what `target` has, plus one; huts and farms a few past the
+    /// next era's needs. The soldiers' buildings have their plan and reserve.
     fn ai_max(&self, me: u8, kind: Kind) -> usize {
         let mut hard = Self::max_of(kind);
         // A dozen houses are all the next era asks for; more huts only hold
@@ -231,23 +263,26 @@ impl Game {
         if kind == Kind::Brickworks && self.unlocked(me, Kind::Kiln) {
             return 2;
         }
-        // Wood, stone and brick pay for everything, the army included: as
-        // many as it takes for the supply to stay `RAW_MARGIN` ahead of use.
-        if matches!(kind, Kind::LumberCamp | Kind::Quarry | Kind::Sawmill | Kind::Stoneworks | Kind::Brickworks | Kind::Kiln) {
-            let Some(&(res, out)) = kind.stats().produces.first() else { return hard };
+        // Materials (wood, stone, brick, iron, coal, steel ...) pay for
+        // everything, the army included: as many of their producers as it
+        // takes for the supply to stay `RAW_MARGIN` ahead of use. (Houses'
+        // goods follow the target instead.)
+        let material = kind.stats().produces.first().filter(|&&(r, _)| !r.is_house_good() && kind.house_tier().is_none() && kind != Kind::Capitol);
+        if let Some(&(res, out)) = material {
             let pl = &self.players[me as usize];
             let built = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind && e.built >= 1.0).count() as i32;
             let others = pl.supply[res.idx()] as i32 - built * out as i32;
-            let need = pl.used[res.idx()] as i32 + RAW_MARGIN - others;
+            // (Building materials well ahead; the rest, horses, iron ...
+            // only just: idle pastures held the wood a quarry needed.)
+            let margin = if matches!(res, Res::Wood | Res::Stone | Res::Brick) { RAW_MARGIN } else { 2 };
+            let need = pl.used[res.idx()] as i32 + margin - others;
             return hard.min((need.max(0) as usize).div_ceil(out as usize));
         }
         if kind == Kind::Farm || hard == usize::MAX || matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Tower) {
             return hard;
         }
         let want = target(self.players[me as usize].era).count(kind) as usize;
-        let army = ARMY_SUPPLY.contains(&kind) as usize;
-        let wide = if want > 0 { want + 1 } else { 0 };
-        hard.min(wide.max(army))
+        hard.min(if want > 0 { want + 1 } else { 0 })
     }
 
     /// The producer to build for more of `r`: of those `me` may build now
@@ -294,7 +329,8 @@ impl Game {
         }
         if state == 0 {
             let _ = self.apply(me, Command::Arm { id });
-        } else if state == 2 {
+        } else if state == 2 && self.time >= self.ais[me as usize].next_attack {
+            // (Not before its first attack is due, like the army.)
             if let Some((x, y)) = self.target_for(me, home.0, home.1) {
                 let _ = self.apply(me, Command::Launch { id, x, y });
             }
@@ -303,6 +339,10 @@ impl Game {
 
     /// Every tile a unit can walk to from (x, y), moving like the path
     /// finder does (eight ways, no cutting corners past walls).
+    #[cfg(test)]
+    pub fn reach_for_tests(&self, x: f32, y: f32) -> Vec<bool> {
+        self.reachable_from(x, y)
+    }
     fn reachable_from(&self, x: f32, y: f32) -> Vec<bool> {
         let m = &self.map;
         let mut seen = vec![false; (m.w * m.h) as usize];
@@ -372,18 +412,43 @@ impl Game {
         // builders. Far-off ones don't hold the town up: their builders may
         // be cut down on the way, again and again.
         let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| (self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 30.0).collect();
-        let busy = near.iter().any(|&b| self.builders_missing(b) > 0) || near.len() >= 2;
+        // A few at once while there are hands for them (playtest: the
+        // computer built one thing at a time with a crowd standing idle).
+        let busy = near.len() >= PARALLEL || c.spare == 0;
         let p = self.players[me as usize];
         // Beds ahead of people: grow before the houses are full.
         let tight = p.people + 2 >= p.beds;
         // Beds and the plan take turns, so neither starves the other.
         let mut acted = busy;
         let plan_turn = self.ais[me as usize].last_grew;
+        ailog!("economy: P{me} people {}/{} spare {} busy {busy} tight {tight} plan_turn {plan_turn} era {} houses past {}", p.people, p.beds, c.spare, p.era, self.houses_past_era(me));
         if !acted && (tight || c.spare == 0) && !plan_turn {
             let step = self.ai_grow(c);
+            ailog!("grow -> {step:?}");
             acted = step != Step::Blocked;
             if step == Step::Started {
                 self.ais[me as usize].last_grew = true;
+            }
+        }
+        // Materials first: one running low gets a producer before goods and
+        // houses take the rest of the others (playtest: wood, stone and brick
+        // ran out together, and then none of their producers could be built).
+        if !acted {
+            for r in [Res::Wood, Res::Stone, Res::Brick, Res::Iron, Res::Coal, Res::Steel, Res::Aluminum] {
+                let pl = self.players[me as usize];
+                if pl.used[r.idx()] == 0 || pl.free(r) >= LOW_MATERIAL {
+                    continue;
+                }
+                let Some(k) = self.ai_producer(me, r) else { continue };
+                if !self.unlocked(me, k) || self.count_of(me, k) >= self.ai_max(me, k) {
+                    continue;
+                }
+                let step = self.ai_project(k, c, false);
+                ailog!("low on {r:?} ({} free): {k:?} {step:?}", pl.free(r));
+                if step != Step::Blocked {
+                    acted = true;
+                    break;
+                }
             }
         }
         // The plan: the first project that isn't impossible.
@@ -401,6 +466,7 @@ impl Game {
                 }
             }
             let step = if acted { Step::Waiting } else { self.ai_project(kind, c, false) };
+            ailog!("plan {kind:?} (have {} want {n}): {step:?}", c.have[kind as usize]);
             if step == Step::Started {
                 self.ais[me as usize].last_grew = false;
             }
@@ -432,6 +498,7 @@ impl Game {
         let p = self.players[c.me as usize];
         // A house ready to grow a tier but for its materials: make them.
         if let Some(r) = self.upgrade_short(c.me) {
+            ailog!("grow: an upgrade waits for {r:?}");
             // Every way of making it, the best first: one may have nowhere
             // to stand (no free clay), another want a slot it can free.
             let mut tried: Vec<Kind> = Vec::new();
@@ -442,6 +509,7 @@ impl Game {
                     continue;
                 }
                 let step = self.ai_project(k, c, true);
+                ailog!("grow: {r:?} from {k:?}: {step:?}");
                 if step != Step::Blocked {
                     return step;
                 }
@@ -467,24 +535,29 @@ impl Game {
         let houses = self.ents.iter().filter(|e| e.alive && e.owner == c.me && e.kind.house_tier().is_some()).count() as u32;
         let few = p.era < LAST_ERA && houses < HOUSES_FOR_ERA + 1;
         let hut_first = (!lacking || few) && goods.iter().any(|&r| p.spare(r) > 0);
+        ailog!("grow: goods {goods:?} lacking {lacking} houses {houses} hut_first {hut_first} spare {:?}", goods.iter().map(|&r| (r, p.spare(r))).collect::<Vec<_>>());
         if hut_first {
             let step = self.ai_project(Kind::Hut, c, true);
             if step != Step::Blocked {
                 return step;
             }
         }
-        let mut by_supply = goods.clone();
+        // Producers of goods for a house that lacks one, or for the next
+        // house when none of a good is spare. More than that only hold slots
+        // (and get torn down again for them).
+        let mut by_supply: Vec<Res> = goods.iter().copied().filter(|&r| lacking || p.spare(r) <= 0).collect();
         by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in by_supply {
             let Some(k) = self.ai_producer(c.me, r) else { continue };
             let step = self.ai_project(k, c, true);
+            ailog!("grow: good {r:?} (supply {}) from {k:?}: {step:?}", p.supply[r.idx()]);
             if step != Step::Blocked {
                 return step;
             }
         }
         // The target's goods have nowhere to go: any other the houses can use.
         c.relax = true;
-        let mut others = all.clone();
+        let mut others = if lacking { all.clone() } else { Vec::new() };
         others.retain(|r| !goods.contains(r));
         others.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in others {
@@ -524,17 +597,35 @@ impl Game {
         self.short_of(me, kind).or_else(|| kind.stats().consumes.iter().find(|&&(r, k)| p.spare(r) < k as i32).map(|&(r, _)| r))
     }
 
+    /// `ai_short_of`, and from the Medieval era also the last wood and
+    /// stone: every project but the material producers leaves
+    /// `reserve_of` each, so a quarry (wood) or sawmill (stone) can
+    /// always be built (playtest: towns stood still with both used up). Short
+    /// of the reserve, the project waits for the material's producer.
+    fn ai_needs(&self, me: u8, kind: Kind) -> Option<Res> {
+        self.ai_short_of(me, kind).or_else(|| {
+            let p = &self.players[me as usize];
+            let material = kind.stats().produces.first().is_some_and(|&(r, _)| !r.is_house_good());
+            if material || p.era < 1 {
+                return None;
+            }
+            kind.stats().cost.iter().find(|&&(r, k)| p.free(r) - (k as i32) < reserve_of(r)).map(|&(r, _)| r)
+        })
+    }
+
     /// Tear down the newest crewed producer whose whole output is spare, so
     /// its workers come free. Food in houses counts as used.
     fn ai_release(&mut self, c: &Census) -> bool {
         let p = self.players[c.me as usize];
+        // (Not one the town still wants: it would be rebuilt at once.)
         let unneeded = |k: Kind| {
             let st = k.stats();
-            st.workers > 0 && st.produces.iter().all(|&(r, n)| p.spare(r) >= n as i32)
+            st.workers > 0 && st.produces.iter().all(|&(r, n)| p.spare(r) >= n as i32) && self.count_of(c.me, k) > self.ai_max(c.me, k)
         };
         let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == c.me && e.crewed && e.built >= 1.0 && unneeded(e.kind)).map(|e| e.id) else {
             return false;
         };
+        ailog!("P{} release (few free workers): tear down {:?}", c.me, self.ents[id as usize].kind);
         self.apply(c.me, Command::Demolish { ids: vec![id] }).is_ok()
     }
 
@@ -559,35 +650,40 @@ impl Game {
                 Kind::Brickworks => g.unlocked(me, Kind::Kiln) && g.count_of(me, Kind::Kiln) == 0 && g.count_of(me, Kind::Brickworks) > 1,
                 // A food or cloth producer nobody is eating from holds
                 // slots a house upgrade needs. Never the raw materials.
+                // Only past what the town needs, though: one the target
+                // wants would be rebuilt at once with the slots it gave up
+                // (playtest: a Printer torn down and rebuilt every 20 s).
                 k => {
                     let st = k.stats();
-                    e.crewed
-                        && e.built >= 1.0
-                        && st.workers > 0
-                        && (g.count_of(me, k) > g.ai_max(me, k) || (!matches!(k, Kind::Sawmill | Kind::Brickworks) || g.count_of(me, k) > 2) && !matches!(k, Kind::Quarry | Kind::LumberCamp | Kind::Kiln | Kind::IronMine | Kind::Stoneworks | Kind::Farm))
-                        && st.produces.iter().all(|&(q, n)| g.players[me as usize].spare(q) >= n as i32)
+                    let n = g.count_of(me, k);
+                    let over = n > g.ai_max(me, k);
+                    e.crewed && e.built >= 1.0 && st.workers > 0 && over && st.produces.iter().all(|&(q, n)| g.players[me as usize].spare(q) >= n as i32)
                 }
             }
         };
-        let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id).or_else(|| self.ai_disband_one(me, r)) else { return false };
+        let Some(id) = self.ents.iter().rev().find(|e| spare(self, e)).map(|e| e.id).or_else(|| self.ai_disband_one(me, r)) else {
+            ailog!("  free up {r:?}: nothing to spare");
+            return false;
+        };
+        ailog!("  P{me} free up {r:?}: tear down {:?} (t {:.0})", self.ents[id as usize].kind, self.time);
         self.apply(me, Command::Demolish { ids: vec![id] }).is_ok()
     }
 
     /// Nothing left to tear down: let a soldier go. Soldiers hold wood,
     /// iron and horses, and the town's next era is worth more than the
-    /// tenth swordsman. The one that holds most of `r`, never the last few,
-    /// and only one standing at home.
+    /// tenth swordsman. The one that holds most of `r`, never the last few.
     fn ai_disband_one(&self, me: u8, r: Res) -> Option<u32> {
         const KEEP_SOLDIERS: u32 = 14;
         if self.players[me as usize].soldiers <= KEEP_SOLDIERS {
             return None;
         }
         let held = |k: Kind| k.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
-        let home = self.campfire(me)?;
+        // Wherever it stands (an army out on watch held all the iron the
+        // steel mills needed), as long as it isn't fighting.
         self.ents
             .iter()
             .filter(|e| e.alive && e.owner == me && !e.is_building() && e.kind.is_military() && held(e.kind) > 0)
-            .filter(|e| ((e.x - home.0).powi(2) + (e.y - home.1).powi(2)).sqrt() < 30.0)
+            .filter(|e| !matches!(e.order, Order::Attack { .. }) && Some(e.id) != self.ais[me as usize].scout)
             .max_by_key(|e| (held(e.kind), std::cmp::Reverse(e.id)))
             .map(|e| e.id)
     }
@@ -600,26 +696,36 @@ impl Game {
     fn ai_project(&mut self, kind: Kind, c: &mut Census, for_beds: bool) -> Step {
         let me = c.me;
         if !c.relax && self.count_of(me, kind) >= self.ai_max(me, kind) {
+            ailog!("  project {kind:?}: has {} of max {}", self.count_of(me, kind), self.ai_max(me, kind));
             return Step::Blocked; // the town has all of these it needs
         }
         let mut what = kind;
         let mut seen = vec![kind];
         for _ in 0..3 {
-            let Some(short) = self.ai_short_of(me, what) else { break };
-            let Some(p) = self.ai_producer(me, short) else { break };
-            // Every producer of it is at the limit, or the chain comes back
-            // round (a sawmill needs stone, a quarry needs wood, the best
-            // wood is a sawmill): make room instead.
-            if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) {
+            let Some(short) = self.ai_needs(me, what) else { break };
+            // The best producer of it that can go: not at its limit, not
+            // back round the chain (a Stoneworks needs brick, a Kiln stone):
+            // then a lesser one (a quarry, for wood) rather than none.
+            let mut skip: Vec<Kind> = Vec::new();
+            let p = loop {
+                let Some(p) = self.ai_producer_ex(me, short, &skip) else { break None };
+                if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) || !self.unlocked(me, p) {
+                    skip.push(p);
+                    continue;
+                }
+                break Some(p);
+            };
+            let Some(p) = p else {
+                // Every producer of it is at the limit, or the chain comes
+                // back round: make room instead.
+                ailog!("  project {kind:?}: {what:?} short of {short:?}, no producer can go ({skip:?}): free up");
                 return if self.ai_free_up(me, short) { Step::Started } else { Step::Blocked };
-            }
-            if !self.unlocked(me, p) {
-                break;
-            }
+            };
             seen.push(p);
             what = p;
         }
-        if self.ai_short_of(me, what).is_some() || !self.unlocked(me, what) {
+        if self.ai_needs(me, what).is_some() || !self.unlocked(me, what) {
+            ailog!("  project {kind:?}: {what:?} short of {:?} (unlocked {})", self.ai_needs(me, what), self.unlocked(me, what));
             return Step::Blocked; // short of something nothing makes yet
         }
         // Its builders and its crew, and some free workers kept back.
@@ -627,11 +733,14 @@ impl Game {
         let keep = if for_beds { 0 } else { KEEP_FREE };
         // (Builders become its crew when it's done.)
         if c.spare < (st.builders.max(st.workers)) as u32 + keep {
+            ailog!("  project {kind:?}: {what:?} waits for workers ({} spare)", c.spare);
             return Step::Waiting;
         }
         if !self.ai_place(what, c) {
+            ailog!("  project {kind:?}: nowhere to put {what:?}");
             return Step::Blocked;
         }
+        ailog!("  project {kind:?}: placed {what:?}");
         Step::Started
     }
 
@@ -673,7 +782,40 @@ impl Game {
                 self.find_spot_where(me, kind, bx, by, 5, 40, &c.reach, &clear).or_else(|| self.find_spot(me, kind, bx, by, 5, 40, &c.reach))
             }
         };
-        let Some((tx, ty)) = spot else { return false };
+        let Some((tx, ty)) = spot else {
+            // The deposit is taken up by the old kind that makes the same
+            // (quarries on all the stone, playtest: a Stoneworks makes more
+            // than two of them but had nowhere to stand): make way.
+            let old = match kind {
+                Kind::Stoneworks => Some(Kind::Quarry),
+                Kind::Kiln => Some(Kind::Brickworks),
+                Kind::Sawmill => Some(Kind::LumberCamp),
+                _ => None,
+            };
+            if let Some(old) = old.filter(|_| self.ai_short_of(me, kind).is_none()) {
+                // One whose ground would take the new one (it's bigger).
+                let s = kind.stats().size;
+                let room = |g: &Game, b: &Entity| {
+                    let bs = b.kind.stats().size;
+                    (b.ty - s..=b.ty + bs).any(|ty| {
+                        (b.tx - s..=b.tx + bs).any(|tx| {
+                            g.explored_by(me, tx, ty) && g.explored_by(me, tx + s - 1, ty + s - 1) && g.spot_free_but(kind, tx, ty, me, 1, b.id as i32) && g.near_deposit(kind, tx, ty) && touches(&g.map, &c.reach, tx, ty, s)
+                        })
+                    })
+                };
+                if let Some(id) = self.ents.iter().rev().find(|e| e.alive && e.owner == me && e.kind == old && e.built >= 1.0 && room(self, e)).map(|e| e.id) {
+                    ailog!("  place {kind:?}: no room, make way: tear down a {old:?}");
+                    let _ = self.apply(me, Command::Demolish { ids: vec![id] });
+                    return false;
+                }
+            }
+            if let Some(dep) = kind.stats().needs_deposit {
+                let seen = self.deps.iter().filter(|d| d.kind == dep && self.explored_by(me, d.tx, d.ty)).count();
+                let all = self.deps.iter().filter(|d| d.kind == dep).count();
+                ailog!("  place {kind:?}: {dep:?} tiles explored {seen} of {all}, none with room");
+            }
+            return false;
+        };
         // Builders come from the campfire by themselves.
         match self.place(me, kind, tx, ty, &[]) {
             Ok(id) => {
@@ -753,7 +895,9 @@ impl Game {
             }
             // While the town is still growing into its next era, its house
             // upgrades come before more soldiers: they need wood and stone.
-            let growing = self.houses_past_era(me) < HOUSES_FOR_ERA && pl.era < LAST_ERA;
+            // (Not the first soldier: it's the scout, and a town that never
+            // looks round never finds its clay or iron.)
+            let growing = self.houses_past_era(me) < HOUSES_FOR_ERA && pl.era < LAST_ERA && army > 0;
             let spare = |r: Res| {
                 let house = if growing && matches!(r, Res::Wood | Res::Stone) { HOUSE_RESERVE } else { 0 };
                 pl.free(r) - house - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32)
@@ -777,7 +921,6 @@ impl Game {
         // brick, iron, sheep hills ... are 20 to 30 tiles out, past what the
         // Capitol sees: playtest, the computer never found its clay, so it
         // never made brick or a Sawmill and stood still in the Medieval era).
-        // Then a round of the map, starting from the corner nearest home.
         let mut legs: Vec<(f32, f32)> = Vec::new();
         for (radius, n) in [(24.0f32, 10), (33.0, 14)] {
             for k in 0..n {
@@ -785,45 +928,89 @@ impl Game {
                 legs.push(((c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0), (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0)));
             }
         }
-        let mut round = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)].map(|(fx, fy)| (fx * w, fy * h));
-        let first = (0..4).min_by(|&a, &b| {
-            let d = |i: usize| (round[i].0 - c.home.0).powi(2) + (round[i].1 - c.home.1).powi(2);
-            d(a).total_cmp(&d(b))
-        });
-        round.rotate_left(first.unwrap_or(0));
-        legs.extend(round);
         let ai = &self.ais[me as usize];
         let (scout, leg) = (ai.scout, ai.scout_leg as usize);
-        if leg > legs.len() {
-            return; // done
-        }
+        // Where to look next: a ring leg, then the nearest ground nobody has
+        // seen that our workers could walk to (a town runs out of stone and
+        // clay round its start: playtest, a third of the map's stone was
+        // never found, so its houses stopped growing).
+        let next = |g: &Game, from: (f32, f32), leg: usize| -> Option<(f32, f32)> {
+            let m = &g.map;
+            // A ring point in the sea or a forest: the nearest ground our
+            // workers can walk to (playtest: a scout walked round and round
+            // the coast for a point in the water).
+            for &(lx, ly) in legs.iter().skip(leg) {
+                let (cx, cy) = (lx as i32, ly as i32);
+                let near = (0..=6).find_map(|r| (0..(8 * r).max(1)).map(|k| if r == 0 { (0, 0) } else { ring_point(r, k) }).find(|&(dx, dy)| m.inside(cx + dx, cy + dy) && c.reach[m.idx(cx + dx, cy + dy)]));
+                if let Some((dx, dy)) = near {
+                    return Some(((cx + dx) as f32 + 0.5, (cy + dy) as f32 + 0.5));
+                }
+            }
+            // Not into anyone's town: a scout there brings their army out
+            // (and the fighting back home). Towns it has seen buildings of.
+            let towns: Vec<(f32, f32)> = g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && g.explored_by(me, e.tx, e.ty)).map(|e| (e.x, e.y)).collect();
+            let mut best: Option<(f32, (f32, f32))> = None;
+            for ty in (2..m.h - 2).step_by(3) {
+                for tx in (2..m.w - 2).step_by(3) {
+                    if g.explored_by(me, tx, ty) || !c.reach[m.idx(tx, ty)] {
+                        continue;
+                    }
+                    if towns.iter().any(|&(x, y)| (x - tx as f32).hypot(y - ty as f32) < SCOUT_KEEP_AWAY) {
+                        continue;
+                    }
+                    let (x, y) = (tx as f32 + 0.5, ty as f32 + 0.5);
+                    let d = (x - c.home.0).hypot(y - c.home.1) + 0.5 * (x - from.0).hypot(y - from.1);
+                    if best.is_none_or(|(b, _)| d < b) {
+                        best = Some((d, (x, y)));
+                    }
+                }
+            }
+            best.map(|(_, p)| p)
+        };
         let Some(id) = scout.filter(|&id| self.alive(id)) else {
-            // Pick one: the first soldier we have.
-            if let Some(&id) = c.army.first() {
-                c.army.remove(0);
-                self.ais[me as usize].scout = Some(id);
-                let l = legs[leg.min(legs.len() - 1)];
-                self.order_move(id, l.0, l.1);
+            ailog!("scout: none (leg {leg}, army {})", c.army.len());
+            // Pick one: the newest soldier (an older one may be walled in).
+            if let Some(&id) = c.army.last() {
+                if let Some(l) = next(self, (self.ents[id as usize].x, self.ents[id as usize].y), leg) {
+                    c.army.pop();
+                    self.ais[me as usize].scout = Some(id);
+                    self.order_move(id, l.0, l.1);
+                }
             }
             return;
         };
+        c.army.retain(|&a| a != id);
         // A scout that stopped to fight (soldiers fight what they see when
         // they stand still) goes on instead: it's there to look, and one
         // rider picking off workers for minutes isn't an attack.
         let fighting = matches!(self.ents[id as usize].order, Order::Attack { auto: true, .. });
+        ailog!("scout #{id} at {:.0},{:.0} leg {} order {:?}", self.ents[id as usize].x, self.ents[id as usize].y, self.ais[me as usize].scout_leg, self.ents[id as usize].order);
+        // Walled in (the town grew round it): no way there, and it isn't
+        // arriving. Another soldier looks instead.
+        let e = &self.ents[id as usize];
+        if let Order::Move { x, y } = e.order {
+            if e.path.is_empty() && (e.x - x).hypot(e.y - y) > 1.5 && e.repath <= 0.0 {
+                ailog!("scout #{id} can't get there: another one, somewhere else");
+                let ai = &mut self.ais[me as usize];
+                ai.scout = None;
+                ai.scout_leg = ai.scout_leg.saturating_add(1).min(legs.len() as u8);
+                self.order_move(id, c.home.0, c.home.1 + 4.0);
+                return;
+            }
+        }
         if self.ents[id as usize].order != Order::Idle && !fighting {
             return;
         }
         let ai = &mut self.ais[me as usize];
-        ai.scout_leg += 1;
-        if ai.scout_leg as usize >= legs.len() {
-            // Round done: back home, and into the army.
-            ai.scout_leg = legs.len() as u8 + 1;
-            ai.scout = None;
-            self.order_move(id, c.home.0, c.home.1 + 4.0);
-        } else {
-            let (x, y) = legs[ai.scout_leg as usize];
-            self.order_move(id, x, y);
+        ai.scout_leg = ai.scout_leg.saturating_add(1).min(legs.len() as u8);
+        let leg = ai.scout_leg as usize;
+        match next(self, (self.ents[id as usize].x, self.ents[id as usize].y), leg) {
+            Some((x, y)) => self.order_move(id, x, y),
+            None => {
+                // Everything in reach is seen: back home, and into the army.
+                self.ais[me as usize].scout = None;
+                self.order_move(id, c.home.0, c.home.1 + 4.0);
+            }
         }
     }
 

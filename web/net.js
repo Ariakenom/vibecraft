@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 30,   // 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 31,   // 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
