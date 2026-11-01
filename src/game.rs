@@ -205,6 +205,9 @@ pub struct Nuke {
     pub y: f32,
     /// Seconds until it lands.
     pub left: f32,
+    /// Shot at by the air defense at this spot (see `NUKE_INTERCEPT_AT`):
+    /// it blows up in the air when the missile gets there.
+    pub shot: Option<(f32, f32)>,
 }
 
 impl Entity {
@@ -1493,6 +1496,7 @@ impl Game {
         }
         for n in &self.nukes {
             mix(n.left.to_bits());
+            mix(n.shot.is_some() as u32);
         }
         for p in &self.players[1..] {
             for r in 0..N_RES {
@@ -2116,27 +2120,39 @@ impl Game {
         let (x, y) = (x.clamp(0.0, self.map.w as f32), y.clamp(0.0, self.map.h as f32));
         self.ents[id as usize].nuke = 0;
         self.unpay(owner, NUKE_COST);
-        self.nukes.push(Nuke { owner, sx, sy, x, y, left: NUKE_FLIGHT });
+        self.nukes.push(Nuke { owner, sx, sy, x, y, left: NUKE_FLIGHT, shot: None });
         self.push_event(Ev::NukeLaunched, x, y, owner as f32);
         Ok(())
     }
 
     fn update_nukes(&mut self) {
         let mut fell = Vec::new();
-        for n in self.nukes.iter_mut() {
+        let mut gone = Vec::new();
+        for k in 0..self.nukes.len() {
+            let n = &mut self.nukes[k];
             n.left -= DT;
-            if n.left <= 0.0 {
-                fell.push((n.owner, n.x, n.y));
+            let (owner, x, y, left) = (n.owner, n.x, n.y, n.left);
+            // A few seconds out, the nearest ready air defense fires at it.
+            if n.shot.is_none() && left <= NUKE_INTERCEPT_AT {
+                if let Some(d) = self.interceptor(owner, x, y) {
+                    let e = &mut self.ents[d];
+                    e.progress = AIR_DEFENSE_RELOAD;
+                    self.nukes[k].shot = Some((e.x, e.y));
+                }
+            }
+            let n = &self.nukes[k];
+            if n.shot.is_some() && n.left <= NUKE_INTERCEPT_AT - INTERCEPTOR_FLIGHT {
+                gone.push((owner, x, y));
+            } else if n.left <= 0.0 {
+                fell.push((owner, x, y));
             }
         }
-        self.nukes.retain(|n| n.left > 0.0);
+        self.nukes.retain(|n| n.left > 0.0 && !(n.shot.is_some() && n.left <= NUKE_INTERCEPT_AT - INTERCEPTOR_FLIGHT));
+        for (owner, x, y) in gone {
+            self.push_event(Ev::NukeIntercepted, x, y, owner as f32);
+        }
         for (owner, x, y) in fell {
-            if let Some(d) = self.interceptor(owner, x, y) {
-                self.ents[d].progress = AIR_DEFENSE_RELOAD;
-                self.push_event(Ev::NukeIntercepted, x, y, owner as f32);
-            } else {
-                self.detonate(owner, x, y);
-            }
+            self.detonate(owner, x, y);
         }
     }
 

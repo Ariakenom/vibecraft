@@ -35,7 +35,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 12: Capitols can be founded (the first is marked); AI waves gather.
 /// 13: cheat mode.
 /// 14: maps vary more from seed to seed (the same seed draws another map).
-const VERSION: u32 = 14;
+/// 15: an air defense fires at a nuke before it lands (`Nuke::shot`).
+const VERSION: u32 = 15;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -303,6 +304,8 @@ impl Game {
             for v in [n.sx, n.sy, n.x, n.y, n.left] {
                 w.f32(v);
             }
+            w.bool(n.shot.is_some());
+            w.pt(n.shot.unwrap_or((0.0, 0.0)));
         }
         w.len(self.craters.len());
         for &c in &self.craters {
@@ -456,7 +459,9 @@ impl Game {
         let nnukes = r.len(21)?;
         let mut nukes = Vec::with_capacity(nnukes);
         for _ in 0..nnukes {
-            nukes.push(Nuke { owner: r.u8()?, sx: r.f32()?, sy: r.f32()?, x: r.f32()?, y: r.f32()?, left: r.f32()? });
+            let (owner, sx, sy, x, y, left) = (r.u8()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?);
+            let (shot, at) = (r.bool()?, r.pt()?);
+            nukes.push(Nuke { owner, sx, sy, x, y, left, shot: shot.then_some(at) });
         }
         let ncraters = r.len(8)?;
         let craters = (0..ncraters).map(|_| r.pt()).collect::<Option<Vec<_>>>()?;

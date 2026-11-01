@@ -447,6 +447,11 @@ pub const CRATER_RADIUS: f32 = 2.4;
 /// it can stop another. It also shoots at aircraft out to here.
 pub const AIR_DEFENSE_COVER: f32 = 10.0;
 pub const AIR_DEFENSE_RELOAD: f32 = 90.0;
+/// The air defense fires at a nuke this many seconds before it would land
+/// (if one is ready then), and its missile takes `INTERCEPTOR_FLIGHT`
+/// seconds to reach it: the nuke blows up in the air, for everyone to see.
+pub const NUKE_INTERCEPT_AT: f32 = 4.0;
+pub const INTERCEPTOR_FLIGHT: f32 = 1.5;
 /// Beds in every finished Capitol: a game starts with nobody, and four
 /// newcomers come to fill them.
 pub const CAPITOL_BEDS: u32 = 4;

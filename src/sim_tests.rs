@@ -1204,7 +1204,19 @@ fn an_air_defense_shoots_down_a_nuke_falling_near_it() {
     let silo = g.spawn_building(Kind::MissileSilo, 1, 2, 2, 1.0);
     g.ents[silo as usize].nuke = 2;
     g.apply(1, Command::Launch { id: silo, x: cx, y: cy }).unwrap();
-    run(&mut g, NUKE_FLIGHT + 0.5);
+    // It fires a few seconds before the nuke would land, so everyone sees
+    // its missile go up, and the nuke blows up in the air a moment later.
+    run(&mut g, NUKE_FLIGHT - NUKE_INTERCEPT_AT - 0.2);
+    assert!(g.nukes[0].shot.is_none(), "not yet");
+    run(&mut g, 0.4);
+    let at = (g.ents[def as usize].x, g.ents[def as usize].y);
+    assert_eq!(g.nukes[0].shot, Some(at), "fired at, from the air defense");
+    // Saves keep that.
+    let back = Game::load(&g.save()).unwrap();
+    assert_eq!(back.nukes[0].shot, Some(at));
+    run(&mut g, INTERCEPTOR_FLIGHT);
+    assert!(g.nukes.is_empty(), "blown up in the air, before landing");
+    run(&mut g, NUKE_INTERCEPT_AT);
     assert!(g.alive(cap as u32) && g.craters.is_empty(), "shot down: no blast");
     assert!(g.ents[def as usize].progress > 0.0, "and it's reloading");
     // A second one while it reloads gets through.

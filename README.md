@@ -580,7 +580,8 @@ versions don't play together.
   everything within 15 tiles, its owner's things too, and leaves a crater
   nothing can cross or build on. An **Air Defense** (Modern) shoots at
   aircraft and shoots down a nuke falling within 10 tiles of it, then
-  reloads for 90 seconds.
+  reloads for 90 seconds: it fires 4 seconds before the nuke would land,
+  and everyone sees its missile go up and the nuke burst in the air.
 - **Production:** later producers make more: Medieval ones about twice
   what Ancient ones do, Industrial ones and later three to four times. The
   basics come in bulk later: a Sawmill (Medieval), a Stone Works and a Kiln
@@ -628,8 +629,11 @@ versions don't play together.
   quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
   Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
   selected buildings, or disbands the selected units (units need a second press).
-- **Missile silo:** Z arms a nuke, then Z again and a click launches it
-  (a ring shows the blast, and blue rings the cover of enemy air defenses).
+- **Missile silo:** X arms a nuke; Z and a click launches it (a ring shows
+  the blast, and blue rings the cover of enemy air defenses). Both buttons
+  are always there, greyed out when they can't be used. With several silos
+  selected, each X arms one more, and each launch uses the next armed one
+  (Shift-click to keep launching). Demolish is always the bottom-right button.
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
   oldest first (with several kinds of building selected, every unit still
   gets a key).
