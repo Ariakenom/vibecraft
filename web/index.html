@@ -139,6 +139,9 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 /* Always room for three rows of five, whatever is selected, so the bar never changes size. */
 /* One width whatever is selected, so the bar never changes size. */
 #cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 340px; }
+#cmd .cbtn.end { grid-column: -2; }
+#cmd .cbtn.off { opacity: .35; filter: grayscale(1); }
+.cbtn .count { position: absolute; right: 3px; bottom: 1px; font: 700 12px var(--body); color: var(--ink); text-shadow: 0 1px 0 #000; pointer-events: none; }
 #cmd .cbtn.page { font: 400 16px var(--display); color: var(--muted); }
 /* The nuke's flash: white over everything, fading out. */
 #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 50; }

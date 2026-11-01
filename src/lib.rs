@@ -798,7 +798,8 @@ pub extern "C" fn silo_state(id: u32) -> i32 {
     game(|g| g.ents.get(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo).map_or(-1, |e| e.nuke as i32))
 }
 /// Nukes in flight: how many, and the n-th's `which` (0 x, 1 y of its
-/// target, 2 x, 3 y of its silo, 4 how far along 0..1, 5 owner).
+/// target, 2 x, 3 y of its silo, 4 how far along 0..1, 5 owner, 6 1 if an
+/// air defense has fired at it, 7 x, 8 y of that air defense).
 #[unsafe(no_mangle)]
 pub extern "C" fn nuke_count() -> u32 {
     game(|g| g.nukes.len() as u32)
@@ -812,6 +813,9 @@ pub extern "C" fn nuke_info(n: u32, which: u32) -> f32 {
             2 => k.sx,
             3 => k.sy,
             4 => 1.0 - k.left / defs::NUKE_FLIGHT,
+            6 => k.shot.is_some() as u32 as f32,
+            7 => k.shot.map_or(0.0, |s| s.0),
+            8 => k.shot.map_or(0.0, |s| s.1),
             _ => k.owner as f32,
         })
     })
@@ -842,11 +846,12 @@ pub extern "C" fn cheats_on() -> u32 {
 pub extern "C" fn home_capitol(p: u32) -> i32 {
     game(|g| g.home_capitol(p as u8).map_or(-1, |i| g.ents[i].id as i32))
 }
-/// Seconds to arm a nuke and for it to fly, its blast radius, and an air
-/// defense's reach and reload (`which` 0 to 4).
+/// Seconds to arm a nuke and for it to fly, its blast radius, an air
+/// defense's reach and reload, and when it fires at a nuke (seconds before
+/// landing) and how long its missile flies (`which` 0 to 6).
 #[unsafe(no_mangle)]
 pub extern "C" fn nuke_numbers(which: u32) -> f32 {
-    [defs::NUKE_ARM_TIME, defs::NUKE_FLIGHT, defs::NUKE_RADIUS, defs::AIR_DEFENSE_COVER, defs::AIR_DEFENSE_RELOAD][which.min(4) as usize]
+    [defs::NUKE_ARM_TIME, defs::NUKE_FLIGHT, defs::NUKE_RADIUS, defs::AIR_DEFENSE_COVER, defs::AIR_DEFENSE_RELOAD, defs::NUKE_INTERCEPT_AT, defs::INTERCEPTOR_FLIGHT][which.min(6) as usize]
 }
 
 /// Debug/testing: set a missile silo's nuke (0 none, 1 arming, 2 armed),

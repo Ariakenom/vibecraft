@@ -904,7 +904,7 @@ function singleInfo(panel, i) {
   } else if (k === K.MissileSilo) {
     const st = W.silo_state(id);
     html += st === 1 ? `<div class="statline">Arming a nuke · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`
-      : st === 2 ? `<div class="statline">A nuke is armed: Launch (Z), then click a target.</div>` : `<div class="statline">Empty: Arm a nuke (Z).</div>`;
+      : st === 2 ? `<div class="statline">A nuke is armed: Launch (Z), then click a target.</div>` : `<div class="statline">Empty: Arm a nuke (X).</div>`;
   } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
     html += `<div class="statline">Waiting for a recruit from the town square.</div>`;
   }
@@ -941,6 +941,8 @@ function cmdButton(label, key, onClick, opts = {}) {
   if (key) { const kb = document.createElement("kbd"); kb.textContent = key; b.append(kb); }
   // What it makes: the resource icons in the corner.
   if (opts.badge) { const bd = document.createElement("span"); bd.className = "badge"; bd.innerHTML = opts.badge; b.append(bd); }
+  // How many (a silo button with several silos selected).
+  if (opts.count) { const n = document.createElement("span"); n.className = "count"; n.textContent = opts.count; b.append(n); }
   b.setAttribute("aria-label", label);
   b.onclick = onClick;
   b.onmouseenter = () => showTip(opts.tip || `<h4>${label}</h4>`);
@@ -1032,17 +1034,28 @@ function renderCommands(sel) {
   box.classList.toggle("dense", box.children.length > 15 && box.children.length <= 22);
   box.classList.toggle("denser", box.children.length > 22 && box.children.length <= 36);
   box.classList.toggle("densest", box.children.length > 36);
-  // A missile silo: arm a nuke, or launch the armed one (both Z).
-  const silo = mine.find(i => E(i, F.kind) === K.MissileSilo && !(E(i, F.flags) & 2));
-  if (silo != null && !hasUnits) {
-    const id = E(silo, F.id), st = W.silo_state(id);
-    if (st === 0) {
-      const fn = () => { const code = issue({ c: 11, ids: [id] }); if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("queued"); selKey = ""; };
-      add(cmdButton("Arm a nuke", "Z", fn, { glyph: "☢", tip: `<h4>Arm a nuke</h4><p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes.</p>` }), "Z", fn);
-    } else if (st === 2) {
-      const fn = () => { aimSilo = id; amode = true; placing = null; updateCursor(); };
-      add(cmdButton("Launch", "Z", fn, { glyph: "🚀", tip: `<h4>Launch the nuke</h4><p>Click where it should fall. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming. An enemy Air Defense within ${W.nuke_numbers(3)} tiles of the target shoots it down.</p>` }), "Z", fn);
-    }
+  // Missile silos: Launch (Z) and Arm a nuke (X), both always there, greyed
+  // out when no selected silo can do it. With several silos selected, each
+  // press arms the next empty one, and each launch uses the next armed one.
+  const silos = mine.filter(i => E(i, F.kind) === K.MissileSilo && !(E(i, F.flags) & 2)).map(i => E(i, F.id));
+  if (silos.length && !hasUnits) {
+    const states = silos.map(id => W.silo_state(id)), count = s => states.filter(x => x === s).length;
+    const empty = count(0), arming = count(1), armed = count(2), many = silos.length > 1;
+    const fnLaunch = () => {
+      if (!armedOf(silos).length) { toast(arming ? "The nuke is still arming." : "No nuke is armed: Arm a nuke (X) first.", "bad"); Sfx.ui("error"); return; }
+      aimSilo = silos; amode = true; placing = null; updateCursor();
+    };
+    const b1 = cmdButton("Launch", "Z", fnLaunch, { glyph: "🚀", count: many && armed, tip: `<h4>Launch the nuke</h4>${many ? `<p>${armed} of ${silos.length} silos armed.</p>` : ""}<p>Click where it should fall${many ? "; Shift-click to launch the next one too" : ""}. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming. An enemy Air Defense within ${W.nuke_numbers(3)} tiles of the target shoots it down.</p>` });
+    if (!armed) b1.classList.add("off");
+    add(b1, "Z", fnLaunch);
+    const fnArm = () => {
+      const id = silos.find(id => W.silo_state(id) === 0);
+      if (id == null) { toast(many ? "Every selected silo already has a nuke." : "This silo already has a nuke.", "bad"); Sfx.ui("error"); return; }
+      const code = issue({ c: 11, ids: [id] }); if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("queued"); selKey = "";
+    };
+    const b2 = cmdButton("Arm a nuke", "X", fnArm, { glyph: "☢", count: many && empty, tip: `<h4>Arm a nuke</h4>${many ? `<p>${empty} of ${silos.length} silos empty; each press arms one.</p>` : ""}<p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes.</p>` });
+    if (!empty) b2.classList.add("off");
+    add(b2, "X", fnArm);
   }
   // Houses: upgrade the ones that are ready (it holds more materials, so
   // it's your call).
@@ -1055,8 +1068,18 @@ function renderCommands(sel) {
     add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
+  if (hasUnits) { // every unit, workers too
+    const fn = () => setAmode(true);
+    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
+  }
+  if (hasUnits) {
+    const fn = () => issue({ c: 3, ids: myIds(false) });
+    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
+  }
   // Demolish your buildings (Delete or Shift+Q, at once), or disband your
   // units (the same keys, pressed twice: an army is hard to get back).
+  // Always last, in the bottom-right corner (class "end"), so it never slides
+  // into the place of a button that just went away (a silo's Arm a nuke).
   const doomed = mine.filter(i => E(i, F.kind) !== K.Capitol && isBld(E(i, F.kind)) === !hasUnits).map(i => E(i, F.id));
   if (doomed.length) {
     const key = doomed.join(","), armed = hasUnits && demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000;
@@ -1069,16 +1092,10 @@ function renderCommands(sel) {
     const tip = hasUnits
       ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
       : "<h4>Demolish</h4><p>Tear it down at once. Its slots and workers come free; anyone in a house or a training queue is lost. (Shift+Q or Delete.)</p>";
-    add(cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip }), "Delete", fn);
+    const b = cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip });
+    b.classList.add("end");
+    add(b, "Delete", fn);
     cmdKeys["⇧q"] = fn;
-  }
-  if (hasUnits) { // every unit, workers too
-    const fn = () => setAmode(true);
-    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
-  }
-  if (hasUnits) {
-    const fn = () => issue({ c: 3, ids: myIds(false) });
-    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
   }
 }
 
@@ -1221,12 +1238,19 @@ function startPlacing(k) {
   if (!canAfford(k)) { toast(explain(shortCode(k)), "bad"); Sfx.ui("error"); return; }
   placing = k; amode = false; updateCursor();
 }
-function launchAt(w) {
-  if (w && aimSilo != null) {
-    const code = issue({ c: 12, ids: [aimSilo], x: w.x, y: w.y });
+// The armed silos among `ids`, in order.
+function armedOf(ids) { return ids.filter(id => W.silo_state(id) === 2); }
+// Launch from the first armed silo being aimed (`aimSilo` holds every
+// selected silo). With `keep` (Shift), go on aiming while another is armed.
+function launchAt(w, keep = false) {
+  const from = aimSilo && armedOf(aimSilo)[0];
+  if (w && from != null) {
+    const code = issue({ c: 12, ids: [from], x: w.x, y: w.y });
     if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else marker(w, 2);
+    selKey = "";
   }
-  setAmode(false);
+  if (keep && aimSilo && armedOf(aimSilo).length) updateCursor();
+  else setAmode(false);
 }
 function setAmode(on) { amode = on; placing = null; if (!on) aimSilo = null; updateCursor(); }
 function updateCursor() {
@@ -1235,7 +1259,10 @@ function updateCursor() {
   view.classList.toggle("amode", amode);
   const h = $("hint");
   if (placing != null) { h.hidden = false; h.textContent = `Place ${NAMES[placing]}: click to build, Shift-click for more, right-click to cancel`; }
-  else if (amode && aimSilo != null) { h.hidden = false; h.textContent = "Launch the nuke: click where it should fall, right-click to cancel"; }
+  else if (amode && aimSilo != null) {
+    const n = armedOf(aimSilo).length;
+    h.hidden = false; h.textContent = n > 1 ? `Launch a nuke (${n} armed): click where it should fall, Shift-click to launch the next too, right-click to cancel` : "Launch the nuke: click where it should fall, right-click to cancel";
+  }
   else if (amode) { h.hidden = false; h.textContent = "Attack-move: click a destination, right-click to cancel"; }
   else h.hidden = true;
 }
@@ -1294,7 +1321,7 @@ view.addEventListener("pointerdown", e => {
   }
   if (e.button !== 0) return;
   if (placing != null) { tryPlace(p, e.shiftKey); return; }
-  if (amode && aimSilo != null) { launchAt(screenToGround(p.x, p.y)); return; }
+  if (amode && aimSilo != null) { launchAt(screenToGround(p.x, p.y), e.shiftKey); return; }
   if (amode) {
     const w = screenToGround(p.x, p.y);
     if (w) { issue({ c: 2, ids: myIds(false), x: w.x, y: w.y }); marker(w, 2); Sfx.ui("command", 2); }
@@ -1428,7 +1455,7 @@ mini.addEventListener("pointerdown", e => {
   const w = miniMove(e);
   if (e.button === 2) { if (amode || placing != null) { placing = null; setAmode(false); return; } rightClickAt(w); return; }
   // Attack-move (Z, then a click on the minimap), or a nuke's target.
-  if (e.button === 0 && amode && aimSilo != null) { launchAt(w); return; }
+  if (e.button === 0 && amode && aimSilo != null) { launchAt(w, e.shiftKey); return; }
   if (e.button === 0 && amode) {
     issue({ c: 2, ids: myIds(false), x: w.x, y: w.y }); marker(w, 2); Sfx.ui("command", 2);
     if (!e.shiftKey) setAmode(false);
@@ -1537,7 +1564,8 @@ function handleEvents() {
       else if (type === EV.NukeLaunched) toast(`${pnc(d)} has launched a nuke!`);
       else if (type === EV.NukeIntercepted) toast(`An air defense shot down ${pnc(d)}'s nuke.`);
       if (type === EV.NukeDetonated) { Sfx.ui("nuke"); nukeFlash(x, y); }
-      if (type === EV.NukeLaunched || type === EV.NukeIntercepted) Sfx.ui("siren");
+      if (type === EV.NukeIntercepted) { Sfx.at("cannon", x, y, 40); nukeBurst(x, y); }
+      if (type === EV.NukeLaunched) Sfx.ui("siren");
       if (type <= 4 || type >= 12) continue;
     }
     switch (type) {
@@ -1587,7 +1615,7 @@ function handleEvents() {
         break;
       case EV.NukeIntercepted:
         toast(d === ME ? "Your nuke was shot down by an air defense." : `An air defense shot down ${pnc(d)}'s nuke.`, d === ME ? "bad" : "good");
-        Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon);
+        Sfx.at("cannon", x, y, 40); nukeBurst(x, y);
         break;
       case EV.NukeLaunched:
         // Everyone is told, and shown where it will fall.

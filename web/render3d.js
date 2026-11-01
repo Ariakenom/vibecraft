@@ -1714,6 +1714,8 @@ function nukeMeshes() {
   R3.nukeGeo = m.build();
   R3.nukeMesh = [];
   R3.nukeRings = [];
+  R3.interceptors = [];
+  R3.shotAt = new Map(); // where an air defense's missile meets each nuke fired at, by target
   R3.craterMeshes = [];
   R3.fireballs = [];
 }
@@ -1726,10 +1728,12 @@ function updateNukes(now, alpha = 0) {
     const ring = new THREE.Mesh(new THREE.RingGeometry(W.nuke_numbers(2) - 0.25, W.nuke_numbers(2), 48).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: "#ff3b2f", transparent: true, opacity: 0.7, depthWrite: false }));
     R3.scene.add(ring); R3.nukeRings.push(ring);
+    const im = new THREE.Mesh(R3.nukeGeo, entMat); im.scale.setScalar(1.0); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
   }
   for (let k = 0; k < R3.nukeMesh.length; k++) {
-    const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k];
+    const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k], im = R3.interceptors[k];
     mesh.visible = ring.visible = k < n;
+    im.visible = false;
     if (k >= n) continue;
     const tx = W.nuke_info(k, 0), ty = W.nuke_info(k, 1), sx = W.nuke_info(k, 2), sy = W.nuke_info(k, 3);
     // Smooth between ticks (the game moves it 20 times a second), and fly
@@ -1746,6 +1750,26 @@ function updateNukes(now, alpha = 0) {
     ring.position.set(tx, groundAt(tx, ty) + 0.08, ty);
     ring.material.opacity = 0.45 + 0.35 * Math.sin(now * 0.012);
     if (frame % 3 === 0 && R3.puffs && R3.puffs.length < 64) R3.puffs.push({ x, y, h, t0: now, big: false, seed: Math.random() * 6.28 });
+    // An air defense has fired at it (`NUKE_INTERCEPT_AT` seconds before it
+    // would land): its missile climbs from the battery to where it meets
+    // the nuke (`INTERCEPTOR_FLIGHT` seconds later), and the nuke blows up
+    // there (`nukeBurst`).
+    if (W.nuke_info(k, 6)) {
+      const AT = W.nuke_numbers(5), FL = W.nuke_numbers(6);
+      const u = Math.min(1, Math.max(0, (AT - (1 - p) * NUKE_FLIGHT_S) / FL));
+      const ax = W.nuke_info(k, 7), ay = W.nuke_info(k, 8), a0 = groundAt(ax, ay) + 1.2;
+      const hit = at(1 - (AT - FL) / NUKE_FLIGHT_S);
+      R3.shotAt.set(`${tx},${ty}`, hit);
+      // Fast off the rail, a little bowed upward.
+      const v = u * (0.6 + 0.4 * u);
+      const mp = q => [ax + (hit[0] - ax) * q, ay + (hit[1] - ay) * q, a0 + (hit[2] - a0) * q + 2 * q * (1 - q)];
+      const [mx, my, mh] = mp(v), [mx2, my2, mh2] = mp(Math.min(1, v + 0.02));
+      im.visible = true;
+      im.position.set(mx, mh, my);
+      _v3.set(mx2 - mx, mh2 - mh, my2 - my);
+      if (_v3.lengthSq() > 1e-8) im.quaternion.setFromUnitVectors(_up, _v3.normalize());
+      if (R3.puffs && R3.puffs.length < 64) R3.puffs.push({ x: mx, y: my, h: mh, t0: now, big: false, seed: Math.random() * 6.28 });
+    }
   }
   // Craters.
   const c = W.crater_count();
@@ -1773,7 +1797,7 @@ function updateNukes(now, alpha = 0) {
   R3.fireballs = R3.fireballs.filter(f => {
     const a = (now - f.t0) / 4000;
     if (a >= 1) { R3.scene.remove(f.mesh); return false; }
-    f.mesh.scale.setScalar((0.5 + Math.min(1, a * 3) * 4.5) * W.nuke_numbers(2) / 5);
+    f.mesh.scale.setScalar((0.5 + Math.min(1, a * 3) * 4.5) * W.nuke_numbers(2) / 5 * (f.size || 1));
     f.mesh.material.opacity = Math.max(0, 1 - a) * 0.9;
     f.mesh.position.y = f.y0 + a * 3;
     return true;
@@ -1824,6 +1848,21 @@ function nukeFlash(x, y) {
     gunSmoke(x + Math.cos(a) * 3, y + Math.sin(a) * 3, K.Cannon);
   }
   for (let k = 0; k < 8; k++) R3.puffs.push({ x, y, h: groundAt(x, y) + 1 + k * 0.9, t0: performance.now() + k * 120, big: true, seed: k });
+}
+
+// A nuke shot down (the game's event gives where it was going): a burst in
+// the sky where the air defense's missile met it, smaller than a blast.
+function nukeBurst(x, y) {
+  if (!R3.scene) return;
+  nukeMeshes();
+  const key = `${x},${y}`, hit = R3.shotAt.get(key) || [x, y, groundAt(x, y) + 4];
+  R3.shotAt.delete(key);
+  const [bx, by, bh] = hit;
+  const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), new THREE.MeshBasicMaterial({ color: "#ffe2a0", transparent: true, opacity: 0.9 }));
+  mesh.position.set(bx, bh, by);
+  R3.scene.add(mesh);
+  R3.fireballs.push({ mesh, t0: performance.now(), y0: bh, size: 0.35 });
+  for (let k = 0; k < 10; k++) R3.puffs.push({ x: bx + Math.cos(k) * 1.2, y: by + Math.sin(k) * 0.8, h: bh + (k % 3) * 0.4, t0: performance.now() + k * 60, big: true, seed: k });
 }
 
 // A shot from a firearm at (x, y): a puff of smoke there (see updatePuffs).
@@ -1882,7 +1921,7 @@ function updatePuffs(now) {
 }
 
 // Rebuild the resource instances when anything about them changed.
-const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _c = new THREE.Color();
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _v3 = new THREE.Vector3(), _c = new THREE.Color();
 function updateResources() {
   if (!R3.res) return;
   // A number that changes when resources do (was a string: garbage every frame).
