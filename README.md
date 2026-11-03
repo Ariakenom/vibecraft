@@ -682,7 +682,7 @@ versions don't play together.
   oldest first (with several kinds of building selected, every unit still
   gets a key).
 - **Other keys:**
-  - Z attack-move (every unit, workers too), X stop
+  - Z attack-move (every unit, workers too; then click the map or the minimap), X stop; a right-click on the minimap moves
   - H home, `.` free workers (in the town square)
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, Shift+1–9 add the selection to it, 1–9 recall it (twice to centre the camera)

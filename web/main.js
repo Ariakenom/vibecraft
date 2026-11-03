@@ -1107,7 +1107,7 @@ function renderCommands(sel) {
   }
   if (hasUnits) { // every unit, workers too
     const fn = () => setAmode(true);
-    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way.</p>" }), "Z", fn);
+    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way. Click it on the map or on the minimap.</p>" }), "Z", fn);
   }
   if (hasUnits) {
     const fn = () => issue({ c: 3, ids: myIds(false) });
@@ -1294,13 +1294,15 @@ function updateCursor() {
   lastCursorCheck = 0; cursorCode = -1; // refresh the mouse cursor now
   view.classList.toggle("placing", placing != null);
   view.classList.toggle("amode", amode);
+  // The minimap takes the click too: say so with the cursor.
+  mini.style.cursor = amode ? "crosshair" : "";
   const h = $("hint");
   if (placing != null) { h.hidden = false; h.textContent = `Place ${NAMES[placing]}: click to build, Shift-click for more, right-click to cancel`; }
   else if (amode && aimSilo != null) {
     const n = armedOf(aimSilo).length;
-    h.hidden = false; h.textContent = n > 1 ? `Launch a nuke (${n} armed): click where it should fall, Shift-click to launch the next too, right-click to cancel` : "Launch the nuke: click where it should fall, right-click to cancel";
+    h.hidden = false; h.textContent = n > 1 ? `Launch a nuke (${n} armed): click where it should fall (map or minimap), Shift-click to launch the next too, right-click to cancel` : "Launch the nuke: click where it should fall (on the map or the minimap), right-click to cancel";
   }
-  else if (amode) { h.hidden = false; h.textContent = "Attack-move: click a destination, right-click to cancel"; }
+  else if (amode) { h.hidden = false; h.textContent = "Attack-move: click a destination on the map or the minimap (Shift for more), right-click to cancel"; }
   else h.hidden = true;
 }
 function setSelection(ids) {
