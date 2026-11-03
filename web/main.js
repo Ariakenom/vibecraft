@@ -913,7 +913,7 @@ function singleInfo(panel, i) {
       ? `<div class="statline">Fuel <b>${E(i, F.residents)}</b> of ${E(i, F.beds)} s · refuels at an airfield or carrier</div>`
       : `<div class="statline bad">Out of fuel: slow until it's back at an airfield or carrier.</div>`;
     if (isAir(k) && (owner === ME || observe)) html += W.ammo(id, 0) > 0
-      ? `<div class="statline">${k === K.Bomber ? "Bombs" : "Ammunition"} <b>${W.ammo(id, 0)}</b> of ${W.ammo(id, 1)} · rearms where it refuels</div>`
+      ? `<div class="statline">${k === K.Bomber ? "Bombs" : "Ammunition"} <b>${W.ammo(id, 0)}</b> of ${W.ammo(id, 1)} · rearms where it refuels, and flies back by itself when empty</div>`
       : `<div class="statline bad">Out of ${k === K.Bomber ? "bombs" : "ammunition"}: it can't attack until it's back at an airfield or carrier.</div>`;
     if (k === K.Transport) html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} aboard${owner === ME && E(i, F.residents) > 0 ? " · right-click the shore to put them ashore" : ""}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;

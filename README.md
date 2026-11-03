@@ -583,8 +583,11 @@ versions don't play together.
   they're back within 3 tiles of one, where they fill up in 5 seconds
   (`air_fuel`). They carry limited ammunition too (`air_ammo`: 12 bursts
   for a fighter, 14 for a jet, 3 bomb runs for a bomber), and rearm there
-  as they refuel; empty, they can't attack. The computer sends them home
-  when low on fuel or out of ammunition. They fly straight over
+  a shot at a time while they refuel (5 seconds from empty to full); empty,
+  they can't attack. An aircraft out of ammunition or fuel flies back to the
+  nearest airfield or carrier by itself, and doesn't go off fighting by
+  itself until it's full again (orders still work). The computer also sends
+  them home when low on fuel. They fly straight over
   water and buildings and only fighters, machine gunners, infantry, towers
   and the Capitol can hit them; bombers flatten buildings but need fighters
   to protect them.

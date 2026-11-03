@@ -1649,17 +1649,26 @@ impl Game {
     }
 
     /// Aircraft burn fuel while they're away from an airfield or carrier,
-    /// and fill up and rearm next to one (a shot every `REFUEL_TIME / max`).
+    /// and fill up and rearm next to one.
     fn burn_fuel(&mut self, i: usize) {
         let kind = self.ents[i].kind;
         let max = air_fuel(kind);
         if self.at_air_base(i) {
-            // It rearms in step with the fuel: full when the tank is.
+            // Refuel, and rearm a shot at a time (`progress` counts the
+            // next one): each takes `REFUEL_TIME` from empty to full.
             let e = &mut self.ents[i];
             e.fuel = (e.fuel + DT * max / REFUEL_TIME).min(max);
             let full = air_ammo(kind);
-            let loaded = if e.fuel >= max { full } else { (e.fuel / max * full as f32) as u8 };
-            e.ammo = e.ammo.max(loaded);
+            if e.ammo < full {
+                e.progress += DT * full as f32 / REFUEL_TIME;
+                while e.progress >= 1.0 && e.ammo < full {
+                    e.progress -= 1.0;
+                    e.ammo += 1;
+                }
+            }
+            if e.ammo >= full {
+                e.progress = 0.0;
+            }
         } else {
             let e = &mut self.ents[i];
             e.fuel = (e.fuel - DT).max(0.0);
@@ -1671,9 +1680,45 @@ impl Game {
         !e.kind.is_air() || e.ammo > 0
     }
 
+    /// An aircraft filling up at an airfield or carrier, not yet full: it
+    /// doesn't go off fighting by itself until it is (orders still work).
+    pub fn refilling(&self, i: usize) -> bool {
+        let e = &self.ents[i];
+        e.kind.is_air() && (e.ammo < air_ammo(e.kind) || e.fuel < air_fuel(e.kind)) && self.at_air_base(i)
+    }
+
+    /// May it pick a fight by itself (when idle, or hit)? Armed, and not
+    /// refilling.
+    fn ready(&self, i: usize) -> bool {
+        Self::armed(&self.ents[i]) && !self.refilling(i)
+    }
+
+    /// The nearest of `owner`'s airfields and carriers to (x, y).
+    fn nearest_air_base(&self, owner: u8, x: f32, y: f32) -> Option<(f32, f32)> {
+        self.ents
+            .iter()
+            .filter(|b| b.alive && b.owner == owner && ((b.kind == Kind::Airfield && b.built >= 1.0) || b.kind == Kind::Carrier))
+            .map(|b| (b.x, b.y))
+            .min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)))
+    }
+
+    /// An aircraft out of ammunition or fuel heads back to the nearest
+    /// airfield or carrier by itself (unless it's been told to go somewhere).
+    fn head_home_when_empty(&mut self, i: usize) {
+        let e = &self.ents[i];
+        if !(e.ammo == 0 || e.fuel <= 0.0) || matches!(e.order, Order::Move { .. }) || self.at_air_base(i) {
+            return;
+        }
+        if let Some((x, y)) = self.nearest_air_base(e.owner, e.x, e.y) {
+            let id = e.id;
+            self.order_move(id, x, y);
+        }
+    }
+
     fn update_unit(&mut self, i: usize) {
         if self.ents[i].kind.is_air() {
             self.burn_fuel(i);
+            self.head_home_when_empty(i);
         }
         // A nuclear submarine arms its nuke while it lies at a dock, and
         // pauses while it's away.
@@ -1799,7 +1844,7 @@ impl Game {
         // A fishing boat lying still is fishing (see `resolve`).
         self.ents[i].anim = if self.ents[i].kind == Kind::FishingBoat { Anim::Work } else { Anim::Idle };
         let e = &self.ents[i];
-        if e.kind.is_military() && e.scan <= 0.0 && Self::armed(&self.ents[i]) {
+        if e.kind.is_military() && e.scan <= 0.0 && self.ready(i) {
             self.ents[i].scan = 0.5;
             let sight = self.ents[i].kind.stats().sight;
             if let Some(t) = self.nearest_enemy(i, sight) {
@@ -1959,12 +2004,13 @@ impl Game {
             return;
         }
         let (ax, ay) = (self.ents[attacker as usize].x, self.ents[attacker as usize].y);
+        let ready = self.ready(target as usize);
         let t = &mut self.ents[target as usize];
         t.hp -= amount;
         t.hit_flash = 0.15;
         let (owner, x, y, kind) = (t.owner, t.x, t.y, t.kind);
         // Soldiers standing around fight back.
-        if kind.is_military() && t.order == Order::Idle && Self::armed(t) {
+        if kind.is_military() && t.order == Order::Idle && ready {
             t.resume = Some((t.x, t.y));
             t.set_order(Order::Attack { target: attacker, auto: true });
         }

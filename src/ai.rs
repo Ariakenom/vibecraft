@@ -553,6 +553,15 @@ impl Game {
                 return step;
             }
         }
+        // Fish first, for a house that lacks a good: a fishing boat costs
+        // one wood (there are no fishing huts: boats fish the shoals).
+        if lacking && p.spare(Res::Fish) <= 0 {
+            let step = self.ai_fish(c);
+            ailog!("grow: fish: {step:?}");
+            if step != Step::Blocked {
+                return step;
+            }
+        }
         // Producers of goods for a house that lacks one, or for the next
         // house when none of a good is spare. More than that only hold slots
         // (and get torn down again for them).
@@ -582,6 +591,33 @@ impl Game {
         c.relax = false;
         if !hut_first && goods.iter().any(|&r| p.spare(r) > 0) {
             return self.ai_project(Kind::Hut, c, true);
+        }
+        Step::Blocked
+    }
+
+    /// More fish: a dock if there's none, then a fishing boat for each
+    /// shoal tile near home (six at most). The boats go to the shoals by
+    /// themselves (`ai_navy`).
+    fn ai_fish(&mut self, c: &mut Census) -> Step {
+        let me = c.me;
+        let home = c.home;
+        let shoals = self.deps.iter().filter(|d| d.kind == Dep::Fish && (d.center().0 - home.0).hypot(d.center().1 - home.1) < 26.0).count();
+        if shoals == 0 {
+            return Step::Blocked;
+        }
+        let Some(dock) = self.ents.iter().position(|e| e.alive && e.owner == me && e.kind == Kind::Dock) else {
+            return self.ai_project(Kind::Dock, c, true);
+        };
+        if self.ents[dock].built < 1.0 {
+            return Step::Waiting;
+        }
+        let boats = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::FishingBoat).count() + self.ents[dock].queue.iter().filter(|&&k| k == Kind::FishingBoat).count();
+        if boats >= shoals.min(6) || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
+            return Step::Blocked;
+        }
+        if self.queue_unit(self.ents[dock].id, Kind::FishingBoat).is_ok() {
+            c.spare -= 1;
+            return Step::Started;
         }
         Step::Blocked
     }

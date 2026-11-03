@@ -472,3 +472,44 @@ fn aircraft_run_out_of_ammunition_and_rearm_at_base() {
     assert!(g.ents[f as usize].alive);
     assert_eq!(g.ents[f as usize].ammo, air_ammo(Kind::Fighter));
 }
+
+/// Out of ammunition, an aircraft flies back to the nearest carrier by
+/// itself, and doesn't pick a fight there until it's full again.
+#[test]
+fn empty_aircraft_go_home_and_wait_until_full() {
+    let mut g = quiet(4, 2);
+    g.players[2].cheat = true;
+    let h = harbour(&g, 2).unwrap();
+    let (tx, ty) = water_between(&g, h, 6, 9);
+    let prey = g.spawn_unit(Kind::Transport, 2, tx, ty);
+    // A carrier of ours further out.
+    let (cx, cy) = water_between(&g, (tx as i32, ty as i32), 14, 20);
+    let carrier = g.spawn_unit(Kind::Carrier, 1, cx, cy);
+    let f = g.spawn_unit(Kind::Fighter, 1, tx + 1.0, ty);
+    g.apply(1, Command::Smart { ids: vec![f], x: tx, y: ty }).unwrap();
+    // Guns empty, then home.
+    let mut home = false;
+    for _ in 0..20 * 90 {
+        g.tick();
+        if g.ents[f as usize].ammo == 0 && g.at_air_base(f as usize) {
+            home = true;
+            break;
+        }
+    }
+    let e = &g.ents[f as usize];
+    assert!(home, "not back at the carrier: ammo {} at {:.1},{:.1}, order {:?}", e.ammo, e.x, e.y, e.order);
+    assert!(g.ents[prey as usize].alive, "test setup: the prey sank");
+    // An enemy boat comes alongside while it fills up: it waits.
+    let (bx, by) = (g.ents[carrier as usize].x + 2.0, g.ents[carrier as usize].y);
+    let intruder = g.spawn_unit(Kind::Transport, 2, bx, by);
+    for _ in 0..20 * 3 {
+        g.tick();
+        assert!(!matches!(g.ents[f as usize].order, Order::Attack { .. }), "it went for the intruder before it was full (ammo {}, fuel {:.0})", g.ents[f as usize].ammo, g.ents[f as usize].fuel);
+    }
+    // Full: now it does.
+    run(&mut g, REFUEL_TIME);
+    assert_eq!(g.ents[f as usize].ammo, air_ammo(Kind::Fighter));
+    run(&mut g, 2.0);
+    let o = g.ents[f as usize].order;
+    assert!(matches!(o, Order::Attack { target, .. } if target == intruder) || g.ents[intruder as usize].hp < Kind::Transport.stats().hp, "full and idle, it leaves the intruder alone: {o:?}");
+}
