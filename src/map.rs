@@ -10,8 +10,9 @@ const SPREAD: f32 = 1.5;
 /// Free tiles kept between the edges of two clusters of different kinds, so
 /// a building fits next to each.
 const CLUSTER_GAP: f32 = 4.0;
-/// Tiles of sea along every edge of the map.
-const COAST: i32 = 3;
+/// Tiles of open sea along every edge of the map (the shore shelves up to
+/// the land over the next few). Boats sail round the map on it.
+const SEA: i32 = 6;
 
 pub const GRASS: u8 = 0;
 pub const WATER: u8 = 1;
@@ -60,13 +61,22 @@ impl Map {
     pub fn passable(&self, x: i32, y: i32) -> bool {
         self.inside(x, y) && !self.blocked[self.idx(x, y)]
     }
-    pub fn passable_at(&self, x: f32, y: f32) -> bool {
-        self.passable(x.floor() as i32, y.floor() as i32)
+    /// Open water a boat can sail on.
+    pub fn sailable(&self, x: i32, y: i32) -> bool {
+        self.inside(x, y) && self.terrain[self.idx(x, y)] == WATER
+    }
+    /// `passable` for land units, `sailable` for boats.
+    pub fn passable_for(&self, naval: bool, x: i32, y: i32) -> bool {
+        if naval { self.sailable(x, y) } else { self.passable(x, y) }
+    }
+    pub fn passable_for_at(&self, naval: bool, x: f32, y: f32) -> bool {
+        self.passable_for(naval, x.floor() as i32, y.floor() as i32)
     }
 
-    /// Can a unit of radius ~0.25 walk in a straight line from a to b?
-    /// Used to straighten the zig-zag tile paths that A* returns.
-    pub fn line_clear(&self, a: (f32, f32), b: (f32, f32)) -> bool {
+    /// Can a unit of radius ~0.25 walk (or a boat sail, with `naval`) in a
+    /// straight line from a to b? Used to straighten the zig-zag tile paths
+    /// that A* returns.
+    pub fn line_clear(&self, naval: bool, a: (f32, f32), b: (f32, f32)) -> bool {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
         let len = (dx * dx + dy * dy).sqrt();
         let steps = (len / 0.2).ceil().max(1.0) as i32;
@@ -75,7 +85,7 @@ impl Map {
             let t = s as f32 / steps as f32;
             let (x, y) = (a.0 + dx * t, a.1 + dy * t);
             for (ox, oy) in [(-R, -R), (R, -R), (-R, R), (R, R)] {
-                if !self.passable_at(x + ox, y + oy) {
+                if !self.passable_for_at(naval, x + ox, y + oy) {
                     return false;
                 }
             }
@@ -202,7 +212,8 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // forest. `pick(k, lo, hi)` is a number of the seed's in lo..hi.
     let pick = |k: i32, lo: f32, hi: f32| lo + (hi - lo) * hash(k, 911, seed);
     let land_scale = pick(1, 10.0, 22.0);
-    let water_at = pick(2, 0.31, 0.36);
+    // (A little more water than before boats: bigger lakes.)
+    let water_at = pick(2, 0.325, 0.375);
     let hill_at = pick(3, 0.66, 0.77);
     let wood_scale = pick(4, 5.0, 9.5);
     let wood_at = pick(5, 0.54, 0.66);
@@ -234,12 +245,19 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             if road < 5.0 {
                 ht = ht.max(0.42);
             }
-            // The sea all round: a few tiles of water along every edge,
+            // The sea all round: `SEA` tiles of water along every edge,
             // shelving up to the land (a little ragged).
             let edge = x.min(y).min(w - 1 - x).min(h - 1 - y);
-            if edge < COAST + 3 {
+            // Near a start the coast stays as narrow as it was before boats
+            // (a few tiles), so the start's deposits keep their ground;
+            // the open sea widens away from them, between the towns.
+            if edge < SEA + 5 {
                 let wobble = hash(cx, cy, seed ^ 0x5EA) * 0.03;
-                ht = ht.min(0.24 + 0.035 * edge as f32 + wobble);
+                let near = all_bases.iter().map(|&b| dist(p, b)).fold(f32::MAX, f32::min);
+                let open = ((near - 26.0) / 10.0).clamp(0.0, 1.0);
+                let narrow = 0.24 + 0.035 * edge as f32;
+                let wide = water_at - 0.04 + 0.035 * (edge - SEA) as f32;
+                ht = ht.min(narrow + (wide - narrow) * open + wobble);
             }
             terrain[i] = if ht < water_at {
                 WATER
@@ -307,19 +325,39 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // (First, so the clusters below keep clear of it.)
     // A pond by every base, so every start has fish: houses need three
     // different foods to grow, and the others are few.
+    // It's a harbour: a channel joins it to the sea, so a dock there can
+    // send boats out to everyone else's coast.
     let pond = { let (dx, dy) = flip(-5, 12); (b1.0 + dx, b1.1 + dy) };
+    let mut wet = |x: i32, y: i32| {
+        if x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
+            return;
+        }
+        for (px, py) in images(x, y) {
+            let i = (py * w + px) as usize;
+            terrain[i] = WATER;
+            shade[i] = shade[i].min(70);
+            feat[i] = Feat::None;
+        }
+    };
     for dy in -2..=2 {
         for dx in -2..=2 {
-            let (x, y) = (pond.0 + dx, pond.1 + dy);
-            if (dx * dx + dy * dy) as f32 > 2.6 || x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
-                continue;
+            if (dx * dx + dy * dy) as f32 <= 2.6 {
+                wet(pond.0 + dx, pond.1 + dy);
             }
-            for (px, py) in images(x, y) {
-                let i = (py * w + px) as usize;
-                terrain[i] = WATER;
-                shade[i] = shade[i].min(70);
-                feat[i] = Feat::None;
-            }
+        }
+    }
+    // Straight out to the nearest edge, three tiles wide, to the sea.
+    let (sx, sy) = if pond.0.min(w - 1 - pond.0) < pond.1.min(h - 1 - pond.1) {
+        (if pond.0 < w / 2 { -1 } else { 1 }, 0)
+    } else {
+        (0, if pond.1 < h / 2 { -1 } else { 1 })
+    };
+    let (mut x, mut y) = pond;
+    while x.min(y).min(w - 1 - x).min(h - 1 - y) > 1 {
+        x += sx;
+        y += sy;
+        for k in -1..=1 {
+            wet(x + k * sy.abs(), y + k * sx.abs());
         }
     }
     // A cluster that would sit in a lake moves to the nearest dry ground

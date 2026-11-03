@@ -138,7 +138,9 @@ Units are kinds 0–63, buildings 64 and up.
     the tech tree's);
   - give it stats in `Kind::stats`, its requirements and era, and (for
     buildings) a place in `BUILDABLE`;
-  - if the AI should build it, add it to `PLAN` in `src/ai.rs`.
+  - if the AI should build it, add it to `PLAN` in `src/ai.rs`;
+  - a boat: `Kind::is_naval` (it sails, on `Map::sailable` water, with
+    `Pathfinder::find(.., naval, ..)`), and the Dock's `trains` list.
 - JS:
   - add it to `K`, `NAMES` and `DESC` in `main.js`, and for buildings to
     `BUILD_MENU` (hotkey). The tech tree builds itself from Rust's data;
@@ -163,6 +165,14 @@ goods are saved; `Game::recount` works out the rest after a load.
 - Allow the code in `cleanCmd()` (`main.js`), and send it from the interface
   through `issue()`.
 - Bump `NET.PROTOCOL`.
+
+**Boats and cargo.** Everything that moves asks `Map::passable_for(naval,
+..)`: path finding, straightening paths, stepping, separating, where a
+trained unit appears. A unit aboard a transport has `aboard` = the
+transport's id + 1: `update_unit` carries it along and does nothing else,
+and it's left out of the spatial grid, picking, selecting and drawing.
+Boarding and putting ashore are right-clicks (`Intent::Board`,
+`Intent::Unload`, orders `Board` and `Unload`), so no new command code.
 
 **Add simulation state.** Add the field. Make sure it's `Clone`. Write it in
 `save`/`load` and bump the save `VERSION`. If it should catch drift between
@@ -582,6 +592,26 @@ versions don't play together.
   aircraft and shoots down a nuke falling within 10 tiles of it, then
   reloads for 90 seconds: it fires 4 seconds before the nuke would land,
   and everyone sees its missile go up and the nuke burst in the air.
+- **Boats.** A **Dock** (Ancient, 2 wood) stands on the shore like a
+  fishing hut and builds boats, which come out on the water next to it. A
+  **fishing boat** (1 wood) makes 3 fish wherever it lies still (moving it
+  stops the catch). A **transport** (2 wood) carries up to 8 land units:
+  right-click it with them selected to board (an idle transport comes in to
+  meet them), then select it and right-click the shore to put them ashore
+  there; if it sinks, everyone aboard is lost. **Warships**, one for each
+  era but the last: galley (Ancient), war cog (Medieval), galleon
+  (Gunpowder, area damage), ironclad (Industrial, area damage) and
+  destroyer (Modern, shoots at aircraft too). **Submarines** (Industrial)
+  sail under the water: enemies see one only when something of theirs is
+  within 3 tiles (`SUB_DETECT`) or a destroyer has it in sight. Their
+  torpedoes hit boats hard and nothing else, and only warships can hit
+  them (destroyers at 2.5 times). The **nuclear submarine** (Atomic) is
+  hidden the same way and carries a nuke: arm it (V) while it lies at one
+  of your docks (it waits while the submarine is away), then launch it (C)
+  from anywhere at sea. Warships sink boats and
+  bombard buildings by the water; towers, siege guns and archers on the
+  shore hit back, swords and spears hardly reach. Boats are people, like
+  every unit: each one is a worker who went to the dock.
 - **Production:** later producers make more: Medieval ones about twice
   what Ancient ones do, Industrial ones and later three to four times. The
   basics come in bulk later: a Sawmill (Medieval), a Stone Works and a Kiln
@@ -595,13 +625,19 @@ versions don't play together.
   fight on the way). It gathers each attack wave before it goes, clears
   enemy soldiers out of its town, founds a second Capitol in the
   Gunpowder era, and tears down a spare building when it's at the limit for
-  something it needs. Easy, Normal and Hard
+  something it needs. With wood to spare it builds a dock and two fishing
+  boats, and on Normal (2) and Hard (4) a few warships, which guard its
+  harbour, go for enemy boats near home and sail with its attack waves for
+  the coast nearest the target (in the Industrial era ironclads and
+  submarines in turn). It doesn't use transports or nuclear submarines yet. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
   and its supply (80%, 100%, 130%).
 - **Maps:** two players get a 120×120 map with 180° symmetry; three or four
   get 144×144 with four-way symmetry, so every start is the same, just turned.
-  The sea runs along every edge (fishing huts can stand on the coast), and a
-  base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
+  Open sea six tiles wide runs along every edge, so boats can sail round
+  the map, and every start has a harbour about a dozen tiles from its
+  Capitol, joined to the sea by a channel. Lakes are a little bigger than
+  before boats. A base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
   More lie out on the map, the same for everyone: clay, iron, coal,
   saltpeter, sheep hills, oil and bauxite as well as the Ancient ones.
   A deposit that would sit in a lake moves to the nearest dry land, and
@@ -627,7 +663,7 @@ versions don't play together.
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
   quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
-  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
+  Y tower, U dock. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
   selected buildings, or disbands the selected units (units need a second press).
 - **Missile silo:** X arms a nuke; Z and a click launches it (a ring shows
   the blast, and blue rings the cover of enemy air defenses). Both buttons

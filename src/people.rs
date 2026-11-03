@@ -68,7 +68,7 @@ impl Game {
 
     /// Is this a free worker: idle, at the campfire?
     pub fn is_free_worker(&self, e: &Entity) -> bool {
-        if !e.alive || e.kind != Kind::Worker || e.order != Order::Idle {
+        if !e.alive || e.kind != Kind::Worker || e.order != Order::Idle || e.aboard != 0 {
             return false;
         }
         self.campfire(e.owner).is_some_and(|(cx, cy)| (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA)
@@ -187,6 +187,10 @@ impl Game {
                 e.builders_in = building[e.id as usize];
             }
             e.crewed = e.built >= 1.0 && e.crew >= st.workers;
+            // A fishing boat fishes while it lies still.
+            if e.kind == Kind::FishingBoat {
+                e.crewed = e.order == Order::Idle && e.aboard == 0;
+            }
             if e.crewed && st.consumes.is_empty() {
                 for &(r, k) in st.produces {
                     supply[o][r.idx()] += k as u32;

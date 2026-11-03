@@ -16,8 +16,10 @@ mod people;
 mod save;
 #[cfg(test)]
 mod sim_tests;
+#[cfg(test)]
+mod boat_tests;
 
-use defs::{Kind, Res};
+use defs::{Kind, Res, TRANSPORT_CAPACITY};
 use game::{Command, Game, Intent, Order};
 use std::cell::RefCell;
 
@@ -83,8 +85,10 @@ pub extern "C" fn render() -> u32 {
     with(|w| {
         let g = &w.game;
         w.ents.clear();
-        for e in g.ents.iter().filter(|e| e.alive) {
-            let visible = e.owner == g.local || g.visible_to_player(e.x, e.y);
+        // (Units aboard a transport aren't drawn: they're in its hold.)
+        for e in g.ents.iter().filter(|e| e.alive && e.aboard == 0) {
+            // (A submarine is seen only where it's spotted; see `spot_submarines`.)
+            let visible = e.owner == g.local || (g.visible_to_player(e.x, e.y) && (g.reveal || Game::spotted_by(e, g.local)));
             if !visible && !(e.is_building() && e.seen) {
                 continue;
             }
@@ -118,6 +122,8 @@ pub extern "C" fn render() -> u32 {
                 Order::Build(_) => 6,
                 Order::Work(_) => 7,
                 Order::Enlist(_) => 8,
+                Order::Board(_) => 9,
+                Order::Unload { .. } => 10,
             };
             // Yours only: a producer short of workers makes nothing (32),
             // one paused by you (64), a free worker at the campfire (128).
@@ -141,6 +147,8 @@ pub extern "C" fn render() -> u32 {
             // there and workers needed. Training buildings: recruits inside.
             let (n1, n2) = if e.kind.house_tier().is_some() {
                 (e.residents as f32, e.beds() as f32)
+            } else if e.kind == Kind::Transport {
+                (g.cargo(e.id).count() as f32, TRANSPORT_CAPACITY as f32)
             } else if e.kind.stats().workers > 0 {
                 (e.crew as f32, e.kind.stats().workers as f32)
             } else {
@@ -309,7 +317,7 @@ pub extern "C" fn select_ids(n: u32) {
         w.game.clear_selection();
         for &id in w.scratch.iter().take(n as usize) {
             if let Some(e) = w.game.ents.get_mut(id as usize) {
-                if e.alive && e.owner == w.game.local {
+                if e.alive && e.owner == w.game.local && e.aboard == 0 {
                     e.selected = true;
                 }
             }
@@ -406,7 +414,7 @@ pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u3
 
 /// What right-clicking (x, y) would do with the `n` ids in the scratch
 /// buffer, for the mouse cursor: 0 nothing, 1 move, 2 attack, 4 build,
-/// 5 rally, 6 work there.
+/// 5 rally, 6 work there, 7 go aboard a transport, 8 put cargo ashore.
 #[unsafe(no_mangle)]
 pub extern "C" fn intent(n: u32, x: f32, y: f32) -> u32 {
     with(|w| {
@@ -419,6 +427,8 @@ pub extern "C" fn intent(n: u32, x: f32, y: f32) -> u32 {
             Intent::Build(_) => 4,
             Intent::Rally => 5,
             Intent::Work(_) => 6,
+            Intent::Board(_) => 7,
+            Intent::Unload => 8,
         }
     })
 }
@@ -792,10 +802,10 @@ pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
     })
 }
 
-/// A missile silo's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
+/// A missile silo's or nuclear submarine's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
 #[unsafe(no_mangle)]
 pub extern "C" fn silo_state(id: u32) -> i32 {
-    game(|g| g.ents.get(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo).map_or(-1, |e| e.nuke as i32))
+    game(|g| g.ents.get(id as usize).filter(|e| e.alive && matches!(e.kind, Kind::MissileSilo | Kind::NuclearSub)).map_or(-1, |e| e.nuke as i32))
 }
 /// Nukes in flight: how many, and the n-th's `which` (0 x, 1 y of its
 /// target, 2 x, 3 y of its silo, 4 how far along 0..1, 5 owner, 6 1 if an
@@ -859,7 +869,7 @@ pub extern "C" fn nuke_numbers(which: u32) -> f32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_set_nuke(id: u32, state: u32) {
     game(|g| {
-        if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo) {
+        if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive && matches!(e.kind, Kind::MissileSilo | Kind::NuclearSub)) {
             e.nuke = state.min(2) as u8;
         }
     })
