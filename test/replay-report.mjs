@@ -44,10 +44,10 @@ const cmds = new Map(r.log.map(e => [e[0], e[1]]));
 const clean = a => {
   if (!Array.isArray(a) || a.length < 4 || a.length > 64 || !a.every(v => typeof v === "number" && Number.isFinite(v))) return null;
   const c = a[0] | 0;
-  return c < 1 || c > 14 ? null : [c, a[1] >>> 0, a[2], a[3], ...a.slice(4).map(v => v >>> 0)];
+  return c < 1 || c > 15 ? null : [c, a[1] >>> 0, a[2], a[3], ...a.slice(4).map(v => v >>> 0)];
 };
 const apply = (owner, a) => {
-  if ((a[0] === 7 || a[0] === 13) && owner !== 0) return 0;
+  if ((a[0] === 7 || a[0] === 13 || a[0] === 15) && owner !== 0) return 0;
   const p = W.scratch_ptr() >>> 2, buf = new Uint32Array(W.memory.buffer);
   a.slice(4).forEach((id, n) => { buf[p + n] = id; });
   return W.command(owner, a[0], a.length - 4, a[2], a[3], a[1]);
