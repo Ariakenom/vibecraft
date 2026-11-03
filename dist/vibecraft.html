@@ -2763,8 +2763,10 @@ function buildShore() {
 // --- Water ---------------------------------------------------------------------
 // A plane with two vertices per tile. Each vertex knows how deep the water is
 // there, so the shader can shade shallows turquoise, deeps blue, and draw
-// lapping foam along the shore. Waves move the surface and wobble the normal,
-// which makes the sun glint.
+// lapping foam along the shore. In the spirit of Minecraft's Complementary
+// shaders: clear shallows with caustics on the sand, rolling waves made of
+// several wave trains and noise (`waterSlope`), the sky and its clouds
+// mirrored by Fresnel, and a sharp sun glint off the waves.
 function buildWater() {
   const pad = 40, res = 2;
   const geo = new THREE.PlaneGeometry(MW + pad * 2, MH + pad * 2, (MW + pad * 2) * res, (MH + pad * 2) * res);
@@ -2786,48 +2788,86 @@ function buildWater() {
   htex.magFilter = htex.minFilter = THREE.LinearFilter;
   htex.needsUpdate = true;
   R3.heightTex = htex;
-  const mat = new THREE.MeshPhongMaterial({ color: "#2b6f8c", specular: "#5d7a88", shininess: 180, transparent: true, opacity: 0.88, depthWrite: false });
+  // Phong's own highlight is kept faint: the sun's glint is drawn below,
+  // from the same waves as the reflection, so the two line up.
+  const mat = new THREE.MeshPhongMaterial({ color: "#2b6f8c", specular: "#24343a", shininess: 300, transparent: true, opacity: 0.88, depthWrite: false });
   withFow(mat, sh => {
     sh.uniforms.uTime = timeUniform;
     sh.uniforms.uHeight = { value: htex };
     sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
       vDepth = aDepth;
       vWPos = position.xz;
-      transformed.y += (sin(position.x * 1.3 + uTime * 1.1) + cos(position.z * 1.1 + uTime * 0.8)) * 0.02 * clamp(aDepth * 3.0, 0.0, 1.0);`);
-    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.fragmentShader
+      // A slow swell, calm in the shallows.
+      transformed.y += (sin(position.x * 0.9 + uTime * 0.9) + cos(position.z * 0.7 + uTime * 0.65) + sin((position.x + position.z) * 1.6 + uTime * 1.4) * 0.5) * 0.018 * clamp(aDepth * 3.0, 0.0, 1.0);`);
+    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + `
+      // The water's surface: waves running different ways, and noise to
+      // break them up. Returns its slope (d height / dx, dz), for the normal.
+      vec2 waterSlope(vec2 p, float t) {
+        vec2 g = vec2(0.0);
+        // (direction, frequency, speed, height) of each wave
+        vec2 d1 = normalize(vec2(1.0, 0.35)), d2 = normalize(vec2(-0.45, 1.0)), d3 = normalize(vec2(0.8, -0.9)), d4 = normalize(vec2(-1.0, -0.2));
+        g += d1 * 1.6 * 0.060 * cos(dot(d1, p) * 1.6 + t * 1.10);
+        g += d2 * 2.3 * 0.040 * cos(dot(d2, p) * 2.3 + t * 1.35);
+        g += d3 * 3.7 * 0.022 * cos(dot(d3, p) * 3.7 + t * 1.90);
+        g += d4 * 5.9 * 0.012 * cos(dot(d4, p) * 5.9 + t * 2.60);
+        vec2 q = p * 1.9 + vec2(t * 0.18, -t * 0.13);
+        float e = 0.08, n0 = vnoise2(q);
+        g += vec2(vnoise2(q + vec2(e, 0.0)) - n0, vnoise2(q + vec2(0.0, e)) - n0) / e * 0.05;
+        return g;
+      }
+    ` + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
         float ground = texture2D(uHeight, (vWPos + ${pad}.0) / vec2(${MW + pad * 2}.0, ${MH + pad * 2}.0)).r;
         float dRaw = ${WATER_Y.toFixed(3)} - ground;
         if (dRaw < -0.01) discard;
         float d = clamp(dRaw, 0.0, 2.0);
-        vec3 shallow = vec3(0.13, 0.42, 0.43), deep = vec3(0.05, 0.18, 0.3);
-        diffuseColor.rgb = mix(shallow, deep, smoothstep(0.05, 1.1, d));
-        // A crisp line of foam where the water meets the sand, and a wave of
-        // foam washing in and out just beyond it.
-        float edge = 1.0 - smoothstep(0.0, 0.012, d);
+        // Light is soaked up with depth: turquoise in the shallows, deep blue out at sea.
+        vec3 shallow = vec3(0.02, 0.40, 0.52), deep = vec3(0.005, 0.07, 0.24);
+        diffuseColor.rgb = mix(shallow, deep, 1.0 - exp(-d * 3.0));
+        // Caustics: the waves focus the sunlight into a moving net of bright
+        // lines on the sand, seen through clear shallow water.
+        vec2 cp = vWPos * 2.4;
+        float c1 = vnoise2(cp + vec2(uTime * 0.22, uTime * 0.16)), c2 = vnoise2(cp * 1.37 + vec2(-uTime * 0.19, uTime * 0.25) + 4.1);
+        float caus = pow(1.0 - abs(c1 - c2), 16.0);
+        diffuseColor.rgb += vec3(0.45, 0.6, 0.5) * caus * 0.22 * (1.0 - smoothstep(0.03, 0.45, d));
+        // Foam: a broken line where the water meets the sand, and waves of
+        // it washing in and out just beyond.
+        float fn = vnoise2(vWPos * 5.0 + vec2(uTime * 0.35, -uTime * 0.2));
+        float edge = 1.0 - smoothstep(0.0, 0.008 + 0.022 * fn, d);
         float wash = sin(uTime * 1.5 - d * 70.0 + sin(vWPos.x * 1.7) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
-        float wave = smoothstep(0.75, 0.95, wash) * (1.0 - smoothstep(0.015, 0.07, d));
-        float foam = max(edge, wave * 0.7);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.94, 0.93), foam);
-        diffuseColor.a = mix(0.7, 0.95, smoothstep(0.0, 0.5, d));
+        float wave = smoothstep(0.7, 0.95, wash) * (1.0 - smoothstep(0.015, 0.08, d)) * smoothstep(0.3, 0.7, fn);
+        float foam = clamp(max(edge, wave * 0.8), 0.0, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.95, 0.95), foam);
+        // Clear in the shallows (the sand shows through), darker further out.
+        diffuseColor.a = mix(0.55, 0.97, smoothstep(0.0, 0.35, d));
         diffuseColor.a = max(diffuseColor.a, foam * 0.92);`)
       .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
-        vec2 wp = vWPos * 3.2;
-        // Small waves fade out with distance: there they're finer than a pixel and would shimmer in stripes.
-        float waveAmt = 1.0 - smoothstep(25.0, 70.0, length(vViewPosition));
-        normal = normalize(normal + waveAmt * vec3(
-          sin(wp.x + uTime * 1.3) * 0.12 + sin(wp.y * 1.9 - uTime * 0.9) * 0.08,
-          cos(wp.y + uTime * 1.1) * 0.12 + cos(wp.x * 1.7 + uTime * 0.7) * 0.08, 0.0));`)
-      // The water mirrors the sky, more so at a glancing angle (Fresnel).
+        // Waves fade out with distance: there they're finer than a pixel and would shimmer.
+        float waveAmt = 1.0 - smoothstep(30.0, 80.0, length(vViewPosition));
+        {
+          vec2 sl = waterSlope(vWPos, uTime) * waveAmt;
+          vec3 nw = normalize(vec3(-sl.x, 1.0, -sl.y));
+          normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);
+        }`)
+      // The water mirrors the sky and its clouds, more so at a glancing
+      // angle (Fresnel), and the sun glints off the waves.
       .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
         {
           vec3 V = normalize(vViewPosition);
           vec3 R = (vec4(reflect(-V, normal), 0.0) * viewMatrix).xyz;   // to world space
           R.y = abs(R.y);
-          float fres = 0.04 + 0.96 * pow(1.0 - max(dot(normal, V), 0.0), 5.0);
-          totalEmissiveRadiance += skyColor(normalize(R)) * fres * 0.55 * (1.0 - foam);
+          R = normalize(R);
+          float fres = 0.02 + 0.98 * pow(1.0 - max(dot(normal, V), 0.0), 5.0);
+          vec3 refl = skyColor(R);
+          // The same clouds the sky has (see buildSky), mirrored.
+          vec2 cq = R.xz / (R.y + 0.08) * 40.0 * 0.045 + vec2(0.82, 0.57) * uTime * 0.012;
+          float cn = vnoise2(cq) * 0.62 + vnoise2(cq * 2.3 + 5.0) * 0.28 + vnoise2(cq * 5.1 + 9.0) * 0.1;
+          refl = mix(refl, vec3(1.0, 0.95, 0.88), smoothstep(0.48, 0.7, cn) * smoothstep(0.0, 0.25, R.y) * 0.85);
+          float sun = max(dot(R, SUN_DIR), 0.0);
+          vec3 glint = vec3(1.0, 0.88, 0.66) * (pow(sun, 2500.0) * 3.5 + pow(sun, 250.0) * 0.1);
+          totalEmissiveRadiance += (refl * fres * 0.8 + glint) * (1.0 - foam);
         }`);
-    sh.fragmentShader = SKY_GLSL + sh.fragmentShader;
+    sh.fragmentShader = NOISE_GLSL + SKY_GLSL + sh.fragmentShader;
   });
   const water = new THREE.Mesh(geo, mat);
   water.renderOrder = 1;
@@ -4261,7 +4301,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "5a7bd9594885", "base": "e2ed7a35a1"};
+const BUILD_INFO = {"sim": "5a7bd9594885", "base": "b9cfc40333"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }

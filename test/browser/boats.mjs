@@ -70,6 +70,14 @@ if (shot) {
     for (const el of document.querySelectorAll("#menu, #lobby, #start, .overlay")) el.hidden = true;
     readWorld(); for (let k = 0; k < 3; k++) render3d(1, performance.now() + k * 16, 0.016);
   });
+  if (process.env.SHOT2) {
+    // Low over open sea, looking towards the sun: reflections and glint.
+    const cdp2 = await page.context().newCDPSession(page);
+    await page.evaluate(() => { const w = W.map_w(); cam.x = w * 0.5; cam.y = 4; cam.dist = 22; cam.pitch = 0.42; cam.yaw = 2.4; clampCam(); readWorld(); for (let k = 0; k < 3; k++) render3d(1, performance.now() + k * 16, 0.016); });
+    const { data } = await cdp2.send("Page.captureScreenshot", { format: "png" });
+    (await import("fs")).writeFileSync(process.env.SHOT2, Buffer.from(data, "base64"));
+    await page.evaluate(() => { centerOn(W.map_w() * 0.2, W.map_h() * 0.8); cam.pitch = 0.95; cam.yaw = 0; cam.dist = 18; readWorld(); render3d(1, performance.now(), 0.016); });
+  }
   const cdp = await page.context().newCDPSession(page);
   const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
   (await import("fs")).writeFileSync(shot, Buffer.from(data, "base64"));
