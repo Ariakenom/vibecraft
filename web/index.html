@@ -294,6 +294,8 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 #scoreboard th:first-child { text-align: left; padding-left: 0; }
 #scoreboard td { text-align: right; padding: 2px 0 2px 10px; }
 #scoreboard td:first-child { text-align: left; padding-left: 0; }
+#scoreboard td:nth-child(2), #scoreboard th:nth-child(2) { text-align: left; }
+#scoreboard .sb-res svg { width: 15px; height: 15px; vertical-align: -3px; }
 #scoreboard tr.out td { opacity: .5; }
 #scoreboard tr.viewing { background: #c99a4522; }
 .sb-name { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 6px 2px 2px; cursor: pointer; font: 700 13px var(--body); }
@@ -309,7 +311,7 @@ body[data-observe="replay"] #obsBar .rp-only { display: flex; }
 #rpTime { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 90px; text-align: center; }
 body.observing #hint { display: none; }
 @media (max-width: 760px) {
-  #scoreboard th.r, #scoreboard td:nth-child(n+4) { display: none; }
+  #scoreboard .r { display: none; }
   #rpSeek { width: 100%; }
 }
 
@@ -446,7 +448,7 @@ body.observing #hint { display: none; }
     <section id="scoreboard" hidden aria-label="Players">
       <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
       <table>
-        <thead><tr><th>Player</th><th title="At home, plus builders and soldiers">People</th><th title="Soldiers">Army</th><th class="r" title="Wood made">Wood</th><th class="r" title="Stone made">Stone</th><th class="r" title="Grain made">Grain</th><th class="r" title="Horses made">Horses</th></tr></thead>
+        <thead><tr id="sbHead"></tr></thead>
         <tbody id="sbBody"></tbody>
       </table>
     </section>

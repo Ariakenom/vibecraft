@@ -294,6 +294,8 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 #scoreboard th:first-child { text-align: left; padding-left: 0; }
 #scoreboard td { text-align: right; padding: 2px 0 2px 10px; }
 #scoreboard td:first-child { text-align: left; padding-left: 0; }
+#scoreboard td:nth-child(2), #scoreboard th:nth-child(2) { text-align: left; }
+#scoreboard .sb-res svg { width: 15px; height: 15px; vertical-align: -3px; }
 #scoreboard tr.out td { opacity: .5; }
 #scoreboard tr.viewing { background: #c99a4522; }
 .sb-name { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid transparent; border-radius: 3px; padding: 2px 6px 2px 2px; cursor: pointer; font: 700 13px var(--body); }
@@ -309,7 +311,7 @@ body[data-observe="replay"] #obsBar .rp-only { display: flex; }
 #rpTime { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; min-width: 90px; text-align: center; }
 body.observing #hint { display: none; }
 @media (max-width: 760px) {
-  #scoreboard th.r, #scoreboard td:nth-child(n+4) { display: none; }
+  #scoreboard .r { display: none; }
   #rpSeek { width: 100%; }
 }
 
@@ -446,7 +448,7 @@ body.observing #hint { display: none; }
     <section id="scoreboard" hidden aria-label="Players">
       <div class="sb-head"><b id="sbTitle">Whole map</b><button class="tbtn" id="sbAll" aria-pressed="true" title="Lift the fog: see everything">Whole map</button></div>
       <table>
-        <thead><tr><th>Player</th><th title="At home, plus builders and soldiers">People</th><th title="Soldiers">Army</th><th class="r" title="Wood made">Wood</th><th class="r" title="Stone made">Stone</th><th class="r" title="Grain made">Grain</th><th class="r" title="Horses made">Horses</th></tr></thead>
+        <thead><tr id="sbHead"></tr></thead>
         <tbody id="sbBody"></tbody>
       </table>
     </section>
@@ -1562,7 +1564,7 @@ class Client {
           if (!this.foreign.has(key)) { this.stats.seenLate.push(this.live - k); if (this.stats.seenLate.length > 50) this.stats.seenLate.shift(); }
           this.foreign.delete(key);
           this.doneSeq.set(e[0], Math.max(this.doneSeq.get(e[0]) || 0, e[1]));
-        } else if (e[2] === 7 || e[2] === 15) this.hooks.system(e.slice(2));
+        } else if (e[2] === 7 || e[2] === 13 || e[2] === 15) this.hooks.system(e.slice(2)); // (every system code main.js handles)
       }
       // Step the confirmed copy: swap it in, run the tick, swap it back.
       W.mp_swap();
@@ -4315,7 +4317,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "ed708b6115c5", "base": "a28e038067"};
+const BUILD_INFO = {"sim": "ed708b6115c5", "base": "39f1314319"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -4539,20 +4541,34 @@ function refreshHud() {
 function reapplyView() { if (observe) W.set_view(observe.view || W.local_player(), observe.view ? 0 : 1); }
 
 let sbKey = "";
+// The materials each era brings that the scoreboard shows (indexes into
+// RES_NAMES, the order of `enum Res`): wood and stone always, then the four
+// newest of the furthest era anyone has reached.
+const SB_RES = [[2, 6], [8, 9], [14], [18, 19], [25, 26], [28]];
+function scoreboardRes(era) {
+  const later = SB_RES.slice(0, era + 1).flat();
+  return [0, 1, ...later.slice(-4)];
+}
 function renderScoreboard(force) {
   if (!observe) return;
   const n = W.n_players(), body = $("sbBody");
+  let era = 0;
+  for (let p = 1; p <= n; p++) era = Math.max(era, W.player_era(p));
+  const res = scoreboardRes(era);
   const rows = [];
   for (let p = 1; p <= n; p++) {
     const out = W.defeated(p);
-    rows.push([p, out, W.player_people(p, 4), W.player_units(p, 1), [R.wood, R.stone, R.grain, R.horses].map(r => W.player_supply(p, r))]);
+    rows.push([p, out, W.player_era(p), W.player_people(p, 4), W.player_units(p, 1), res.map(r => W.player_supply(p, r))]);
   }
-  const key = JSON.stringify(rows) + observe.view + JSON.stringify(pnames);
+  const key = JSON.stringify(rows) + JSON.stringify(res) + observe.view + JSON.stringify(pnames);
   if (!force && key === sbKey) return;
   sbKey = key;
   const who = (Rec.meta && Rec.meta.who) || {};
+  const head = $("sbHead");
+  head.innerHTML = `<th>Player</th><th title="The era they've reached">Era</th><th title="At home, plus builders and soldiers">People</th><th title="Soldiers">Army</th>` +
+    res.map(r => `<th class="r" title="${RES_NAMES[r][0].toUpperCase() + RES_NAMES[r].slice(1)} made"><span class="sb-res">${resIcon(r)}</span></th>`).join("");
   body.replaceChildren();
-  for (const [p, out, units, army, stock] of rows) {
+  for (const [p, out, pera, units, army, stock] of rows) {
     const tr = document.createElement("tr");
     tr.className = (out ? "out" : "") + (observe.view === p ? " viewing" : "");
     const name = document.createElement("td");
@@ -4567,7 +4583,10 @@ function renderScoreboard(force) {
     b.onclick = () => setView(observe.view === p ? 0 : p);
     name.append(b);
     tr.append(name);
-    for (const v of [units, army, ...stock]) { const td = document.createElement("td"); td.textContent = out ? "–" : v; tr.append(td); }
+    const cell = (v, cls = "") => { const td = document.createElement("td"); td.textContent = out ? "–" : v; if (cls) td.className = cls; tr.append(td); };
+    cell(ERA_NAMES[pera]);
+    cell(units); cell(army);
+    for (const v of stock) cell(v, "r");
     body.append(tr);
   }
   $("sbAll").setAttribute("aria-pressed", String(observe.view === 0));
@@ -5845,8 +5864,9 @@ function drawMinimap() {
   mctx.imageSmoothingEnabled = true;
   mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
-  // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
-  // Then iron ore, clay and sheep hills (5, water, has no dots).
+  // Deposit kinds (defs::Dep), every era's: fruit bushes, forest, stone,
+  // horses, game, (5, water, has no dots), iron ore, clay, sheep hills,
+  // saltpeter, coal, oil, bauxite, uranium.
   const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
@@ -7228,6 +7248,7 @@ function showEndStats(opts = {}) {
     row("Units trained", p => W.player_stat(p, 0)) +
     row("Units and buildings lost", p => W.player_stat(p, 1)) +
     row("Buildings built", p => W.player_stat(p, 2)) +
+    row("Era reached", p => ERA_NAMES[W.player_era(p)]) +
     `<tr><th>Game time</th><td colspan="${ps.length}">${fmtTime(W.game_time())}</td></tr>`;
   $("againBtn").textContent = opts.watching ? "Stop watching" : "Main menu";
   $("replayBtn").hidden = !Rec.replay;

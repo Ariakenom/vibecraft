@@ -250,20 +250,34 @@ function refreshHud() {
 function reapplyView() { if (observe) W.set_view(observe.view || W.local_player(), observe.view ? 0 : 1); }
 
 let sbKey = "";
+// The materials each era brings that the scoreboard shows (indexes into
+// RES_NAMES, the order of `enum Res`): wood and stone always, then the four
+// newest of the furthest era anyone has reached.
+const SB_RES = [[2, 6], [8, 9], [14], [18, 19], [25, 26], [28]];
+function scoreboardRes(era) {
+  const later = SB_RES.slice(0, era + 1).flat();
+  return [0, 1, ...later.slice(-4)];
+}
 function renderScoreboard(force) {
   if (!observe) return;
   const n = W.n_players(), body = $("sbBody");
+  let era = 0;
+  for (let p = 1; p <= n; p++) era = Math.max(era, W.player_era(p));
+  const res = scoreboardRes(era);
   const rows = [];
   for (let p = 1; p <= n; p++) {
     const out = W.defeated(p);
-    rows.push([p, out, W.player_people(p, 4), W.player_units(p, 1), [R.wood, R.stone, R.grain, R.horses].map(r => W.player_supply(p, r))]);
+    rows.push([p, out, W.player_era(p), W.player_people(p, 4), W.player_units(p, 1), res.map(r => W.player_supply(p, r))]);
   }
-  const key = JSON.stringify(rows) + observe.view + JSON.stringify(pnames);
+  const key = JSON.stringify(rows) + JSON.stringify(res) + observe.view + JSON.stringify(pnames);
   if (!force && key === sbKey) return;
   sbKey = key;
   const who = (Rec.meta && Rec.meta.who) || {};
+  const head = $("sbHead");
+  head.innerHTML = `<th>Player</th><th title="The era they've reached">Era</th><th title="At home, plus builders and soldiers">People</th><th title="Soldiers">Army</th>` +
+    res.map(r => `<th class="r" title="${RES_NAMES[r][0].toUpperCase() + RES_NAMES[r].slice(1)} made"><span class="sb-res">${resIcon(r)}</span></th>`).join("");
   body.replaceChildren();
-  for (const [p, out, units, army, stock] of rows) {
+  for (const [p, out, pera, units, army, stock] of rows) {
     const tr = document.createElement("tr");
     tr.className = (out ? "out" : "") + (observe.view === p ? " viewing" : "");
     const name = document.createElement("td");
@@ -278,7 +292,10 @@ function renderScoreboard(force) {
     b.onclick = () => setView(observe.view === p ? 0 : p);
     name.append(b);
     tr.append(name);
-    for (const v of [units, army, ...stock]) { const td = document.createElement("td"); td.textContent = out ? "–" : v; tr.append(td); }
+    const cell = (v, cls = "") => { const td = document.createElement("td"); td.textContent = out ? "–" : v; if (cls) td.className = cls; tr.append(td); };
+    cell(ERA_NAMES[pera]);
+    cell(units); cell(army);
+    for (const v of stock) cell(v, "r");
     body.append(tr);
   }
   $("sbAll").setAttribute("aria-pressed", String(observe.view === 0));

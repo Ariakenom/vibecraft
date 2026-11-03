@@ -606,8 +606,9 @@ function drawMinimap() {
   mctx.imageSmoothingEnabled = true;
   mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
-  // Deposit kinds (defs::Dep): fruit bushes, forest, stone, horses, game.
-  // Then iron ore, clay and sheep hills (5, water, has no dots).
+  // Deposit kinds (defs::Dep), every era's: fruit bushes, forest, stone,
+  // horses, game, (5, water, has no dots), iron ore, clay, sheep hills,
+  // saltpeter, coal, oil, bauxite, uranium.
   const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
@@ -1989,6 +1990,7 @@ function showEndStats(opts = {}) {
     row("Units trained", p => W.player_stat(p, 0)) +
     row("Units and buildings lost", p => W.player_stat(p, 1)) +
     row("Buildings built", p => W.player_stat(p, 2)) +
+    row("Era reached", p => ERA_NAMES[W.player_era(p)]) +
     `<tr><th>Game time</th><td colspan="${ps.length}">${fmtTime(W.game_time())}</td></tr>`;
   $("againBtn").textContent = opts.watching ? "Stop watching" : "Main menu";
   $("replayBtn").hidden = !Rec.replay;
