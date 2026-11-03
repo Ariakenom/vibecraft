@@ -725,7 +725,7 @@ class Client {
           if (!this.foreign.has(key)) { this.stats.seenLate.push(this.live - k); if (this.stats.seenLate.length > 50) this.stats.seenLate.shift(); }
           this.foreign.delete(key);
           this.doneSeq.set(e[0], Math.max(this.doneSeq.get(e[0]) || 0, e[1]));
-        } else if (e[2] === 7 || e[2] === 15) this.hooks.system(e.slice(2));
+        } else if (e[2] === 7 || e[2] === 13 || e[2] === 15) this.hooks.system(e.slice(2)); // (every system code main.js handles)
       }
       // Step the confirmed copy: swap it in, run the tick, swap it back.
       W.mp_swap();

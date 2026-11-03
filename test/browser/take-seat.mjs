@@ -94,6 +94,9 @@ async function give(host, slot) {
   await spec.waitForFunction(s => mp && ME === s && !watcher, aiSlot, { timeout: 20000 });
   check(true, "the spectator plays the computer's seat now");
   check(await friend.evaluate(s => W.is_ai(s) === 0, aiSlot), "the friend's game has it as a person's too");
+  // (Seat code 13 reaches the page: playtest-style bug, the others were
+  // never told and their records kept the seat as the computer's.)
+  check(await friend.evaluate(s => Rec.meta && Rec.meta.who && Rec.meta.who[s] === "human" && /takes over/.test(document.body.textContent), aiSlot), "the friend is told someone took the seat, and their record says a person plays it");
   await friend.waitForFunction(s => pnames[s] === "Cy", aiSlot, { timeout: 10000 });
   check(true, "...played by Cy");
   await spec.evaluate(() => Chat.send("hello"));

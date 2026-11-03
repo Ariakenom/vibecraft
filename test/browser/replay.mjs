@@ -38,6 +38,20 @@ await p.click("#sbBody tr:nth-child(2) .sb-name");
 check(await p.evaluate(() => observe.view === 2 && W.view_reveal() === 0 && W.local_player() === 2 && !$("res").hidden), "seeing as Red: Red's fog and numbers");
 await p.click("#sbAll");
 check(await p.evaluate(() => observe.view === 0 && W.view_reveal() === 1 && $("res").hidden), "back to the whole map");
+// The scoreboard's resources follow the eras: Ancient ones at the start,
+// the furthest era's once someone gets there.
+const sb = await p.evaluate(() => {
+  const heads = () => [...document.querySelectorAll("#sbHead th")].map(t => t.title).join("|");
+  renderScoreboard(true);
+  const ancient = heads(), era0 = $("sbBody").querySelector("tr:nth-child(2) td:nth-child(2)").textContent;
+  const keep = W.player_era(W.local_player());
+  W.debug_set_era(4); renderScoreboard(true);
+  const modern = heads(), cells = $("sbBody").querySelector("tr").children.length, columns = document.querySelectorAll("#sbHead th").length;
+  W.debug_set_era(keep); renderScoreboard(true);
+  return { ancient, era0, modern, cells, columns };
+});
+check(/Wood made\|Stone made\|Grain made\|Horses made/.test(sb.ancient) && sb.era0 === "Ancient", `the scoreboard starts with era and the Ancient resources (${sb.ancient}; ${sb.era0})`);
+check(/Wood made\|Stone made\|Coal made\|Steel made\|Oil made\|Aluminum made/.test(sb.modern) && sb.cells === sb.columns, `once someone is Modern it shows their materials (${sb.modern})`);
 check(await p.evaluate(() => issue({ c: 1, ids: [1], x: 5, y: 5 }) === 0 && Rec.cmds.size === Rec.keys.length && Rec.keys.length === 5), "no commands while watching (only the surrender was added)");
 await sleep(1500);
 check(await p.evaluate(() => W.state_of(1) === 5 && running), "the computers play on");
