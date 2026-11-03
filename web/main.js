@@ -9,7 +9,7 @@ const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
 const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
-  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27,
+  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
@@ -21,7 +21,7 @@ const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossb
 // Aircraft fly above everything (drawn high up; see defs.rs Kind::is_air).
 const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
 // Boats sail on the water (see defs.rs Kind::is_naval).
-const isNaval = k => k >= K.FishingBoat && k <= K.Destroyer;
+const isNaval = k => k >= K.FishingBoat && k <= K.NuclearSub;
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
@@ -49,7 +49,7 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo",
   [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense",
   [K.Dock]: "Dock", [K.FishingBoat]: "Fishing Boat", [K.Transport]: "Transport", [K.Galley]: "Galley", [K.Cog]: "War Cog",
-  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer" };
+  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer", [K.Submarine]: "Submarine", [K.NuclearSub]: "Nuclear Submarine" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits in the town square. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
@@ -93,7 +93,9 @@ const DESC = {
   [K.Cog]: "A sturdier Medieval warship with crossbows. Costs iron.",
   [K.Galleon]: "A gun ship: broadsides that smash boats and bombard the coast, hurting everything around where they land. Costs iron and gunpowder.",
   [K.Ironclad]: "A steam-driven armoured ship with heavy guns. Long reach; flattens the waterfront.",
-  [K.Destroyer]: "Fast and tough, with quick-firing guns that also shoot at aircraft. Costs steel, oil and explosives.",
+  [K.Destroyer]: "Fast and tough, with quick-firing guns that also shoot at aircraft. The submarine hunter: it sees them from its full sight, and does double and a half damage to them. Costs steel, oil and explosives.",
+  [K.NuclearSub]: "A submarine that carries a nuke. Arm it (V) while it lies at one of your docks (2 uranium and 2 explosives, 2 minutes; it waits while the submarine is away), then launch it (C) from anywhere at sea. Hidden like any submarine, but everyone sees where a nuke comes from. Torpedoes for boats too.",
+  [K.Submarine]: "Sails under the water: enemies see it only when something of theirs is within 3 tiles of it, or a destroyer has it in sight. Its torpedoes hit boats hard, and nothing else; only warships can hit it. Costs steel and explosives.",
   [K.HuntingLodge]: "Hunts the game grazing next to it.",
   [K.Orchard]: "Picks fruit from the wild bushes next to it.",
   [K.Pasture]: "Breeds horses from the wild herd next to it.",
@@ -200,7 +202,7 @@ const TRAIN_KEYS = PAGE_KEYS; // enough for every unit when several kinds of bui
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet],
-  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer] };
+  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Submarine, K.Destroyer, K.NuclearSub] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -1060,25 +1062,29 @@ function renderCommands(sel) {
   // Missile silos: Launch (Z) and Arm a nuke (X), both always there, greyed
   // out when no selected silo can do it. With several silos selected, each
   // press arms the next empty one, and each launch uses the next armed one.
-  const silos = mine.filter(i => E(i, F.kind) === K.MissileSilo && !(E(i, F.flags) & 2)).map(i => E(i, F.id));
-  if (silos.length && !hasUnits) {
+  // Nuclear submarines get the same two, on C and V (Z and X are a unit's
+  // attack-move and stop); they arm only at one of your docks.
+  const subs = hasUnits ? mine.filter(i => E(i, F.kind) === K.NuclearSub).map(i => E(i, F.id)) : [];
+  const silos = subs.length ? subs : hasUnits ? [] : mine.filter(i => E(i, F.kind) === K.MissileSilo && !(E(i, F.flags) & 2)).map(i => E(i, F.id));
+  const [kLaunch, kArm, what] = subs.length ? ["C", "V", "submarine"] : ["Z", "X", "silo"];
+  if (silos.length) {
     const states = silos.map(id => W.silo_state(id)), count = s => states.filter(x => x === s).length;
     const empty = count(0), arming = count(1), armed = count(2), many = silos.length > 1;
     const fnLaunch = () => {
-      if (!armedOf(silos).length) { toast(arming ? "The nuke is still arming." : "No nuke is armed: Arm a nuke (X) first.", "bad"); Sfx.ui("error"); return; }
+      if (!armedOf(silos).length) { toast(arming ? "The nuke is still arming." : `No nuke is armed: Arm a nuke (${kArm}) first.`, "bad"); Sfx.ui("error"); return; }
       aimSilo = silos; amode = true; placing = null; updateCursor();
     };
-    const b1 = cmdButton("Launch", "Z", fnLaunch, { glyph: "🚀", count: many && armed, tip: `<h4>Launch the nuke</h4>${many ? `<p>${armed} of ${silos.length} silos armed.</p>` : ""}<p>Click where it should fall${many ? "; Shift-click to launch the next one too" : ""}. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming. An enemy Air Defense within ${W.nuke_numbers(3)} tiles of the target shoots it down.</p>` });
+    const b1 = cmdButton("Launch", kLaunch, fnLaunch, { glyph: "🚀", count: many && armed, tip: `<h4>Launch the nuke</h4>${many ? `<p>${armed} of ${silos.length} ${what}s armed.</p>` : ""}<p>Click where it should fall${many ? "; Shift-click to launch the next one too" : ""}. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming. An enemy Air Defense within ${W.nuke_numbers(3)} tiles of the target shoots it down.</p>` });
     if (!armed) b1.classList.add("off");
-    add(b1, "Z", fnLaunch);
+    add(b1, kLaunch, fnLaunch);
     const fnArm = () => {
       const id = silos.find(id => W.silo_state(id) === 0);
-      if (id == null) { toast(many ? "Every selected silo already has a nuke." : "This silo already has a nuke.", "bad"); Sfx.ui("error"); return; }
+      if (id == null) { toast(many ? `Every selected ${what} already has a nuke.` : `This ${what} already has a nuke.`, "bad"); Sfx.ui("error"); return; }
       const code = issue({ c: 11, ids: [id] }); if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("queued"); selKey = "";
     };
-    const b2 = cmdButton("Arm a nuke", "X", fnArm, { glyph: "☢", count: many && empty, tip: `<h4>Arm a nuke</h4>${many ? `<p>${empty} of ${silos.length} silos empty; each press arms one.</p>` : ""}<p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes.</p>` });
+    const b2 = cmdButton("Arm a nuke", kArm, fnArm, { glyph: "☢", count: many && empty, tip: `<h4>Arm a nuke</h4>${many ? `<p>${empty} of ${silos.length} ${what}s empty; each press arms one.</p>` : ""}<p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes${subs.length ? ", lying at one of your docks (it waits while the submarine is away)" : ""}.</p>` });
     if (!empty) b2.classList.add("off");
-    add(b2, "X", fnArm);
+    add(b2, kArm, fnArm);
   }
   // Houses: upgrade the ones that are ready (it holds more materials, so
   // it's your call).
@@ -1617,6 +1623,7 @@ function handleEvents() {
         break;
       case EV.Shoot:
         if (isGun(d)) { Sfx.at(isBigGun(d) ? "cannon" : d === K.MachineGunner || d === K.Infantry || d === K.Fighter ? "mg" : "musket", x, y, 40); if (!isAir(d)) gunSmoke(x, y, d); }
+        else if (d === K.Submarine) Sfx.at("cannon", x, y, 25); // a muffled thump under the water
         else Sfx.at("bow", x, y, 60, isBld(d));
         break;
       case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;

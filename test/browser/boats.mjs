@@ -23,7 +23,7 @@ const r = await page.evaluate(() => {
   const wet = (x, y) => x >= 0 && y >= 0 && x < w && y < h && ter[y * w + x] === 1;
   const ids = {};
   // Boats on the water round the harbour.
-  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer];
+  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer, K.Submarine, K.NuclearSub];
   let n = 0;
   for (let r = 0; r < 8 && n < kinds.length; r++) for (let dy = -r; dy <= r && n < kinds.length; dy++) for (let dx = -r; dx <= r && n < kinds.length; dx++) {
     const x = hx + dx * 2, y = hy + dy * 2;
@@ -47,14 +47,22 @@ const r = await page.evaluate(() => {
   const visibleMen = men.filter(id => byId.has(id)).length;
   const aboard = (() => { const i = byId.get(t); return i == null ? -1 : E(i, F.residents); })();
   const cursorUnload = intentAt([t], cx, cy);
+  // A nuclear submarine: Launch (C) and Arm a nuke (V) among its buttons.
+  const ns = W.debug_spawn(K.NuclearSub, hx, hy);
+  readWorld(); setSelection([ns]); renderSelection(true);
+  const buttons = [...document.querySelectorAll("#cmd .cbtn")].map(b => b.textContent);
+  const subButtons = buttons.filter(t => t === "🚀C" || t === "☢V").length;
+  const subArm = issue({ c: 11, ids: [ns] }); // away from any dock: refused
   centerOn(hx, hy); cam.dist = 18;
-  return { n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
+  return { subButtons, subArm, buttons: buttons.join("|"), n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
 });
-check(r.n === 7, `seven kinds of boat on the water (${r.n})`);
+check(r.n === 9, `nine kinds of boat on the water (${r.n})`);
 check(r.cursorBoard === 7, `right-clicking a transport with soldiers means board (${r.cursorBoard})`);
 check(r.visibleMen === 0 && r.aboard === 2, `the soldiers went aboard and aren't drawn (${r.visibleMen} drawn, ${r.aboard} aboard)`);
 check(r.cursorUnload === 8, `right-clicking land with a loaded transport means put ashore (${r.cursorUnload})`);
-check(r.trains === 7 && r.name === "Galleon", "the dock trains seven boats");
+check(r.trains === 9 && r.name === "Galleon", `the dock trains nine boats (${r.trains})`);
+check(r.subButtons === 2, `a nuclear submarine has Launch and Arm buttons (${r.buttons})`);
+check(r.subArm !== 0, `arming away from a dock is refused (${r.subArm})`);
 if (shot) {
   await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: 120000 }).catch(() => {});
   await page.evaluate(() => {

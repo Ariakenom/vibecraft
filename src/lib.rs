@@ -87,7 +87,8 @@ pub extern "C" fn render() -> u32 {
         w.ents.clear();
         // (Units aboard a transport aren't drawn: they're in its hold.)
         for e in g.ents.iter().filter(|e| e.alive && e.aboard == 0) {
-            let visible = e.owner == g.local || g.visible_to_player(e.x, e.y);
+            // (A submarine is seen only where it's spotted; see `spot_submarines`.)
+            let visible = e.owner == g.local || (g.visible_to_player(e.x, e.y) && (g.reveal || Game::spotted_by(e, g.local)));
             if !visible && !(e.is_building() && e.seen) {
                 continue;
             }
@@ -801,10 +802,10 @@ pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
     })
 }
 
-/// A missile silo's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
+/// A missile silo's or nuclear submarine's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
 #[unsafe(no_mangle)]
 pub extern "C" fn silo_state(id: u32) -> i32 {
-    game(|g| g.ents.get(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo).map_or(-1, |e| e.nuke as i32))
+    game(|g| g.ents.get(id as usize).filter(|e| e.alive && matches!(e.kind, Kind::MissileSilo | Kind::NuclearSub)).map_or(-1, |e| e.nuke as i32))
 }
 /// Nukes in flight: how many, and the n-th's `which` (0 x, 1 y of its
 /// target, 2 x, 3 y of its silo, 4 how far along 0..1, 5 owner, 6 1 if an
@@ -868,7 +869,7 @@ pub extern "C" fn nuke_numbers(which: u32) -> f32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_set_nuke(id: u32, state: u32) {
     game(|g| {
-        if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive && e.kind == Kind::MissileSilo) {
+        if let Some(e) = g.ents.get_mut(id as usize).filter(|e| e.alive && matches!(e.kind, Kind::MissileSilo | Kind::NuclearSub)) {
             e.nuke = state.min(2) as u8;
         }
     })

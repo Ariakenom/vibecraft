@@ -601,7 +601,14 @@ versions don't play together.
   there; if it sinks, everyone aboard is lost. **Warships**, one for each
   era but the last: galley (Ancient), war cog (Medieval), galleon
   (Gunpowder, area damage), ironclad (Industrial, area damage) and
-  destroyer (Modern, shoots at aircraft too). Warships sink boats and
+  destroyer (Modern, shoots at aircraft too). **Submarines** (Industrial)
+  sail under the water: enemies see one only when something of theirs is
+  within 3 tiles (`SUB_DETECT`) or a destroyer has it in sight. Their
+  torpedoes hit boats hard and nothing else, and only warships can hit
+  them (destroyers at 2.5 times). The **nuclear submarine** (Atomic) is
+  hidden the same way and carries a nuke: arm it (V) while it lies at one
+  of your docks (it waits while the submarine is away), then launch it (C)
+  from anywhere at sea. Warships sink boats and
   bombard buildings by the water; towers, siege guns and archers on the
   shore hit back, swords and spears hardly reach. Boats are people, like
   every unit: each one is a worker who went to the dock.
@@ -621,7 +628,8 @@ versions don't play together.
   something it needs. With wood to spare it builds a dock and two fishing
   boats, and on Normal (2) and Hard (4) a few warships, which guard its
   harbour, go for enemy boats near home and sail with its attack waves for
-  the coast nearest the target. It doesn't use transports yet. Easy, Normal and Hard
+  the coast nearest the target (in the Industrial era ironclads and
+  submarines in turn). It doesn't use transports or nuclear submarines yet. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
   and its supply (80%, 100%, 130%).
 - **Maps:** two players get a 120×120 map with 180° symmetry; three or four

@@ -112,7 +112,7 @@ const PARALLEL: usize = 4;
 const FISHING_BOATS: usize = 2;
 const WARSHIPS: [usize; 3] = [0, 2, 4];
 /// Warships, oldest era first.
-const NAVY: [Kind; 5] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Destroyer];
+const NAVY: [Kind; 6] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Submarine, Kind::Destroyer];
 
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
@@ -947,7 +947,10 @@ impl Game {
             let unit = if count(self, Kind::FishingBoat) < FISHING_BOATS && affordable(Kind::FishingBoat) {
                 Some(Kind::FishingBoat)
             } else if ships < want && c.army.len() >= 4 {
-                NAVY.iter().rev().copied().find(|&k| affordable(k))
+                // The latest era's it can afford; of two (ironclads and
+                // submarines), whichever it has fewer of.
+                let era = NAVY.iter().copied().filter(|&k| affordable(k)).map(|k| k.era()).max();
+                NAVY.iter().copied().filter(|&k| affordable(k) && Some(k.era()) == era).min_by_key(|&k| (count(self, k), k as u32))
             } else {
                 None
             };
@@ -960,7 +963,7 @@ impl Game {
         }
         // Enemy boats near home: the warships go for them.
         let home = c.home;
-        let foe = self.ents.iter().find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_naval() && (e.x - home.0).hypot(e.y - home.1) < 30.0).map(|e| (e.x, e.y));
+        let foe = self.ents.iter().find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_naval() && Game::spotted_by(e, me) && (e.x - home.0).hypot(e.y - home.1) < 30.0).map(|e| (e.x, e.y));
         if let Some((x, y)) = foe {
             for id in self.navy(me) {
                 if self.ents[id as usize].order == Order::Idle {

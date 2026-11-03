@@ -201,6 +201,9 @@ pub struct Entity {
     /// Aboard a transport: its id plus one (0: not aboard). A unit aboard is
     /// carried along, out of sight and out of reach, until it's put ashore.
     pub aboard: u32,
+    /// Submarines: which players see it, one bit per player (its owner
+    /// always). Worked out every tick (`Game::spot_submarines`), so not saved.
+    pub spotted: u8,
 }
 
 /// A nuke in flight, from the silo at (sx, sy) to (x, y). Everyone sees it.
@@ -268,6 +271,7 @@ impl Entity {
             nuke: 0,
             starting: false,
             aboard: 0,
+            spotted: 0,
         }
     }
 
@@ -568,7 +572,37 @@ impl Game {
         // here: a loaded game settles its houses on its next tick, exactly
         // as the saved one would have.
         g.recount();
+        g.spot_submarines();
         g
+    }
+
+    /// Who sees each submarine: its owner, and any player with a unit or
+    /// building within `SUB_DETECT` of it, or a destroyer that has it in sight.
+    pub(crate) fn spot_submarines(&mut self) {
+        for i in 0..self.ents.len() {
+            let s = &self.ents[i];
+            if !s.alive || !s.kind.is_sub() {
+                continue;
+            }
+            let (x, y, owner) = (s.x, s.y, s.owner);
+            let mut seen = 1u8 << owner;
+            for e in self.ents.iter() {
+                if !e.alive || e.aboard != 0 || e.owner == GAIA || e.owner == owner || seen & (1 << e.owner) != 0 {
+                    continue;
+                }
+                let d = e.edge_dist(x, y);
+                if d <= SUB_DETECT || (e.kind == Kind::Destroyer && d <= e.kind.stats().sight) {
+                    seen |= 1 << e.owner;
+                }
+            }
+            self.ents[i].spotted = seen;
+        }
+    }
+
+    /// Can player `p` see entity `e`, as far as submarines go? (Everything
+    /// else is always "seen"; fog of war is separate.)
+    pub fn spotted_by(e: &Entity, p: u8) -> bool {
+        !e.kind.is_sub() || e.spotted & (1 << p) != 0
     }
 
     /// The private timers, for `save`/`load`.
@@ -852,7 +886,7 @@ impl Game {
         let melee = !me.is_building() && me_kind.stats().range < 1.5;
         self.units_near(x, y, reach + 1.0, |id| {
             let e = &self.ents[id as usize];
-            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && !(melee && e.kind.is_naval() != me_kind.is_naval()) {
+            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && Self::spotted_by(e, owner) && !(melee && e.kind.is_naval() != me_kind.is_naval()) {
                 let k = key(e);
                 if better(k, bk) {
                     bk = k;
@@ -898,6 +932,7 @@ impl Game {
         self.grow();
         self.recruit();
         self.rebuild_grid();
+        self.spot_submarines();
 
         // Index loop rather than `for e in &mut self.ents`: each update needs
         // `&mut self` (to read other entities, spawn projectiles, ...), and the
@@ -1253,7 +1288,7 @@ impl Game {
             if !e.alive || e.is_building() || e.aboard != 0 {
                 continue;
             }
-            if fog && e.owner != self.local && !self.visible_to_player(e.x, e.y) {
+            if fog && e.owner != self.local && (!self.visible_to_player(e.x, e.y) || !(self.reveal || Self::spotted_by(e, self.local))) {
                 continue;
             }
             let d = ((e.x - x).powi(2) + (e.y - y).powi(2)).sqrt();
@@ -1303,7 +1338,7 @@ impl Game {
         let loaded = mine().any(|id| self.ents[id as usize].kind == Kind::Transport && self.cargo(id).next().is_some());
         let land = self.map.inside(x.floor() as i32, y.floor() as i32) && !self.map.sailable(x.floor() as i32, y.floor() as i32);
         match self.pick(x, y, fog) {
-            Pick::Ent(t) if Self::hostile(owner, self.ents[t as usize].owner) => Intent::Attack(t),
+            Pick::Ent(t) if Self::hostile(owner, self.ents[t as usize].owner) && Self::spotted_by(&self.ents[t as usize], owner) => Intent::Attack(t),
             Pick::Ent(t) if any_walker && self.ents[t as usize].owner == owner && self.ents[t as usize].kind == Kind::Transport && !ids.contains(&t) => Intent::Board(t),
             Pick::Ent(t) if any_worker && self.ents[t as usize].owner == owner && self.ents[t as usize].is_building() => {
                 let b = &self.ents[t as usize];
@@ -1574,7 +1609,25 @@ impl Game {
     // -----------------------------------------------------------------------
     // Units
 
+    /// Is unit `i` lying at one of its owner's finished docks?
+    pub fn at_dock(&self, i: usize) -> bool {
+        let u = &self.ents[i];
+        self.ents.iter().any(|d| d.alive && d.kind == Kind::Dock && d.owner == u.owner && d.built >= 1.0 && d.edge_dist(u.x, u.y) <= DOCK_REACH)
+    }
+
     fn update_unit(&mut self, i: usize) {
+        // A nuclear submarine arms its nuke while it lies at a dock, and
+        // pauses while it's away.
+        if self.ents[i].nuke == 1 && self.at_dock(i) {
+            self.ents[i].progress += DT / NUKE_ARM_TIME;
+            if self.ents[i].progress >= 1.0 {
+                let e = &mut self.ents[i];
+                e.progress = 0.0;
+                e.nuke = 2;
+                let (x, y, owner) = (e.x, e.y, e.owner);
+                self.push_event(Ev::NukeArmed, x, y, owner as f32);
+            }
+        }
         // Aboard a transport: carried along, doing nothing else.
         if self.ents[i].aboard != 0 {
             let t = (self.ents[i].aboard - 1) as usize;
@@ -1725,6 +1778,10 @@ impl Game {
 
     fn do_attack(&mut self, i: usize, target: u32, auto: bool) {
         if !self.alive(target) || !self.ents[i].kind.can_hit(self.ents[target as usize].kind) {
+            return self.end_attack(i);
+        }
+        // A submarine that slipped out of sight is lost.
+        if !Self::spotted_by(&self.ents[target as usize], self.ents[i].owner) {
             return self.end_attack(i);
         }
         let (x, y, kind) = (self.ents[i].x, self.ents[i].y, self.ents[i].kind);
@@ -2264,8 +2321,12 @@ impl Game {
     /// Start arming a nuke: it holds `NUKE_COST` from now until it's launched.
     fn arm_nuke(&mut self, id: u32) -> Result<(), CmdError> {
         let e = &self.ents[id as usize];
-        if !e.alive || e.kind != Kind::MissileSilo || e.built < 1.0 || e.nuke != 0 {
+        if !e.alive || !matches!(e.kind, Kind::MissileSilo | Kind::NuclearSub) || e.built < 1.0 || e.nuke != 0 {
             return Err(CmdError::NoBuilding);
+        }
+        // A submarine arms at one of its docks.
+        if e.kind == Kind::NuclearSub && !self.at_dock(id as usize) {
+            return Err(CmdError::BadSpot);
         }
         let owner = e.owner;
         self.pay(owner, NUKE_COST)?;
@@ -2280,7 +2341,7 @@ impl Game {
     /// Launch an armed nuke at (x, y). Its slots come free at once.
     fn launch_nuke(&mut self, id: u32, x: f32, y: f32) -> Result<(), CmdError> {
         let e = &self.ents[id as usize];
-        if !e.alive || e.kind != Kind::MissileSilo || e.nuke != 2 {
+        if !e.alive || !matches!(e.kind, Kind::MissileSilo | Kind::NuclearSub) || e.nuke != 2 {
             return Err(CmdError::NoBuilding);
         }
         let (owner, sx, sy) = (e.owner, e.x, e.y);

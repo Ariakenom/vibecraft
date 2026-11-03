@@ -261,3 +261,122 @@ fn a_galley_sinks_a_fishing_boat() {
     assert!(!g.ents[prey as usize].alive, "the fishing boat is still afloat");
     assert!(g.ents[galley as usize].alive);
 }
+
+/// Open water, connected to the sea, `r0` to `r1` tiles from (x, y).
+fn water_between(g: &Game, (x, y): (i32, i32), r0: i32, r1: i32) -> (f32, f32) {
+    let sea = sea_from(&g.map, 1, 1);
+    for r in r0..=r1 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let (tx, ty) = (x + dx, y + dy);
+                if dx.abs().max(dy.abs()) == r && g.map.inside(tx, ty) && sea[g.map.idx(tx, ty)] {
+                    return (tx as f32 + 0.5, ty as f32 + 0.5);
+                }
+            }
+        }
+    }
+    panic!("no open water near {x},{y}");
+}
+
+/// A submarine is hidden until something of yours comes within a few
+/// tiles, or a destroyer has it in sight; hidden, nobody can target it.
+#[test]
+fn submarines_are_hidden_until_close() {
+    let mut g = quiet(4, 2);
+    let h = harbour(&g, 1).unwrap();
+    let (gx, gy) = (h.0 as f32 + 0.5, h.1 as f32 + 0.5);
+    let galley = g.spawn_unit(Kind::Galley, 1, gx, gy);
+    // Out of reach of everything of player 1's but the galley's sight (8).
+    let (sx, sy) = water_between(&g, h, 6, 7);
+    let sub = g.spawn_unit(Kind::Submarine, 2, sx, sy);
+    run(&mut g, 0.1);
+    let d = (g.ents[galley as usize].x - sx).hypot(g.ents[galley as usize].y - sy);
+    assert!(d > SUB_DETECT + 1.0, "test setup: galley only {d:.1} away");
+    assert!(!Game::spotted_by(&g.ents[sub as usize], 1), "spotted from {d:.1} tiles");
+    assert!(Game::spotted_by(&g.ents[sub as usize], 2), "its owner always sees it");
+    assert_eq!(g.nearest_enemy(galley as usize, 8.0), None, "the galley targets a hidden submarine");
+    assert_ne!(g.intent(&[galley], sx, sy, 1, false), Intent::Attack(sub));
+    // Right next to it: seen.
+    g.ents[galley as usize].x = sx + 1.0;
+    g.ents[galley as usize].y = sy;
+    run(&mut g, 0.1);
+    assert!(Game::spotted_by(&g.ents[sub as usize], 1), "not spotted from a tile away");
+    // A destroyer sees it from its sight away.
+    let mut g = quiet(4, 2);
+    let d = g.spawn_unit(Kind::Destroyer, 1, gx, gy);
+    let (sx, sy) = water_between(&g, h, 6, 8);
+    let sub = g.spawn_unit(Kind::Submarine, 2, sx, sy);
+    run(&mut g, 0.1);
+    let dist = (g.ents[d as usize].x - sx).hypot(g.ents[d as usize].y - sy);
+    assert!(dist > SUB_DETECT + 1.0 && dist < Kind::Destroyer.stats().sight);
+    assert!(Game::spotted_by(&g.ents[sub as usize], 1), "a destroyer {dist:.1} away doesn't see it");
+}
+
+/// Torpedoes sink ships, but a submarine can't hit anything on land.
+#[test]
+fn submarines_torpedo_ships_and_nothing_else() {
+    assert!(Kind::Submarine.can_hit(Kind::Galley) && Kind::Submarine.can_hit(Kind::FishingBoat));
+    assert!(!Kind::Submarine.can_hit(Kind::Dock) && !Kind::Submarine.can_hit(Kind::Spearman) && !Kind::Submarine.can_hit(Kind::Fighter));
+    assert!(!Kind::Archer.can_hit(Kind::Submarine) && !Kind::Tower.can_hit(Kind::Submarine) && !Kind::Bomber.can_hit(Kind::Submarine));
+    let mut g = quiet(4, 2);
+    let h = harbour(&g, 2).unwrap();
+    let galley = g.spawn_unit(Kind::Galley, 2, h.0 as f32 + 0.5, h.1 as f32 + 0.5);
+    let (sx, sy) = water_between(&g, h, 4, 5);
+    let sub = g.spawn_unit(Kind::Submarine, 1, sx, sy);
+    g.apply(1, Command::Smart { ids: vec![sub], x: g.ents[galley as usize].x, y: g.ents[galley as usize].y }).unwrap();
+    run(&mut g, 60.0);
+    assert!(!g.ents[galley as usize].alive, "the galley is still afloat");
+    assert!(g.ents[sub as usize].alive);
+}
+
+/// A nuclear submarine arms its nuke only at one of its docks (it pauses
+/// while away), then launches it from anywhere at sea.
+#[test]
+fn a_nuclear_submarine_arms_at_its_dock_and_launches_at_sea() {
+    let mut g = quiet(4, 2);
+    g.players[1].era = 5;
+    let h = harbour(&g, 1).unwrap();
+    // A dock on the shore by the harbour, and the submarine beside it.
+    let mut at = None;
+    'find: for r in 1..8 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if g.can_place(Kind::Dock, h.0 + dx, h.1 + dy, 1, 0) {
+                    at = Some((h.0 + dx, h.1 + dy));
+                    break 'find;
+                }
+            }
+        }
+    }
+    let (dx, dy) = at.unwrap();
+    g.spawn_building(Kind::Dock, 1, dx, dy, 1.0);
+    let (sx, sy) = g.free_tile_near_for(true, dx, dy, 2, h.0 as f32, h.1 as f32).unwrap();
+    let sub = g.spawn_unit(Kind::NuclearSub, 1, sx, sy);
+    // Out at sea it can't start.
+    let (fx, fy) = water_between(&g, h, 10, 14);
+    g.ents[sub as usize].x = fx;
+    g.ents[sub as usize].y = fy;
+    assert!(g.apply(1, Command::Arm { id: sub }).is_err(), "armed away from a dock");
+    (g.ents[sub as usize].x, g.ents[sub as usize].y) = (sx, sy);
+    g.apply(1, Command::Arm { id: sub }).unwrap();
+    run(&mut g, NUKE_ARM_TIME / 2.0);
+    let half = g.ents[sub as usize].progress;
+    // Away from the dock, arming waits.
+    g.order_move(sub, fx, fy);
+    run(&mut g, 30.0);
+    let away = g.ents[sub as usize].progress;
+    assert!((half - away).abs() < 0.13, "it went on arming away from the dock: {half:.2} -> {away:.2}");
+    g.order_move(sub, sx, sy);
+    run(&mut g, NUKE_ARM_TIME);
+    assert_eq!(g.ents[sub as usize].nuke, 2, "not armed after its time at the dock");
+    // Out to sea, and launch at the other Capitol.
+    g.order_move(sub, fx, fy);
+    run(&mut g, 20.0);
+    let c2 = g.home_capitol(2).unwrap();
+    let (tx, ty) = (g.ents[c2].x, g.ents[c2].y);
+    g.apply(1, Command::Launch { id: sub, x: tx, y: ty }).unwrap();
+    assert_eq!(g.nukes.len(), 1);
+    assert_eq!(g.ents[sub as usize].nuke, 0);
+    run(&mut g, NUKE_FLIGHT + 1.0);
+    assert!(!g.ents[c2].alive, "the nuke didn't take the Capitol");
+}

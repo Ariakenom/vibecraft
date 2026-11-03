@@ -447,6 +447,20 @@ function boatModel(kind, owner) {
       m.add(cyl(0.012, 0.012, 0.5, 5), DARKWOOD, 0.2, 0.35, 0);
       top = 0.6; mx = 0.2;
       break;
+    case K.Submarine: case K.NuclearSub: {
+      // Mostly under the water: a dark back, a conning tower, a periscope.
+      const big = kind === K.NuclearSub, L = big ? 1.25 : 0.95;
+      const back = cyl(0.13, 0.13, L, 10); back.rotateZ(Math.PI / 2); back.scale(1, 0.55, 1);
+      m.add(back, "#3a4046", -0.04, -0.03, 0);
+      const nose = ball(0.13, 1); nose.scale(1.2, 0.55, 1); m.add(nose, "#3a4046", L / 2 - 0.02, -0.03, 0);
+      // The missile deck: a row of hatches behind the tower.
+      if (big) for (let i = 0; i < 4; i++) m.add(box(0.07, 0.03, 0.12), "#2a2e31", -0.15 - i * 0.1, 0.06, 0);
+      m.add(box(0.2, 0.16, 0.1), "#4f565c", 0.05, 0.1, 0);
+      m.add(box(0.21, 0.03, 0.11), team, 0.05, 0.19, 0);
+      m.add(cyl(0.01, 0.01, 0.2, 5), "#2a2e31", 0.1, 0.28, 0);
+      top = 0.38; mx = 0.05;
+      break;
+    }
     case K.Destroyer:
       hull(1.15, 0.3, 0.18, DARKGREY, GREY);
       m.add(box(0.22, 0.2, 0.2), GREY, 0.12, 0.2, 0); // the bridge
@@ -2080,19 +2094,21 @@ function updateArrows(alpha) {
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
-    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank;
-    const rocket = shooter === K.RocketArtillery;
+    const stone = shooter === K.Trebuchet || shooter === K.Cannon || shooter === K.FieldGun || shooter === K.Tank || shooter === K.Galleon || shooter === K.Ironclad || shooter === K.Destroyer;
+    // A torpedo runs along the water, drawn like a rocket without the smoke.
+    const torpedo = shooter === K.Submarine;
+    const rocket = shooter === K.RocketArtillery || torpedo;
     if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet) continue; // bullets are too small to see
     const missile = shooter === K.AirDefense;
-    const fromH = missile ? 0.7 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
+    const fromH = torpedo ? 0.02 : missile ? 0.7 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
-    const toH = missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
+    const toH = torpedo ? 0.03 : missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
     // How far along: distance flown over that plus the distance still to go.
     const flown = Math.hypot(ix - ox, iy - oy);
     const total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
     const t = Math.min(1, flown / total);
-    const arc = missile ? total * 0.25 : rocket ? total * 0.22 : shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
+    const arc = torpedo ? 0 : missile ? total * 0.25 : rocket ? total * 0.22 : shooter === K.Trebuchet ? total * 0.3 : shooter === K.Cannon || shooter === K.Tank ? total * 0.05 : shooter === K.FieldGun ? total * 0.15 : Math.min(1.2, total * 0.12);
     const h0 = groundAt(ox, oy) + fromH, h1 = groundAt(ix, iy) + toH;
     _p.set(ix, h0 + (h1 - h0) * t + arc * 4 * t * (1 - t), iy);
     // Pointing along its path: up as it leaves, down as it lands.
@@ -2107,7 +2123,7 @@ function updateArrows(alpha) {
     } else if (rocket) {
       if (nr < 64) rk.setMatrixAt(nr++, _m4);
       // Smoke behind it: a rocket's trail is thicker than a missile's.
-      if (GFX.smoke && Math.random() < 0.7 && R3.puffs.length < 150) R3.puffs.push({ x: _p.x - dx * 0.35, y: _p.z - dy * 0.35, h: _p.y, t0: performance.now(), big: false, seed: Math.random() * 6.28 });
+      if (!torpedo && GFX.smoke && Math.random() < 0.7 && R3.puffs.length < 150) R3.puffs.push({ x: _p.x - dx * 0.35, y: _p.z - dy * 0.35, h: _p.y, t0: performance.now(), big: false, seed: Math.random() * 6.28 });
     } else if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
     else a.setMatrixAt(na++, _m4);
   }
