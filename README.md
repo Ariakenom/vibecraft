@@ -673,11 +673,17 @@ versions don't play together.
   quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
   Y tower, U dock. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
   selected buildings, or disbands the selected units (units need a second press).
-- **Missile silo:** X arms a nuke; Z and a click launches it (a ring shows
-  the blast, and blue rings the cover of enemy air defenses). Both buttons
-  are always there, greyed out when they can't be used. With several silos
-  selected, each X arms one more, and each launch uses the next armed one
-  (Shift-click to keep launching). Demolish is always the bottom-right button.
+- **The command panel:** era tabs at the top (for builders), then what the
+  selection builds or trains, then a row of actions at the bottom where each
+  has the slot of its key, whatever is selected: Z the main action
+  (attack-move, pause or resume, upgrade a house), X stop, C launch a nuke,
+  V arm one, and Shift+Q (or Del) demolish or disband in the last slot.
+  Empty slots are drawn faintly, so nothing moves.
+- **Missile silo and nuclear submarine:** V arms a nuke; C and a click
+  launches it (a ring shows the blast, and blue rings the cover of enemy air
+  defenses). Both buttons are always there, greyed out when they can't be
+  used. With several selected, each V arms one more, and each launch uses
+  the next armed one (Shift-click to keep launching).
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
   oldest first (with several kinds of building selected, every unit still
   gets a key).

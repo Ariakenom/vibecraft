@@ -138,8 +138,18 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 
 /* Always room for three rows of five, whatever is selected, so the bar never changes size. */
 /* One width whatever is selected, so the bar never changes size. */
-#cmd { display: grid; grid-template-columns: repeat(5, 50px); grid-auto-rows: 50px; gap: 5px; align-content: start; position: relative; width: 340px; }
-#cmd .cbtn.end { grid-column: -2; }
+/* The command panel: era tabs, then what it builds or trains, then a fixed
+   row of actions at the bottom (see ACTION_SLOTS in main.js). */
+#cmd { display: flex; flex-direction: column; gap: 4px; position: relative; width: 272px; height: 160px; }
+#cmd .tabs { display: flex; gap: 3px; }
+#cmd .tabs:empty { display: none; }
+#cmd .tabs .cbtn { height: 20px; flex: 1; font-size: 13px; }
+#cmd .tabs .cbtn kbd { display: none; }
+#cmd .items { display: grid; grid-template-columns: repeat(6, 42px); grid-auto-rows: 42px; gap: 4px; align-content: start; }
+#cmd .items.dense { grid-template-columns: repeat(8, 31px); grid-auto-rows: 31px; gap: 3px; }
+#cmd .items.denser { grid-template-columns: repeat(10, 24px); grid-auto-rows: 24px; gap: 3px; }
+#cmd .actions { display: grid; grid-template-columns: repeat(6, 42px); grid-auto-rows: 42px; gap: 4px; margin-top: auto; }
+#cmd .slot { border: 1px dashed var(--line); border-radius: 3px; opacity: .35; }
 #cmd .cbtn.off { opacity: .35; filter: grayscale(1); }
 .cbtn .count { position: absolute; right: 3px; bottom: 1px; font: 700 12px var(--body); color: var(--ink); text-shadow: 0 1px 0 #000; pointer-events: none; }
 #cmd .cbtn.page { font: 400 16px var(--display); color: var(--muted); }
@@ -148,14 +158,11 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #flash.on { animation: nukeflash 2.2s ease-out; }
 @keyframes nukeflash { 0% { opacity: 0.95; } 15% { opacity: 0.85; } 100% { opacity: 0; } }
 #cmd .cbtn.page.on { color: var(--bronze); border-color: var(--bronze); background: #3d3020; }
-#cmd.dense { grid-template-columns: repeat(7, 40px); grid-auto-rows: 40px; gap: 4px; }
-#cmd.dense .cbtn canvas { width: 38px; height: 38px; }
-#cmd.denser { grid-template-columns: repeat(9, 34px); grid-auto-rows: 34px; gap: 3px; }
-#cmd.denser .cbtn canvas { width: 32px; height: 32px; }
-#cmd.denser .cbtn kbd { font-size: 10px; }
-#cmd.densest { grid-template-columns: repeat(11, 29px); grid-auto-rows: 29px; gap: 2px; }
-#cmd.densest .cbtn canvas { width: 27px; height: 27px; }
-#cmd.densest .cbtn kbd { font-size: 9px; }
+#cmd .cbtn canvas { width: 40px; height: 40px; }
+#cmd .items.dense .cbtn canvas { width: 29px; height: 29px; }
+#cmd .items.dense .cbtn kbd { font-size: 10px; }
+#cmd .items.denser .cbtn canvas { width: 22px; height: 22px; }
+#cmd .items.denser .cbtn kbd { font-size: 9px; }
 .cbtn { position: relative; padding: 0; background: linear-gradient(#3a3023, #282017); border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
 .cbtn:hover { border-color: var(--bronze); }
 .cbtn.poor { opacity: .5; }
@@ -165,8 +172,8 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .cbtn canvas { width: 48px; height: 48px; display: block; }
 .cbtn .badge { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 1px; padding: 1px 2px; background: rgba(20, 15, 10, .82); border: 1px solid var(--line); border-radius: 9px; pointer-events: none; }
 .cbtn .badge svg { width: 14px; height: 14px; display: block; }
-#cmd.denser .cbtn .badge svg { width: 12px; height: 12px; }
-#cmd.densest .cbtn .badge svg { width: 10px; height: 10px; }
+#cmd .items.dense .cbtn .badge svg { width: 11px; height: 11px; }
+#cmd .items.denser .cbtn .badge { display: none; }
 .cbtn kbd { position: absolute; top: 1px; left: 3px; font: 700 11px var(--body); color: var(--bronze); text-shadow: 0 1px 0 #000; }
 .cbtn.glyph { font-family: var(--display); font-size: 22px; color: var(--ink); }
 #tip { position: absolute; bottom: calc(100% + 8px); right: 0; width: 230px; background: #1b1610f2; border: 1px solid var(--line); border-radius: 3px; padding: 8px 10px; font-size: 13px; pointer-events: none; z-index: 5; line-height: 1.4; }
@@ -243,10 +250,10 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 @media (max-width: 480px) { #techBody { grid-template-columns: minmax(0, 1fr); } }
 
 @media (max-width: 760px) {
-  #hud { grid-template-columns: auto 1fr; grid-template-rows: 104px 93px; gap: 8px; }
+  #hud { grid-template-columns: auto 1fr; grid-template-rows: 104px auto; gap: 8px; }
   #mini { width: 104px; height: 104px; }
-  #cmd { grid-column: 1 / -1; grid-template-columns: repeat(auto-fill, 44px); grid-auto-rows: 44px; }
-  .cbtn canvas { width: 42px; height: 42px; }
+  #cmd { grid-column: 1 / -1; width: auto; height: auto; }
+  #cmd .items { grid-template-columns: repeat(auto-fill, 42px); }
   #sel .portrait { width: 52px; height: 52px; }
   .brand { display: none; }
   .res { gap: 10px; }
