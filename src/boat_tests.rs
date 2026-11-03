@@ -407,3 +407,33 @@ fn aircraft_run_low_away_from_base_and_refuel_at_a_carrier() {
     assert!(g.ents[c as usize].alive);
     assert_eq!(g.ents[f as usize].fuel, air_fuel(Kind::Fighter), "not refuelled at the carrier");
 }
+
+/// An aircraft has so many shots; empty, it stops fighting until it's
+/// back at an airfield or carrier, where it rearms.
+#[test]
+fn aircraft_run_out_of_ammunition_and_rearm_at_base() {
+    let mut g = quiet(4, 2);
+    let h = harbour(&g, 2).unwrap();
+    let (x, y) = water_between(&g, h, 6, 9);
+    // A boat for the fighter to strafe: tough enough to outlast its guns
+    // (and held for free, so it doesn't lose health unsupplied).
+    g.players[2].cheat = true;
+    let target = g.spawn_unit(Kind::Transport, 2, x, y); // (no guns: 12 strafes leave it afloat)
+    let f = g.spawn_unit(Kind::Fighter, 1, x + 1.0, y);
+    g.apply(1, Command::Smart { ids: vec![f], x, y }).unwrap();
+    run(&mut g, 30.0);
+    let e = &g.ents[f as usize];
+    assert_eq!(e.ammo, 0, "still has {} shots", e.ammo);
+    assert!(g.ents[target as usize].alive, "test setup: the target sank");
+    assert!(!matches!(e.order, Order::Attack { .. }), "fighting with no ammunition: {:?}", e.order);
+    let hp = g.ents[target as usize].hp;
+    run(&mut g, 5.0);
+    assert!(g.ents[target as usize].hp >= hp - 1.0, "an empty fighter still hurts it");
+    // Back at a carrier of its own: full again.
+    let (fx, fy) = (g.ents[f as usize].x, g.ents[f as usize].y);
+    g.order_move(f, fx, fy);
+    g.spawn_unit(Kind::Carrier, 1, fx, fy);
+    run(&mut g, REFUEL_TIME + 0.5);
+    assert!(g.ents[f as usize].alive);
+    assert_eq!(g.ents[f as usize].ammo, air_ammo(Kind::Fighter));
+}

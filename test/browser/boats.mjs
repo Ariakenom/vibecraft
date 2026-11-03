@@ -53,8 +53,12 @@ const r = await page.evaluate(() => {
   const buttons = [...document.querySelectorAll("#cmd .cbtn")].map(b => b.textContent);
   const subButtons = buttons.filter(t => t === "🚀C" || t === "☢V").length;
   const subArm = issue({ c: 11, ids: [ns] }); // away from any dock: refused
+  // An aircraft's panel: its fuel and its ammunition.
+  const fighter = W.debug_spawn(K.Fighter, hx, hy);
+  readWorld(); setSelection([fighter]); renderSelection(true);
+  const panel = document.querySelector(".info")?.textContent || "";
   centerOn(hx, hy); cam.dist = 18;
-  return { subButtons, subArm, buttons: buttons.join("|"), n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
+  return { panel, subButtons, subArm, buttons: buttons.join("|"), n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
 });
 check(r.n === 10, `ten kinds of boat on the water (${r.n})`);
 check(r.cursorBoard === 7, `right-clicking a transport with soldiers means board (${r.cursorBoard})`);
@@ -62,6 +66,7 @@ check(r.visibleMen === 0 && r.aboard === 2, `the soldiers went aboard and aren't
 check(r.cursorUnload === 8, `right-clicking land with a loaded transport means put ashore (${r.cursorUnload})`);
 check(r.trains === 10 && r.name === "Galleon", `the dock trains ten boats (${r.trains})`);
 check(r.subButtons === 2, `a nuclear submarine has Launch and Arm buttons (${r.buttons})`);
+check(/Fuel \d+ of 45/.test(r.panel) && /Ammunition 12 of 12/.test(r.panel), `a fighter shows its fuel and ammunition (${r.panel})`);
 check(r.subArm !== 0, `arming away from a dock is refused (${r.subArm})`);
 if (shot) {
   await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: 120000 }).catch(() => {});

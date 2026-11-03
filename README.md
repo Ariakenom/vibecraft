@@ -581,7 +581,10 @@ versions don't play together.
   (fighters), 50 (jets) or 60 seconds (bombers) away from an airfield or
   aircraft carrier; out of fuel they fly at a third of their speed until
   they're back within 3 tiles of one, where they fill up in 5 seconds
-  (`air_fuel`; the computer sends them home when low). They fly straight over
+  (`air_fuel`). They carry limited ammunition too (`air_ammo`: 12 bursts
+  for a fighter, 14 for a jet, 3 bomb runs for a bomber), and rearm there
+  as they refuel; empty, they can't attack. The computer sends them home
+  when low on fuel or out of ammunition. They fly straight over
   water and buildings and only fighters, machine gunners, infantry, towers
   and the Capitol can hit them; bombers flatten buildings but need fighters
   to protect them.

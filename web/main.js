@@ -71,10 +71,10 @@ const DESC = {
   [K.FieldGun]: "Horse-drawn artillery firing shells. The longest reach of all; flattens buildings. Costs steel, explosives and a horse.",
   [K.Infantry]: "Modern foot soldiers with automatic rifles. They can shoot at aircraft too. Costs steel and explosives.",
   [K.Tank]: "Armour: tough, fast and hard-hitting, it runs down guns and gunners. Infantry beat it. Costs steel, oil and explosives.",
-  [K.Fighter]: "Flies over everything. Shoots down aircraft, and strafes the ground a little. Fuel for 45 seconds away from an airfield or carrier, then it's slow until it gets back. Costs aluminum and oil.",
-  [K.Bomber]: "Flies over everything and bombs buildings to rubble. Can't hit aircraft: escort it with fighters. Fuel for 60 seconds away from an airfield or carrier, then it's slow until it gets back. Costs aluminum, oil and explosives.",
+  [K.Fighter]: "Flies over everything. Shoots down aircraft, and strafes the ground a little. Fuel for 45 seconds away from an airfield or carrier, then it's slow until it gets back, and 12 bursts of fire. Costs aluminum and oil.",
+  [K.Bomber]: "Flies over everything and bombs buildings to rubble. Can't hit aircraft: escort it with fighters. Fuel for 60 seconds away from an airfield or carrier, then it's slow until it gets back, and 3 bomb runs. Costs aluminum, oil and explosives.",
   [K.RocketArtillery]: "Fires salvoes of rockets from further than anything else can shoot. Flattens buildings; poor against people.",
-  [K.Jet]: "A faster, tougher fighter. Owns the air. Fuel for 50 seconds away from an airfield or carrier, then it's slow until it gets back. Costs aluminum and oil.",
+  [K.Jet]: "A faster, tougher fighter. Owns the air. Fuel for 50 seconds away from an airfield or carrier, then it's slow until it gets back, and 14 bursts of fire. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against foot soldiers, weak against riders.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
   [K.Capitol]: "Your seat of power: it makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
@@ -94,7 +94,7 @@ const DESC = {
   [K.Galleon]: "A gun ship: broadsides that smash boats and bombard the coast, hurting everything around where they land. Costs iron and gunpowder.",
   [K.Ironclad]: "A steam-driven armoured ship with heavy guns. Long reach; flattens the waterfront.",
   [K.Destroyer]: "Fast and tough, with quick-firing guns that also shoot at aircraft. The submarine hunter: it sees them from its full sight, and does double and a half damage to them. Costs steel, oil and explosives.",
-  [K.Carrier]: "A floating airfield: your aircraft refuel next to it, so they can strike far from home. Anti-aircraft guns, but little else: escort it. Costs steel, oil and aluminum.",
+  [K.Carrier]: "A floating airfield: your aircraft refuel and rearm next to it, so they can strike far from home. Anti-aircraft guns, but little else: escort it. Costs steel, oil and aluminum.",
   [K.NuclearSub]: "A submarine that carries a nuke. Arm it (V) while it lies at one of your docks (2 uranium and 2 explosives, 2 minutes; it waits while the submarine is away), then launch it (C) from anywhere at sea. Hidden like any submarine, but everyone sees where a nuke comes from. Torpedoes for boats too.",
   [K.Submarine]: "Sails under the water: enemies see it only when something of theirs is within 3 tiles of it, or a destroyer has it in sight. Its torpedoes hit boats hard, and nothing else; only warships can hit it. Costs steel and explosives.",
   [K.HuntingLodge]: "Hunts the game grazing next to it.",
@@ -125,7 +125,7 @@ const DESC = {
   [K.HaberBosch]: "Makes nitrate from coal and electricity: no saltpeter needed.",
   [K.RadioFactory]: "Makes radios from steel and electricity, for apartment blocks.",
   [K.TankWorks]: "Builds tanks.",
-  [K.Airfield]: "Builds fighters, bombers and, from the Atomic era, jets. Aircraft refuel within 3 tiles of it (or of an aircraft carrier).",
+  [K.Airfield]: "Builds fighters, bombers and, from the Atomic era, jets. Aircraft refuel and rearm within 3 tiles of it (or of an aircraft carrier).",
   [K.UraniumMine]: "Mines uranium from the ore next to it.",
   [K.Reactor]: "Makes a great deal of electricity from a little uranium.",
   [K.CarPlant]: "Makes cars from steel and oil, for tower blocks.",
@@ -907,6 +907,9 @@ function singleInfo(panel, i) {
     if (isAir(k) && (owner === ME || observe)) html += E(i, F.residents) > 0
       ? `<div class="statline">Fuel <b>${E(i, F.residents)}</b> of ${E(i, F.beds)} s · refuels at an airfield or carrier</div>`
       : `<div class="statline bad">Out of fuel: slow until it's back at an airfield or carrier.</div>`;
+    if (isAir(k) && (owner === ME || observe)) html += W.ammo(id, 0) > 0
+      ? `<div class="statline">${k === K.Bomber ? "Bombs" : "Ammunition"} <b>${W.ammo(id, 0)}</b> of ${W.ammo(id, 1)} · rearms where it refuels</div>`
+      : `<div class="statline bad">Out of ${k === K.Bomber ? "bombs" : "ammunition"}: it can't attack until it's back at an airfield or carrier.</div>`;
     if (k === K.Transport) html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} aboard${owner === ME && E(i, F.residents) > 0 ? " · right-click the shore to put them ashore" : ""}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
   } else if (E(i, F.flags) & 2) {

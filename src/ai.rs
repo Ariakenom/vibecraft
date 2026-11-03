@@ -974,14 +974,14 @@ impl Game {
         }
     }
 
-    /// Aircraft low on fuel fly back to the nearest airfield or carrier
+    /// Aircraft low on fuel, or out of ammunition, fly back to the nearest airfield or carrier
     /// (after `ai_fight`, so this has the last word); they go out again with
     /// the next order once they've filled up there.
     fn ai_air(&mut self, me: u8) {
         let bases: Vec<(f32, f32)> = self.ents.iter().filter(|b| b.alive && b.owner == me && ((b.kind == Kind::Airfield && b.built >= 1.0) || b.kind == Kind::Carrier)).map(|b| (b.x, b.y)).collect();
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || e.owner != me || !e.kind.is_air() || e.fuel > air_fuel(e.kind) * 0.3 || self.at_air_base(i) {
+            if !e.alive || e.owner != me || !e.kind.is_air() || (e.fuel > air_fuel(e.kind) * 0.3 && e.ammo > 0) || self.at_air_base(i) {
                 continue;
             }
             let (x, y) = (e.x, e.y);

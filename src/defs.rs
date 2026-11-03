@@ -489,6 +489,16 @@ pub fn air_fuel(k: Kind) -> f32 {
     }
 }
 pub const OUT_OF_FUEL_SPEED: f32 = 0.35;
+/// Shots an aircraft carries out (a bomber's are bomb runs). Empty, it
+/// can't attack until it rearms where it refuels, in `REFUEL_TIME`.
+pub fn air_ammo(k: Kind) -> u8 {
+    match k {
+        Kind::Fighter => 12,
+        Kind::Jet => 14,
+        Kind::Bomber => 3,
+        _ => 0,
+    }
+}
 pub const AIR_BASE_REACH: f32 = 3.0;
 pub const REFUEL_TIME: f32 = 5.0;
 
