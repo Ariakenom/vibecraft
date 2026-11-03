@@ -113,6 +113,10 @@ pub extern "C" fn render() -> u32 {
             if e.is_building() && e.built <= 0.0 && e.builders_in == 0 {
                 flags |= 512;
             }
+            // A fishing boat on a shoal, fishing (1024).
+            if e.kind == Kind::FishingBoat && e.crewed {
+                flags |= 1024;
+            }
             let progress = if e.built < 1.0 { e.built } else { e.progress };
             let order = match e.order {
                 Order::Idle => 0,
@@ -809,6 +813,12 @@ pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn ammo(id: u32, which: u32) -> i32 {
     game(|g| g.ents.get(id as usize).filter(|e| e.alive && e.kind.is_air()).map_or(-1, |e| if which == 0 { e.ammo as i32 } else { defs::air_ammo(e.kind) as i32 }))
+}
+/// Is this unit lying at one of its owner's docks (1) or not (0)? Where a
+/// nuclear submarine arms its nuke.
+#[unsafe(no_mangle)]
+pub extern "C" fn at_dock(id: u32) -> u32 {
+    game(|g| g.ents.get(id as usize).is_some_and(|e| e.alive && !e.is_building()) && g.at_dock(id as usize)) as u32
 }
 /// A missile silo's or nuclear submarine's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
 #[unsafe(no_mangle)]

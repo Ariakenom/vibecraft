@@ -108,6 +108,8 @@ pub enum CmdError {
     Locked(Kind),
     /// A house that can't grow yet: a bed is free, or it lacks a good.
     NotReady,
+    /// A nuclear submarine arms only at one of its owner's docks.
+    NotAtDock,
 }
 
 impl CmdError {
@@ -122,6 +124,7 @@ impl CmdError {
             CmdError::NoDeposit(d) => 20 + d as i32,
             CmdError::Locked(k) => 2000 + k as i32,
             CmdError::NotReady => 14,
+            CmdError::NotAtDock => 15,
         }
     }
 }
@@ -1617,6 +1620,20 @@ impl Game {
     // -----------------------------------------------------------------------
     // Units
 
+    /// Is (x, y) on or right next to a fish shoal (within `SHOAL_REACH` of
+    /// a shoal tile's middle)?
+    pub fn on_shoal(&self, x: f32, y: f32) -> bool {
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        (cy - 2..=cy + 2).any(|ty| {
+            (cx - 2..=cx + 2).any(|tx| {
+                self.map.inside(tx, ty)
+                    && self.map.dep_at[self.map.idx(tx, ty)] >= 0
+                    && self.deps[self.map.dep_at[self.map.idx(tx, ty)] as usize].kind == Dep::Fish
+                    && (tx as f32 + 0.5 - x).hypot(ty as f32 + 0.5 - y) <= SHOAL_REACH
+            })
+        })
+    }
+
     /// Is unit `i` lying at one of its owner's finished docks?
     pub fn at_dock(&self, i: usize) -> bool {
         let u = &self.ents[i];
@@ -2377,7 +2394,7 @@ impl Game {
         }
         // A submarine arms at one of its docks.
         if e.kind == Kind::NuclearSub && !self.at_dock(id as usize) {
-            return Err(CmdError::BadSpot);
+            return Err(CmdError::NotAtDock);
         }
         let owner = e.owner;
         self.pay(owner, NUKE_COST)?;

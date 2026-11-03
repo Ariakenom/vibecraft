@@ -251,8 +251,12 @@ fn beds_are_two_per_good() {
         assert_eq!((g.ents[h].goods.count_ones(), g.ents[h].beds()), (3, 6));
     }
     // A hut uses at most 3 goods, however many there are; a full hut
-    // with 3 goods has become a cottage, which uses all 4.
-    build(&mut g, Kind::FishingHut);
+    // with 3 goods has become a cottage, which uses all 4. (Fish from a
+    // fishing boat on the shoal nearest home.)
+    let c = &g.ents[g.home_capitol(1).unwrap()];
+    let (cx, cy) = (c.x, c.y);
+    let shoal = g.deps.iter().filter(|d| d.kind == Dep::Fish).min_by(|a, b| (a.center().0 - cx).hypot(a.center().1 - cy).total_cmp(&(b.center().0 - cx).hypot(b.center().1 - cy))).unwrap().center();
+    g.spawn_unit(Kind::FishingBoat, 1, shoal.0, shoal.1);
     g.resolve();
     for h in houses(&g, 1) {
         let e = &g.ents[h];
@@ -1126,12 +1130,13 @@ fn spot_away(g: &Game, kind: Kind, far: i32) -> (i32, i32) {
 fn seven_of_a_kind_is_a_target_not_a_rule() {
     let mut g = town(5, 1, 2);
     g.players[1].supply_pct = 1000;
+    g.players[1].cheat = true; // (eight barracks' wood: nothing holds slots)
     for _ in 0..MAX_SAME {
-        build(&mut g, Kind::FishingHut);
+        build(&mut g, Kind::Barracks);
     }
-    let (x, y) = spot(&g, Kind::FishingHut);
-    g.apply(1, Command::Place { ids: vec![], kind: Kind::FishingHut, tx: x, ty: y }).expect("an eighth is allowed");
-    assert_eq!(Game::max_of(Kind::FishingHut), MAX_SAME, "the computer keeps to seven");
+    let (x, y) = spot(&g, Kind::Barracks);
+    g.apply(1, Command::Place { ids: vec![], kind: Kind::Barracks, tx: x, ty: y }).expect("an eighth is allowed");
+    assert_eq!(Game::max_of(Kind::Barracks), MAX_SAME, "the computer keeps to seven");
 }
 
 #[test]

@@ -178,6 +178,9 @@ impl Game {
         let mut used = vec![[0u32; N_RES]; n];
         // In cheat mode nothing a player has holds slots.
         let cheat: Vec<bool> = self.players.iter().map(|p| p.cheat).collect();
+        // Fishing boats lying still on a shoal (worked out first: the loop
+        // below borrows every entity).
+        let fishing: Vec<bool> = self.ents.iter().map(|e| e.alive && e.kind == Kind::FishingBoat && e.order == Order::Idle && e.aboard == 0 && self.on_shoal(e.x, e.y)).collect();
         for e in self.ents.iter_mut().filter(|e| e.alive) {
             let o = e.owner as usize;
             let st = e.kind.stats();
@@ -187,9 +190,9 @@ impl Game {
                 e.builders_in = building[e.id as usize];
             }
             e.crewed = e.built >= 1.0 && e.crew >= st.workers;
-            // A fishing boat fishes while it lies still.
+            // A fishing boat fishes while it lies still on a shoal.
             if e.kind == Kind::FishingBoat {
-                e.crewed = e.order == Order::Idle && e.aboard == 0;
+                e.crewed = fishing[e.id as usize];
             }
             if e.crewed && st.consumes.is_empty() {
                 for &(r, k) in st.produces {

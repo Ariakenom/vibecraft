@@ -11,7 +11,7 @@ const SIM_MS = 50;
 const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
   FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29, Carrier: 30,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
-  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
+  LumberCamp: 70, Quarry: 71, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
   Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91,
   Tenement: 92, CoalMine: 93, SteelMill: 94, ExplosivesWorks: 95, Cannery: 96, CoalYard: 97, Press: 98, Factory: 99,
@@ -32,7 +32,7 @@ const isBigGun = k => k === K.AirDefense || k === K.Cannon || k === K.FieldGun |
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
-  [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture",
+  [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture",
   [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
   [K.Cottage]: "Cottage", [K.SheepFarm]: "Sheep Farm", [K.IronMine]: "Iron Mine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
   [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "Siege Workshop",
@@ -85,9 +85,8 @@ const DESC = {
   [K.Farm]: "Grows grain anywhere on open ground.",
   [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing. For more, a Sawmill from the Medieval era.",
   [K.Quarry]: "Cuts stone from rock next to it. For more, a Stone Works from the Gunpowder era.",
-  [K.FishingHut]: "Catches fish from the water next to it.",
   [K.Dock]: "Builds boats, which come out on the water next to it: fishing boats, transports and warships. Build it on the sea shore to reach other towns' coasts.",
-  [K.FishingBoat]: "Fishes wherever it lies still on the water: 3 fish while it's there. A person, like any unit. Moving it stops the catch.",
+  [K.FishingBoat]: "Fishes the fish shoals out on the water (the pale ripples; every harbour has one): 3 fish while it lies still on or next to a shoal. Moving it stops the catch. A person, like any unit.",
   [K.Transport]: "Carries up to 8 land units over the water. Right-click it with land units to board (it comes in to meet them); with it selected, right-click the shore to put them ashore there. If it sinks, everyone aboard is lost.",
   [K.Galley]: "An oared warship with archers on deck. Sinks boats, and shoots at anything near the shore.",
   [K.Cog]: "A sturdier Medieval warship with crossbows. Costs iron.",
@@ -147,7 +146,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore", "a fish shoal"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist", "On the way to board", "Sailing to put its cargo ashore"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
@@ -176,13 +175,12 @@ function setNames(o) {
 // The build menu has a page per era: Tab goes to the next page, Shift+Tab
 // back. Each page hands out the same hotkeys in order (`PAGE_KEYS`, which
 // avoid W, A, S and D, the camera keys). Buildings in tech-tree order:
-const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Barracks, K.Range, K.Stable, K.Tower,
+const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.Dock, K.HuntingLodge, K.Orchard, K.Pasture, K.Barracks, K.Range, K.Stable, K.Tower,
   K.Sawmill, K.SheepFarm, K.Weaver, K.IronMine, K.Brickworks, K.Bakery, K.Brewery, K.SiegeWorkshop, K.Capitol,
   K.Stoneworks, K.Kiln, K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
   K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield, K.AirDefense,
-  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo,
-  K.Dock]; // (last, so the Ancient page's hotkeys stay as they were: the dock is U)
+  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo]; // (the dock has the fishing hut's old place: F)
 const PAGE_KEYS = "QERTFGCVBYUIOJLN"; // the left hand's keys first (Y is a stretch)
 // Every building (for code that wants them all; keys are per page).
 const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
@@ -613,8 +611,8 @@ function drawMinimap() {
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep), every era's: fruit bushes, forest, stone,
   // horses, game, (5, water, has no dots), iron ore, clay, sheep hills,
-  // saltpeter, coal, oil, bauxite, uranium.
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a"], dot = Math.max(1.5, s);
+  // saltpeter, coal, oil, bauxite, uranium, fish shoals.
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a", "#cfe9f0"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
@@ -832,7 +830,7 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${sel.some(i => E(i, F.kind) === K.Capitol) ? `${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}` : ""}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 1394}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${sel.map(i => E(i, F.kind) === K.NuclearSub ? W.at_dock(E(i, F.id)) : "").join("")}|${sel.some(i => E(i, F.kind) === K.Capitol) ? `${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}` : ""}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
   if (!force && sig === selKey) return;
   // A button held down: rebuilding the panel now would swallow its click
   // (the button under the pointer is replaced before it's released).
@@ -908,7 +906,8 @@ function singleInfo(panel, i) {
   if (atk > 0) html += ` · attack <b>${atk}</b> · ${stat(k, 2) > 1.5 ? `range <b>${stat(k, 2)}</b>` : "melee"}`;
   html += `</div>`;
   if (!isBld(k)) {
-    const doing = k === K.FishingBoat && E(i, F.order) === 0 ? "Fishing: 3 fish while it lies still" : ORDER_TEXT[E(i, F.order)];
+    const doing = k !== K.FishingBoat || E(i, F.order) !== 0 ? ORDER_TEXT[E(i, F.order)]
+      : E(i, F.flags) & 1024 ? "Fishing: 3 fish while it lies here" : "No fish here: send it to a fish shoal (the pale ripples on the water)";
     if (owner === ME || observe) html += `<div class="statline">${doing}</div>`;
     if (isAir(k) && (owner === ME || observe)) html += E(i, F.residents) > 0
       ? `<div class="statline">Fuel <b>${E(i, F.residents)}</b> of ${E(i, F.beds)} s · refuels at an airfield or carrier</div>`
@@ -918,6 +917,13 @@ function singleInfo(panel, i) {
       : `<div class="statline bad">Out of ${k === K.Bomber ? "bombs" : "ammunition"}: it can't attack until it's back at an airfield or carrier.</div>`;
     if (k === K.Transport) html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} aboard${owner === ME && E(i, F.residents) > 0 ? " · right-click the shore to put them ashore" : ""}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
+    if (k === K.NuclearSub && (owner === ME || observe)) {
+      // Like a silo's, but it arms only while it lies at a dock.
+      const st = W.silo_state(id), docked = W.at_dock(id);
+      html += st === 1 ? `<div class="statline${docked ? "" : " bad"}">${docked ? "Arming a nuke" : "Arming paused: back to one of your docks to go on"} · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`
+        : st === 2 ? `<div class="statline">Armed: Launch (C), then click where it should fall.</div>`
+        : `<div class="statline">Empty: Arm a nuke (V)${docked ? "" : " at one of your docks"}.</div>`;
+    }
   } else if (E(i, F.flags) & 2) {
     const need = stat(k, 9), got = W.builders_in(id);
     html += got < need
@@ -1209,7 +1215,8 @@ function explain(code) {
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is free in the town square to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
+    13: "Nobody is free in the town square to train", 14: "Not yet: it needs every bed taken and all the goods it can use",
+    15: "A submarine arms its nuke only at one of your docks: sail it there first" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }

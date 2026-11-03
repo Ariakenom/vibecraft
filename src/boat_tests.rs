@@ -172,16 +172,51 @@ fn a_sunk_transport_takes_its_cargo_down() {
 fn fishing_boats_fish_while_they_lie_still() {
     let mut g = quiet(4, 2);
     g.players[1].cheat = false;
-    let (hx, hy) = harbour(&g, 1).unwrap();
+    let shoal = nearest_shoal(&g, 1);
     let fish = |g: &Game| g.players[1].supply[Res::Fish.idx()];
     let before = fish(&g);
-    let b = g.spawn_unit(Kind::FishingBoat, 1, hx as f32 + 0.5, hy as f32 + 0.5);
+    let b = g.spawn_unit(Kind::FishingBoat, 1, shoal.0, shoal.1);
     run(&mut g, 0.2);
-    assert_eq!(fish(&g), before + 3);
-    // Out to sea: no fish on the way.
-    g.order_move(b, 2.5, 2.5);
+    assert_eq!(fish(&g), before + 3, "a boat on a shoal makes 3 fish");
+    // Sailing: no fish on the way.
+    let (fx, fy) = water_between(&g, (shoal.0 as i32, shoal.1 as i32), 8, 14);
+    g.order_move(b, fx, fy);
     run(&mut g, 0.5);
     assert_eq!(fish(&g), before);
+    // Lying still on open water, away from any shoal: none either.
+    run(&mut g, 20.0);
+    let e = &g.ents[b as usize];
+    assert_eq!(e.order, Order::Idle);
+    if !g.on_shoal(e.x, e.y) {
+        assert_eq!(fish(&g), before, "fishing off a shoal");
+    }
+}
+
+/// The fish shoal nearest `p`'s Capitol.
+fn nearest_shoal(g: &Game, p: u8) -> (f32, f32) {
+    let c = &g.ents[g.home_capitol(p).unwrap()];
+    let (cx, cy) = (c.x, c.y);
+    g.deps.iter().filter(|d| d.kind == Dep::Fish).map(|d| d.center()).min_by(|a, b| (a.0 - cx).hypot(a.1 - cy).total_cmp(&(b.0 - cx).hypot(b.1 - cy))).expect("no shoal on the map")
+}
+
+/// Every start has a fish shoal in its harbour, on the open sea, and the
+/// same number of shoals as every other start (the map is symmetric).
+#[test]
+fn every_start_has_a_shoal_in_its_harbour() {
+    for seed in 0..30 {
+        for players in [2u8, 4] {
+            let g = Game::new(seed, 1, players);
+            let sea = sea_from(&g.map, 1, 1);
+            let shoals: Vec<_> = g.deps.iter().filter(|d| d.kind == Dep::Fish).collect();
+            assert!(shoals.iter().all(|d| g.map.terrain[g.map.idx(d.tx, d.ty)] == crate::map::WATER), "seed {seed}: a shoal on land");
+            assert!(shoals.len() >= players as usize * 5, "seed {seed}/{players}: only {} shoal tiles", shoals.len());
+            for p in 1..=players {
+                let c = &g.ents[g.home_capitol(p).unwrap()];
+                let near = shoals.iter().filter(|d| sea[g.map.idx(d.tx, d.ty)] && (d.center().0 - c.x).hypot(d.center().1 - c.y) < 18.0).count();
+                assert!(near >= 3, "seed {seed}/{players}: P{p} has {near} shoal tiles on the sea near home");
+            }
+        }
+    }
 }
 
 /// A dock's boats come out on the water.

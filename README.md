@@ -599,10 +599,12 @@ versions don't play together.
   aircraft and shoots down a nuke falling within 10 tiles of it, then
   reloads for 90 seconds: it fires 4 seconds before the nuke would land,
   and everyone sees its missile go up and the nuke burst in the air.
-- **Boats.** A **Dock** (Ancient, 2 wood) stands on the shore like a
-  fishing hut and builds boats, which come out on the water next to it. A
-  **fishing boat** (1 wood) makes 3 fish wherever it lies still (moving it
-  stops the catch). A **transport** (2 wood) carries up to 8 land units:
+- **Boats.** A **Dock** (Ancient, 2 wood) stands on the shore, next to water,
+  and builds boats, which come out on the water next to it. A
+  **fishing boat** (1 wood) makes 3 fish while it lies still on or next to a
+  **fish shoal** (moving it stops the catch). Shoals lie in every start's
+  harbour and along the sea between the towns; they're drawn as pale
+  ripples. There's no fishing hut any more: fish come from boats. A **transport** (2 wood) carries up to 8 land units:
   right-click it with them selected to board (an idle transport comes in to
   meet them), then select it and right-click the shore to put them ashore
   there; if it sinks, everyone aboard is lost. **Warships**, one for each
@@ -670,8 +672,8 @@ versions don't play together.
   Medieval, Shift+T Gunpowder, Shift+F Industrial, Shift+G Modern, Shift+C
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
-  quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
-  Y tower, U dock. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
+  quarry, F dock, G hunting lodge, C orchard, V barracks, B range,
+  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
   selected buildings, or disbands the selected units (units need a second press).
 - **The command panel:** era tabs at the top (for builders), then what the
   selection builds or trains, then a row of actions at the bottom where each

@@ -117,7 +117,7 @@ const NAVY: [Kind; 6] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad,
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 62] = [
+const PLAN: [(Kind, u32); 61] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -129,7 +129,6 @@ const PLAN: [(Kind, u32); 62] = [
     // A fourth, for slack: cottages eat every spare stone, and the Sawmill
     // (2 stone) that gets the town out of its wood ceiling needs some.
     (Kind::Quarry, 4),
-    (Kind::FishingHut, 1),
     (Kind::HuntingLodge, 1),
     (Kind::Orchard, 1),
     // A dock, where there's water: fishing boats, and a few warships.
@@ -960,6 +959,22 @@ impl Game {
                     c.spare -= 1;
                     ailog!("navy: P{me} trains a {u:?}");
                 }
+            }
+        }
+        // Fishing boats fish only on a shoal: an idle one elsewhere goes to
+        // the nearest shoal tile (that another of ours isn't lying on).
+        let shoals: Vec<(f32, f32)> = self.deps.iter().filter(|d| d.kind == Dep::Fish).map(|d| d.center()).collect();
+        for i in 0..self.ents.len() {
+            let e = &self.ents[i];
+            if !e.alive || e.owner != me || e.kind != Kind::FishingBoat || e.order != Order::Idle || self.on_shoal(e.x, e.y) {
+                continue;
+            }
+            let (x, y) = (e.x, e.y);
+            let taken = |p: (f32, f32)| self.ents.iter().any(|o| o.alive && o.kind == Kind::FishingBoat && o.id != e.id && (o.x - p.0).hypot(o.y - p.1) < 1.0);
+            let best = shoals.iter().copied().filter(|&p| !taken(p)).min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)));
+            if let Some((sx, sy)) = best {
+                let id = e.id;
+                self.order_move(id, sx, sy);
             }
         }
         // Enemy boats near home: the warships go for them.
