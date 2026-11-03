@@ -248,9 +248,16 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             // The sea all round: `SEA` tiles of water along every edge,
             // shelving up to the land (a little ragged).
             let edge = x.min(y).min(w - 1 - x).min(h - 1 - y);
+            // Near a start the coast stays as narrow as it was before boats
+            // (a few tiles), so the start's deposits keep their ground;
+            // the open sea widens away from them, between the towns.
             if edge < SEA + 5 {
                 let wobble = hash(cx, cy, seed ^ 0x5EA) * 0.03;
-                ht = ht.min(water_at - 0.04 + 0.035 * (edge - SEA) as f32 + wobble);
+                let near = all_bases.iter().map(|&b| dist(p, b)).fold(f32::MAX, f32::min);
+                let open = ((near - 26.0) / 10.0).clamp(0.0, 1.0);
+                let narrow = 0.24 + 0.035 * edge as f32;
+                let wide = water_at - 0.04 + 0.035 * (edge - SEA) as f32;
+                ht = ht.min(narrow + (wide - narrow) * open + wobble);
             }
             terrain[i] = if ht < water_at {
                 WATER
@@ -339,14 +346,14 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             }
         }
     }
-    // Straight out to the nearest edge, three tiles wide, until open sea.
+    // Straight out to the nearest edge, three tiles wide, to the sea.
     let (sx, sy) = if pond.0.min(w - 1 - pond.0) < pond.1.min(h - 1 - pond.1) {
         (if pond.0 < w / 2 { -1 } else { 1 }, 0)
     } else {
         (0, if pond.1 < h / 2 { -1 } else { 1 })
     };
     let (mut x, mut y) = pond;
-    while x.min(y).min(w - 1 - x).min(h - 1 - y) > SEA - 1 {
+    while x.min(y).min(w - 1 - x).min(h - 1 - y) > 1 {
         x += sx;
         y += sy;
         for k in -1..=1 {
