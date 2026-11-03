@@ -1,0 +1,71 @@
+// Boats in the page: a dock trains them, they sail, a transport takes
+// soldiers aboard and the right-click cursor says so. With SHOT=path, also
+// saves a picture of the harbour full of boats.
+import { browser, open, check, failed } from "./lib.mjs";
+const b = await browser();
+const shot = process.env.SHOT;
+const page = await open(b, "", { draw: !!shot, w: 1100, h: 700 });
+const r = await page.evaluate(() => {
+  newGame(4, 0, 2); running = true; paused = true; Rec.real = true;
+  W.set_view(1, 1); W.debug_set_era(5); readWorld();
+  // The harbour: the water nearest our Capitol.
+  const w = W.map_w(), h = W.map_h(), ter = new Uint8Array(mem.buffer, W.terrain_ptr(), w * h);
+  let cap = -1;
+  for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === K.Capitol) cap = i;
+  const cx = E(cap, F.x), cy = E(cap, F.y);
+  let best = null;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (ter[y * w + x] !== 1) continue;
+    const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+    if (!best || d < best[0]) best = [d, x, y];
+  }
+  const [, hx, hy] = best;
+  const wet = (x, y) => x >= 0 && y >= 0 && x < w && y < h && ter[y * w + x] === 1;
+  const ids = {};
+  // Boats on the water round the harbour.
+  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer];
+  let n = 0;
+  for (let r = 0; r < 8 && n < kinds.length; r++) for (let dy = -r; dy <= r && n < kinds.length; dy++) for (let dx = -r; dx <= r && n < kinds.length; dx++) {
+    const x = hx + dx * 2, y = hy + dy * 2;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) === r && wet(x, y) && wet(x + 1, y) && wet(x, y + 1)) ids[kinds[n]] = W.debug_spawn(kinds[n++], x, y);
+  }
+  // Land next to the transport, and soldiers there.
+  const t = ids[K.Transport];
+  readWorld();
+  const ti = byId.get(t), tx = E(ti, F.x), ty = E(ti, F.y);
+  let shore = null;
+  for (let r = 1; r < 8 && !shore; r++) for (let dy = -r; dy <= r && !shore; dy++) for (let dx = -r; dx <= r && !shore; dx++) {
+    const x = Math.floor(tx) + dx, y = Math.floor(ty) + dy;
+    if (x >= 0 && y >= 0 && x < w && y < h && ter[y * w + x] !== 1 && ter[y * w + x] !== 4) shore = [x, y];
+  }
+  const men = [0, 1].map(k => W.debug_spawn(K.Swordsman, shore[0], shore[1]));
+  readWorld();
+  const cursorBoard = intentAt(men, tx, ty);
+  issue({ c: 1, ids: men, x: tx, y: ty });
+  for (let k = 0; k < 20 * 15; k++) W.tick();
+  readWorld();
+  const visibleMen = men.filter(id => byId.has(id)).length;
+  const aboard = (() => { const i = byId.get(t); return i == null ? -1 : E(i, F.residents); })();
+  const cursorUnload = intentAt([t], cx, cy);
+  centerOn(hx, hy); cam.dist = 18;
+  return { n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
+});
+check(r.n === 7, `seven kinds of boat on the water (${r.n})`);
+check(r.cursorBoard === 7, `right-clicking a transport with soldiers means board (${r.cursorBoard})`);
+check(r.visibleMen === 0 && r.aboard === 2, `the soldiers went aboard and aren't drawn (${r.visibleMen} drawn, ${r.aboard} aboard)`);
+check(r.cursorUnload === 8, `right-clicking land with a loaded transport means put ashore (${r.cursorUnload})`);
+check(r.trains === 7 && r.name === "Galleon", "the dock trains seven boats");
+if (shot) {
+  await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: 120000 }).catch(() => {});
+  await page.evaluate(() => {
+    document.getElementById("boot")?.remove();
+    for (const el of document.querySelectorAll("#menu, #lobby, #start, .overlay")) el.hidden = true;
+    readWorld(); for (let k = 0; k < 3; k++) render3d(1, performance.now() + k * 16, 0.016);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
+  (await import("fs")).writeFileSync(shot, Buffer.from(data, "base64"));
+}
+check(page.errors.length === 0, "no page errors");
+await b.close();
+process.exit(failed() ? 1 : 0);

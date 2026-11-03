@@ -36,7 +36,7 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 13: cheat mode.
 /// 14: maps vary more from seed to seed (the same seed draws another map).
 /// 15: an air defense fires at a nuke before it lands (`Nuke::shot`).
-const VERSION: u32 = 15;
+const VERSION: u32 = 16;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -103,6 +103,14 @@ impl W {
             Order::Enlist(id) => {
                 self.u8(8);
                 self.u32(id);
+            }
+            Order::Board(id) => {
+                self.u8(9);
+                self.u32(id);
+            }
+            Order::Unload { x, y } => {
+                self.u8(10);
+                self.pt((x, y));
             }
         }
     }
@@ -179,6 +187,11 @@ impl R<'_> {
             6 => Order::Build(self.u32()?),
             7 => Order::Work(self.u32()?),
             8 => Order::Enlist(self.u32()?),
+            9 => Order::Board(self.u32()?),
+            10 => {
+                let (x, y) = self.pt()?;
+                Order::Unload { x, y }
+            }
             _ => return None,
         })
     }
@@ -270,6 +283,7 @@ impl Game {
             w.u8(e.nuke);
             w.u32(e.goods);
             w.bool(e.starting);
+            w.u32(e.aboard);
         }
 
         w.len(self.players.len());
@@ -372,7 +386,7 @@ impl Game {
             deps.push(Deposit { kind: Dep::from_u8(r.u8()?)?, tx: r.i32()?, ty: r.i32()? });
         }
 
-        let nents = r.len(56)?;
+        let nents = r.len(60)?;
         let mut ents = Vec::with_capacity(nents);
         for i in 0..nents {
             let id = r.u32()?;
@@ -422,6 +436,7 @@ impl Game {
             e.nuke = r.u8()?.min(2);
             e.goods = r.u32()?;
             e.starting = r.bool()?;
+            e.aboard = r.u32()?;
             ents.push(e);
         }
 
@@ -505,9 +520,9 @@ impl Game {
         let ok_ent = |id: u32| (id as usize) < ents.len();
         let refs_ok = ents.iter().all(|e| match e.order {
             Order::Attack { target, .. } => ok_ent(target),
-            Order::Build(id) | Order::Work(id) | Order::Enlist(id) => ok_ent(id),
+            Order::Build(id) | Order::Work(id) | Order::Enlist(id) | Order::Board(id) => ok_ent(id),
             _ => true,
-        }) && proj.iter().all(|p| ok_ent(p.target) && ok_ent(p.attacker))
+        }) && ents.iter().all(|e| e.aboard as usize <= ents.len()) && proj.iter().all(|p| ok_ent(p.target) && ok_ent(p.attacker))
             && map.dep_at.iter().all(|&v| v < deps.len() as i32)
             && map.bld_at.iter().all(|&v| v < ents.len() as i32)
             && map.dep_at.iter().chain(&map.bld_at).all(|&v| v >= -1)

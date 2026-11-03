@@ -9,6 +9,7 @@ const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
 const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
+  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
@@ -16,16 +17,18 @@ const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossb
   Tenement: 92, CoalMine: 93, SteelMill: 94, ExplosivesWorks: 95, Cannery: 96, CoalYard: 97, Press: 98, Factory: 99,
   Apartment: 100, OilWell: 101, BauxiteMine: 102, PowerPlant: 103, HaberBosch: 104, RadioFactory: 105, TankWorks: 106, Airfield: 107,
   TowerBlock: 108, UraniumMine: 109, Reactor: 110, CarPlant: 111, TvPlant: 112, MissileSilo: 113,
-  Sawmill: 114, Stoneworks: 115, AirDefense: 116, Kiln: 117 };
+  Sawmill: 114, Stoneworks: 115, AirDefense: 116, Kiln: 117, Dock: 118 };
 // Aircraft fly above everything (drawn high up; see defs.rs Kind::is_air).
 const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
+// Boats sail on the water (see defs.rs Kind::is_naval).
+const isNaval = k => k >= K.FishingBoat && k <= K.Destroyer;
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
 const isGun = k => k === K.AirDefense || k === K.Musketeer || k === K.Dragoon || k === K.Cannon || k === K.Rifleman || k === K.MachineGunner || k === K.FieldGun ||
-  k === K.Infantry || k === K.Tank || k === K.Fighter || k === K.Jet || k === K.RocketArtillery;
+  k === K.Infantry || k === K.Tank || k === K.Fighter || k === K.Jet || k === K.RocketArtillery || k === K.Galleon || k === K.Ironclad || k === K.Destroyer;
 // Big guns: a boom, a big puff, a shell you can see.
-const isBigGun = k => k === K.AirDefense || k === K.Cannon || k === K.FieldGun || k === K.Tank || k === K.RocketArtillery;
+const isBigGun = k => k === K.AirDefense || k === K.Cannon || k === K.FieldGun || k === K.Tank || k === K.RocketArtillery || k === K.Galleon || k === K.Ironclad || k === K.Destroyer;
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
@@ -44,7 +47,9 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.HaberBosch]: "Haber–Bosch Plant", [K.RadioFactory]: "Radio Factory", [K.TankWorks]: "Tank Works", [K.Airfield]: "Airfield",
   [K.RocketArtillery]: "Rocket Artillery", [K.Jet]: "Jet", [K.TowerBlock]: "Tower Block", [K.UraniumMine]: "Uranium Mine",
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo",
-  [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense" };
+  [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense",
+  [K.Dock]: "Dock", [K.FishingBoat]: "Fishing Boat", [K.Transport]: "Transport", [K.Galley]: "Galley", [K.Cog]: "War Cog",
+  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits in the town square. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
@@ -81,6 +86,14 @@ const DESC = {
   [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing. For more, a Sawmill from the Medieval era.",
   [K.Quarry]: "Cuts stone from rock next to it. For more, a Stone Works from the Gunpowder era.",
   [K.FishingHut]: "Catches fish from the water next to it.",
+  [K.Dock]: "Builds boats, which come out on the water next to it: fishing boats, transports and warships. Build it on the sea shore to reach other towns' coasts.",
+  [K.FishingBoat]: "Fishes wherever it lies still on the water: 3 fish while it's there. A person, like any unit. Moving it stops the catch.",
+  [K.Transport]: "Carries up to 8 land units over the water. Right-click it with land units to board (it comes in to meet them); with it selected, right-click the shore to put them ashore there. If it sinks, everyone aboard is lost.",
+  [K.Galley]: "An oared warship with archers on deck. Sinks boats, and shoots at anything near the shore.",
+  [K.Cog]: "A sturdier Medieval warship with crossbows. Costs iron.",
+  [K.Galleon]: "A gun ship: broadsides that smash boats and bombard the coast, hurting everything around where they land. Costs iron and gunpowder.",
+  [K.Ironclad]: "A steam-driven armoured ship with heavy guns. Long reach; flattens the waterfront.",
+  [K.Destroyer]: "Fast and tough, with quick-firing guns that also shoot at aircraft. Costs steel, oil and explosives.",
   [K.HuntingLodge]: "Hunts the game grazing next to it.",
   [K.Orchard]: "Picks fruit from the wild bushes next to it.",
   [K.Pasture]: "Breeds horses from the wild herd next to it.",
@@ -132,7 +145,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
 const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore"];
-const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist"];
+const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist", "On the way to board", "Sailing to put its cargo ashore"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
@@ -165,7 +178,8 @@ const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.Hunt
   K.Stoneworks, K.Kiln, K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
   K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield, K.AirDefense,
-  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo];
+  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo,
+  K.Dock]; // (last, so the Ancient page's hotkeys stay as they were: the dock is U)
 const PAGE_KEYS = "QERTFGCVBYUIOJLN"; // the left hand's keys first (Y is a stretch)
 // Every building (for code that wants them all; keys are per page).
 const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
@@ -185,7 +199,8 @@ function buildMenu() {
 const TRAIN_KEYS = PAGE_KEYS; // enough for every unit when several kinds of building are selected
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
-  [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet] };
+  [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet],
+  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -252,6 +267,12 @@ const CURSORS = {
 };
 
 CURSORS[6] = CURSORS[4]; // 6: send workers to work at a producer
+// 7 go aboard a transport: an anchor
+CURSORS[7] = svgCursor(`<path d="M16 6v22M9 12h14M5 19c1 6 6 9 11 9s10-3 11-9" fill="none" stroke="${DK}" stroke-width="5" stroke-linecap="round"/>
+  <path d="M16 6v22M9 12h14M5 19c1 6 6 9 11 9s10-3 11-9" fill="none" stroke="#d9c9a8" stroke-width="2.4" stroke-linecap="round"/><circle cx="16" cy="5" r="3" fill="none" stroke="${DK}" stroke-width="2"/>`, 16, 16);
+// 8 put a transport's cargo ashore: an arrow down onto the land
+CURSORS[8] = svgCursor(`<path d="M16 3v16M9 13l7 7 7-7" fill="none" stroke="${DK}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16 3v16M9 13l7 7 7-7" fill="none" stroke="#7be864" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 28h26" stroke="${DK}" stroke-width="4" stroke-linecap="round"/><path d="M3 28h26" stroke="#c8a25f" stroke-width="2" stroke-linecap="round"/>`, 16, 28);
 
 // ===========================================================================
 // Boot the WebAssembly module
@@ -878,7 +899,9 @@ function singleInfo(panel, i) {
   if (atk > 0) html += ` · attack <b>${atk}</b> · ${stat(k, 2) > 1.5 ? `range <b>${stat(k, 2)}</b>` : "melee"}`;
   html += `</div>`;
   if (!isBld(k)) {
-    if (owner === ME || observe) html += `<div class="statline">${ORDER_TEXT[E(i, F.order)]}</div>`;
+    const doing = k === K.FishingBoat && E(i, F.order) === 0 ? "Fishing: 3 fish while it lies still" : ORDER_TEXT[E(i, F.order)];
+    if (owner === ME || observe) html += `<div class="statline">${doing}</div>`;
+    if (k === K.Transport) html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} aboard${owner === ME && E(i, F.residents) > 0 ? " · right-click the shore to put them ashore" : ""}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
   } else if (E(i, F.flags) & 2) {
     const need = stat(k, 9), got = W.builders_in(id);

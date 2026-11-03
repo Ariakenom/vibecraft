@@ -92,7 +92,9 @@ impl Pathfinder {
 
     /// Returns tile coordinates from (but not including) the start tile to the goal.
     /// If the goal can't be reached, returns a path to the closest tile we found.
-    pub fn find(&mut self, map: &Map, sx: f32, sy: f32, goal: &Goal) -> Vec<(i32, i32)> {
+    /// Boats (`naval`) go over water, everyone else over land.
+    pub fn find(&mut self, map: &Map, naval: bool, sx: f32, sy: f32, goal: &Goal) -> Vec<(i32, i32)> {
+        let passable = |x: i32, y: i32| map.passable_for(naval, x, y);
         self.generation += 1;
         let stamp = self.generation;
         self.heap.clear();
@@ -135,12 +137,12 @@ impl Pathfinder {
             }
             for (dx, dy) in DIRS {
                 let (nx, ny) = (x + dx, y + dy);
-                if !map.passable(nx, ny) {
+                if !passable(nx, ny) {
                     continue;
                 }
                 let diagonal = dx != 0 && dy != 0;
                 // No cutting corners past walls.
-                if diagonal && (!map.passable(x + dx, y) || !map.passable(x, y + dy)) {
+                if diagonal && (!passable(x + dx, y) || !passable(x, y + dy)) {
                     continue;
                 }
                 let ng = self.g[i] + if diagonal { std::f32::consts::SQRT_2 } else { 1.0 };

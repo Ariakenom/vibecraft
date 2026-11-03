@@ -153,6 +153,8 @@ pub enum Class {
     Mounted,
     Siege,
     Building,
+    /// Warships: they fight anything near the water and bombard the shore.
+    Naval,
 }
 
 /// Every kind of entity. Units are numbered from 0, buildings from 64
@@ -183,6 +185,16 @@ pub enum Kind {
     Bomber = 18,
     RocketArtillery = 19,
     Jet = 20,
+    /// Boats sail on water only. A fishing boat is a person who fishes
+    /// wherever it lies still; a transport carries land units; the rest
+    /// are warships, one for every era but the last.
+    FishingBoat = 21,
+    Transport = 22,
+    Galley = 23,
+    Cog = 24,
+    Galleon = 25,
+    Ironclad = 26,
+    Destroyer = 27,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -241,6 +253,8 @@ pub enum Kind {
     /// Modern: shoots at aircraft, and shoots down nukes falling near it.
     AirDefense = 116,
     Kiln = 117,
+    /// Stands on the shore and builds boats, which come out on the water.
+    Dock = 118,
 }
 
 /// Kinds numbered from here on are buildings.
@@ -332,6 +346,19 @@ static BOMBER: Stats = unit(260.0, 140.0, 1.0, 4.0, 4.0, 9.0, &[(Aluminum, 2), (
 // Atomic: rocket artillery outranges everything; jets are faster, tougher fighters.
 static ROCKET_ARTILLERY: Stats = unit(200.0, 70.0, 13.0, 4.0, 2.2, 10.0, &[(Steel, 2), (Oil, 1), (Explosives, 2)], 36.0);
 static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
+// Boats. A fishing boat makes fish while it lies still (it's crewed then,
+// see `Game::resolve`); a transport carries `TRANSPORT_CAPACITY` land
+// units. Warships shoot from the water, so they hold the coasts: galleys
+// (archers on deck), cogs, galleons and ironclads (guns, shells), destroyers
+// (fast, and they shoot at aircraft).
+//                                       hp   atk  range  cd   speed sight cost          time
+static FISHING_BOAT: Stats = Stats { produces: &[(Fish, 3)], ..unit(70.0, 0.0, 0.0, 1.0, 2.4, 6.0, &[(Wood, 1)], 14.0) };
+static TRANSPORT: Stats = unit(200.0, 0.0, 0.0, 1.0, 2.8, 7.0, &[(Wood, 2)], 18.0);
+static GALLEY: Stats = unit(200.0, 7.0, 5.0, 1.8, 2.6, 8.0, &[(Wood, 2)], 20.0);
+static COG: Stats = unit(300.0, 10.0, 6.0, 1.9, 2.5, 8.0, &[(Wood, 2), (Iron, 1)], 24.0);
+static GALLEON: Stats = unit(420.0, 40.0, 8.0, 4.0, 2.4, 9.0, &[(Wood, 3), (Iron, 1), (Gunpowder, 1)], 32.0);
+static IRONCLAD: Stats = unit(700.0, 60.0, 10.0, 4.0, 2.6, 10.0, &[(Steel, 2), (Coal, 1), (Explosives, 1)], 36.0);
+static DESTROYER: Stats = unit(800.0, 30.0, 9.0, 1.4, 3.6, 11.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, and
 // has `CAPITOL_BEDS` beds, so a game can start with nobody and no houses:
@@ -430,6 +457,11 @@ static KILN: Stats = extractor(900.0, &[(Stone, 4)], &[(Brick, 20)], 2, Some(Dep
 // any aircraft in one hit (a bomber has 260 health).
 static AIR_DEFENSE: Stats = Stats { attack: 320.0, range: AIR_DEFENSE_COVER, cooldown: 5.0, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
 static MISSILE_SILO: Stats = Stats { builders: 2, ..building(1500.0, 6.0, &[(Steel, 4), (Brick, 2)], 60.0, 3) };
+// Next to water, like a fishing hut. Its boats come out on that water.
+static DOCK: Stats = Stats { needs_deposit: Some(Dep::Water), ..building(700.0, 7.0, &[(Wood, 2)], 25.0, 2) };
+
+/// Land units a transport carries at once.
+pub const TRANSPORT_CAPACITY: usize = 8;
 
 /// The nuke: a missile silo arms one (holding these slots while it waits),
 /// then it can be launched at any spot on the map. Everyone sees it coming.
@@ -465,6 +497,8 @@ pub fn splash_radius(k: Kind) -> f32 {
         Kind::FieldGun => 1.6,
         Kind::RocketArtillery => 2.2,
         Kind::Bomber => 2.0,
+        Kind::Galleon => 1.0,
+        Kind::Ironclad => 1.4,
         _ => 0.0,
     }
 }
@@ -510,10 +544,10 @@ pub const LAST_ERA: u8 = 5;
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 73] = {
+    pub const ALL: [Kind; 81] = {
         use Kind::*;
         [
-            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture,
+            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Destroyer, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, Dock, HuntingLodge, Orchard, Pasture,
             Barracks, Range, Stable, Tower, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
             ExplosivesWorks, Cannery, CoalYard, Press, Factory, Infantry, Tank, Fighter, Bomber, Apartment, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
             RocketArtillery, Jet, TowerBlock, UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
@@ -602,6 +636,14 @@ impl Kind {
             Stoneworks => &STONEWORKS,
             AirDefense => &AIR_DEFENSE,
             Kiln => &KILN,
+            FishingBoat => &FISHING_BOAT,
+            Transport => &TRANSPORT,
+            Galley => &GALLEY,
+            Cog => &COG,
+            Galleon => &GALLEON,
+            Ironclad => &IRONCLAD,
+            Destroyer => &DESTROYER,
+            Dock => &DOCK,
         }
     }
 
@@ -634,10 +676,10 @@ impl Kind {
     /// Every buildable building, in tech-tree order (used by the UI and AI).
     /// Cottages aren't built: huts become cottages.
     #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 48] = {
+    pub const BUILDABLE: [Kind; 49] = {
         use Kind::*;
         [
-            Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
+            Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, Dock, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
             Carpenter, Printer, Circus, CoalMine, SteelMill, ExplosivesWorks, Cannery, CoalYard, Press, Factory, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
             UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
         ]
@@ -654,6 +696,8 @@ impl Kind {
             Horseman | Knight | Dragoon | Tank => Class::Mounted,
             Trebuchet | Cannon | FieldGun | Bomber | RocketArtillery => Class::Siege,
             Fighter | Jet => Class::Air,
+            Galley | Cog | Galleon | Ironclad | Destroyer => Class::Naval,
+            FishingBoat | Transport => Class::Civilian,
             _ => Class::Building,
         }
     }
@@ -675,7 +719,7 @@ impl Kind {
     }
 
     pub fn is_military(self) -> bool {
-        matches!(self.class(), Class::Line | Class::Ranged | Class::Mounted | Class::Siege | Class::Air)
+        matches!(self.class(), Class::Line | Class::Ranged | Class::Mounted | Class::Siege | Class::Air | Class::Naval)
     }
 
     /// The era a kind belongs to: 0 Ancient … 5 Atomic. Players can build
@@ -683,10 +727,10 @@ impl Kind {
     pub fn era(self) -> u8 {
         use Kind::*;
         match self {
-            Horseman | Stable | Pasture | Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
-            Stoneworks | Kiln | Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
-            Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
-            Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,
+            Cog | Horseman | Stable | Pasture | Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
+            Galleon | Stoneworks | Kiln | Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
+            Ironclad | Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
+            Destroyer | Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,
             RocketArtillery | Jet | TowerBlock | UraniumMine | Reactor | CarPlant | TvPlant | MissileSilo => 5,
             _ => 0,
         }
@@ -711,10 +755,20 @@ impl Kind {
         matches!(self, Kind::Fighter | Kind::Bomber | Kind::Jet)
     }
 
+    /// Does it sail? Boats move on water only, land units on land only.
+    pub fn is_naval(self) -> bool {
+        matches!(self, Kind::FishingBoat | Kind::Transport | Kind::Galley | Kind::Cog | Kind::Galleon | Kind::Ironclad | Kind::Destroyer)
+    }
+
     /// Can it shoot at aircraft? Fighters, machine guns, modern infantry,
-    /// towers and the Capitol.
+    /// destroyers, towers and the Capitol.
     pub fn hits_air(self) -> bool {
-        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Tower | Kind::Capitol | Kind::AirDefense)
+        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Destroyer | Kind::Tower | Kind::Capitol | Kind::AirDefense)
+    }
+
+    /// Can a transport carry it? Anything that walks.
+    pub fn boards(self) -> bool {
+        !self.is_building() && !self.is_air() && !self.is_naval()
     }
 
     /// Can `self` attack `target` at all?
@@ -741,6 +795,7 @@ impl Kind {
             Kind::Factory => &[Kind::FieldGun, Kind::RocketArtillery],
             Kind::Stable => &[Kind::Horseman, Kind::Knight, Kind::Dragoon],
             Kind::SiegeWorkshop => &[Kind::Trebuchet, Kind::Cannon],
+            Kind::Dock => &[Kind::FishingBoat, Kind::Transport, Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Destroyer],
             _ => &[],
         }
     }
@@ -758,6 +813,9 @@ impl Kind {
             Kind::Tank => 0.48,
             Kind::Fighter | Kind::Bomber | Kind::Jet | Kind::RocketArtillery => 0.45,
             Kind::Worker => 0.28,
+            Kind::FishingBoat => 0.38,
+            Kind::Transport | Kind::Galley | Kind::Cog => 0.48,
+            Kind::Galleon | Kind::Ironclad | Kind::Destroyer => 0.55,
             _ => 0.32,
         }
     }
@@ -770,6 +828,13 @@ impl Kind {
 pub fn damage_mult(attacker: Kind, target: Kind) -> f32 {
     use Class::*;
     match (attacker.class(), target.class()) {
+        // Boats: big guns and towers from the shore hurt them, swords and
+        // spears hardly reach; warships sink boats and bombard the coast.
+        (Siege, _) if target.is_naval() => 1.5,
+        (Building, _) if target.is_naval() => 1.3,
+        (Line | Mounted, _) if target.is_naval() => 0.5,
+        (Naval, _) if target.is_naval() => 1.5,
+        (Naval, Building) => 1.2,
         (Line, Mounted) => 2.5,
         (Mounted, Ranged) => 2.0,
         (Ranged, Line) => 1.5,

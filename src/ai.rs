@@ -108,11 +108,16 @@ const SCOUT_KEEP_AWAY: f32 = 26.0;
 const LOW_MATERIAL: i32 = 4;
 /// Foundations near home the computer builds at once.
 const PARALLEL: usize = 4;
+/// Fishing boats the computer keeps, and warships at each difficulty.
+const FISHING_BOATS: usize = 2;
+const WARSHIPS: [usize; 3] = [0, 2, 4];
+/// Warships, oldest era first.
+const NAVY: [Kind; 5] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Destroyer];
 
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 61] = [
+const PLAN: [(Kind, u32); 62] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -127,6 +132,8 @@ const PLAN: [(Kind, u32); 61] = [
     (Kind::FishingHut, 1),
     (Kind::HuntingLodge, 1),
     (Kind::Orchard, 1),
+    // A dock, where there's water: fishing boats, and a few warships.
+    (Kind::Dock, 1),
     // Medieval: iron for the army, then the new house goods.
     (Kind::Sawmill, 1),
     (Kind::Pasture, 1),
@@ -278,6 +285,9 @@ impl Game {
             let need = pl.used[res.idx()] as i32 + margin - others;
             return hard.min((need.max(0) as usize).div_ceil(out as usize));
         }
+        if kind == Kind::Dock {
+            return 1;
+        }
         if kind == Kind::Farm || hard == usize::MAX || matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Tower) {
             return hard;
         }
@@ -314,6 +324,7 @@ impl Game {
         let style = &STYLES[self.ais[me as usize].difficulty.min(2) as usize];
         let next = self.ai_economy(&mut c);
         self.ai_army(style, next, &mut c);
+        self.ai_navy(next, &mut c);
         self.ai_scout(&mut c);
         self.ai_fight(&c);
         self.ai_nuke(me, c.home);
@@ -379,7 +390,7 @@ impl Game {
                 if e.built < 1.0 {
                     c.unfinished.push(e.id);
                 }
-            } else if e.kind != Kind::Worker && Some(e.id) != scout {
+            } else if e.kind != Kind::Worker && !e.kind.is_naval() && Some(e.id) != scout {
                 c.army.push(e.id);
             }
         }
@@ -460,7 +471,7 @@ impl Game {
             // Soldiers' buildings only from a surplus: what `ai_free_up`
             // tears down for a house must not be rebuilt before the house
             // has used the room.
-            if matches!(kind, Kind::Tower | Kind::Range | Kind::Stable | Kind::SiegeWorkshop) || (n >= 2 && matches!(kind, Kind::Barracks | Kind::Capitol)) {
+            if matches!(kind, Kind::Tower | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Dock) || (n >= 2 && matches!(kind, Kind::Barracks | Kind::Capitol)) {
                 if kind.stats().cost.iter().any(|&(r, k)| p.free(r) < k as i32 + LUXURY_RESERVE) {
                     continue;
                 }
@@ -643,7 +654,7 @@ impl Game {
                 Kind::Barracks => g.count_of(me, e.kind) > 1 && e.queue.is_empty(),
                 // Luxuries when a house upgrade has waited for stone: the
                 // plan doesn't rebuild them meanwhile (see `hold`).
-                Kind::Range | Kind::Stable | Kind::SiegeWorkshop => e.queue.is_empty(),
+                Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Dock => e.queue.is_empty(),
                 Kind::Tower => true,
                 // The Kiln (4 stone) makes three times a Brickworks' bricks,
                 // and the old ones hold the stone it is waiting for.
@@ -674,10 +685,14 @@ impl Game {
     /// tenth swordsman. The one that holds most of `r`, never the last few.
     fn ai_disband_one(&self, me: u8, r: Res) -> Option<u32> {
         const KEEP_SOLDIERS: u32 = 14;
+        let held = |k: Kind| k.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
+        // Boats first: the town's next era is worth more than a fishing boat.
+        if let Some(b) = self.ents.iter().rev().find(|e| e.alive && e.owner == me && e.kind.is_naval() && held(e.kind) > 0 && !matches!(e.order, Order::Attack { .. })) {
+            return Some(b.id);
+        }
         if self.players[me as usize].soldiers <= KEEP_SOLDIERS {
             return None;
         }
-        let held = |k: Kind| k.stats().cost.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
         // Wherever it stands (an army out on watch held all the iron the
         // steel mills needed), as long as it isn't fighting.
         self.ents
@@ -879,10 +894,10 @@ impl Game {
         let producers: Vec<u32> = self
             .ents
             .iter()
-            .filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind != Kind::Capitol && !e.kind.trains().is_empty() && e.queue.len() < style.queue)
+            .filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind != Kind::Capitol && e.kind != Kind::Dock && !e.kind.trains().is_empty() && e.queue.len() < style.queue)
             .map(|e| e.id)
             .collect();
-        let queued: usize = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind != Kind::Capitol).map(|e| e.queue.len()).sum();
+        let queued: usize = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind != Kind::Capitol && e.kind != Kind::Dock).map(|e| e.queue.len()).sum();
         let mut army = c.army.len() + queued;
         for b in producers {
             let pl = self.players[me as usize];
@@ -910,6 +925,54 @@ impl Game {
                 c.spare -= 1;
             }
         }
+    }
+
+    /// The dock: a couple of fishing boats, then warships (Normal and Hard)
+    /// once there's an army ashore. They wait by the dock, fight what comes
+    /// near (`do_idle`) and go out with the attack waves (`ai_fight`).
+    /// Warships take on enemy boats near home.
+    fn ai_navy(&mut self, next: Option<Kind>, c: &mut Census) {
+        let me = c.me;
+        let Some(dock) = self.ents.iter().position(|e| e.alive && e.owner == me && e.kind == Kind::Dock && e.built >= 1.0) else { return };
+        let pl = self.players[me as usize];
+        let reserve: &[(Res, u16)] = next.map_or(&[], |k| k.stats().cost);
+        let spare = |r: Res| pl.free(r) - reserve_of(r) - reserve.iter().find(|&&(x, _)| x == r).map_or(0, |&(_, k)| k as i32);
+        // Boats are a luxury: only from a surplus (they'd hold the wood a
+        // quarry or a house upgrade waits for).
+        let affordable = |u: Kind| u.era() <= pl.era && u.stats().cost.iter().all(|&(r, k)| spare(r) >= k as i32 + LUXURY_RESERVE);
+        let count = |g: &Game, k: Kind| g.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == k).count() + g.ents[dock].queue.iter().filter(|&&q| q == k).count();
+        if self.ents[dock].queue.is_empty() && c.spare > KEEP_FREE {
+            let want = WARSHIPS[self.ais[me as usize].difficulty.min(2) as usize];
+            let ships: usize = NAVY.iter().map(|&k| count(self, k)).sum();
+            let unit = if count(self, Kind::FishingBoat) < FISHING_BOATS && affordable(Kind::FishingBoat) {
+                Some(Kind::FishingBoat)
+            } else if ships < want && c.army.len() >= 4 {
+                NAVY.iter().rev().copied().find(|&k| affordable(k))
+            } else {
+                None
+            };
+            if let Some(u) = unit {
+                if self.queue_unit(self.ents[dock].id, u).is_ok() {
+                    c.spare -= 1;
+                    ailog!("navy: P{me} trains a {u:?}");
+                }
+            }
+        }
+        // Enemy boats near home: the warships go for them.
+        let home = c.home;
+        let foe = self.ents.iter().find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_naval() && (e.x - home.0).hypot(e.y - home.1) < 30.0).map(|e| (e.x, e.y));
+        if let Some((x, y)) = foe {
+            for id in self.navy(me) {
+                if self.ents[id as usize].order == Order::Idle {
+                    self.order_attack_move(id, x, y);
+                }
+            }
+        }
+    }
+
+    /// `me`'s warships.
+    fn navy(&self, me: u8) -> Vec<u32> {
+        self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.class() == Class::Naval).map(|e| e.id).collect()
     }
 
     /// The first soldier goes round the map once, so we learn where the
@@ -1059,6 +1122,10 @@ impl Game {
         let stuck = p.people >= p.beds && c.spare <= 1 && c.army.len() >= 4 && self.time >= due + 120.0;
         if (self.time >= due && c.army.len() >= wave) || stuck {
             if let Some((tx, ty)) = self.target_for(me, bx, by) {
+                // The warships sail for the coast nearest it.
+                for id in self.navy(me) {
+                    self.order_attack_move(id, tx, ty);
+                }
                 // First gather a third of the way there, then go together.
                 let (gx, gy) = (bx + (tx - bx) * 0.3, by + (ty - by) * 0.3);
                 let spots = formation_around(c.army.len(), gx, gy);
@@ -1083,7 +1150,7 @@ impl Game {
         let ours: Vec<(f32, f32)> = self.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building()).map(|e| (e.x, e.y)).collect();
         self.ents
             .iter()
-            .filter(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_military() && !e.kind.is_air())
+            .filter(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_military() && !e.kind.is_air() && !e.kind.is_naval())
             .find(|e| (e.x - bx).hypot(e.y - by) < 34.0 && ours.iter().any(|&(x, y)| (e.x - x).hypot(e.y - y) < 8.0))
             .map(|e| (e.x, e.y))
     }
@@ -1092,7 +1159,7 @@ impl Game {
     fn enemy_unit_near(&self, me: u8, x: f32, y: f32, r: f32) -> Option<(f32, f32)> {
         self.ents
             .iter()
-            .find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.holds_bed() && (e.x - x).hypot(e.y - y) < r)
+            .find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.holds_bed() && !e.kind.is_naval() && (e.x - x).hypot(e.y - y) < r)
             .map(|e| (e.x, e.y))
     }
 
