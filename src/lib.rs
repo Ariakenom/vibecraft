@@ -147,6 +147,8 @@ pub extern "C" fn render() -> u32 {
             // there and workers needed. Training buildings: recruits inside.
             let (n1, n2) = if e.kind.house_tier().is_some() {
                 (e.residents as f32, e.beds() as f32)
+            } else if e.kind.is_air() {
+                (e.fuel.ceil(), defs::air_fuel(e.kind))
             } else if e.kind == Kind::Transport {
                 (g.cargo(e.id).count() as f32, TRANSPORT_CAPACITY as f32)
             } else if e.kind.stats().workers > 0 {
@@ -802,6 +804,12 @@ pub extern "C" fn debug_set_hp(id: u32, hp: f32) {
     })
 }
 
+/// An aircraft's shots left and its full load: `which` 0 left, 1 full (-1
+/// for anything else).
+#[unsafe(no_mangle)]
+pub extern "C" fn ammo(id: u32, which: u32) -> i32 {
+    game(|g| g.ents.get(id as usize).filter(|e| e.alive && e.kind.is_air()).map_or(-1, |e| if which == 0 { e.ammo as i32 } else { defs::air_ammo(e.kind) as i32 }))
+}
 /// A missile silo's or nuclear submarine's nuke: 0 none, 1 arming, 2 armed (-1 for anything else).
 #[unsafe(no_mangle)]
 pub extern "C" fn silo_state(id: u32) -> i32 {

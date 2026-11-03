@@ -23,7 +23,7 @@ const r = await page.evaluate(() => {
   const wet = (x, y) => x >= 0 && y >= 0 && x < w && y < h && ter[y * w + x] === 1;
   const ids = {};
   // Boats on the water round the harbour.
-  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer, K.Submarine, K.NuclearSub];
+  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer, K.Submarine, K.NuclearSub, K.Carrier];
   let n = 0;
   for (let r = 0; r < 8 && n < kinds.length; r++) for (let dy = -r; dy <= r && n < kinds.length; dy++) for (let dx = -r; dx <= r && n < kinds.length; dx++) {
     const x = hx + dx * 2, y = hy + dy * 2;
@@ -53,15 +53,20 @@ const r = await page.evaluate(() => {
   const buttons = [...document.querySelectorAll("#cmd .cbtn")].map(b => b.textContent);
   const subButtons = buttons.filter(t => t === "🚀C" || t === "☢V").length;
   const subArm = issue({ c: 11, ids: [ns] }); // away from any dock: refused
+  // An aircraft's panel: its fuel and its ammunition.
+  const fighter = W.debug_spawn(K.Fighter, hx, hy);
+  readWorld(); setSelection([fighter]); renderSelection(true);
+  const panel = document.querySelector(".info")?.textContent || "";
   centerOn(hx, hy); cam.dist = 18;
-  return { subButtons, subArm, buttons: buttons.join("|"), n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
+  return { panel, subButtons, subArm, buttons: buttons.join("|"), n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
 });
-check(r.n === 9, `nine kinds of boat on the water (${r.n})`);
+check(r.n === 10, `ten kinds of boat on the water (${r.n})`);
 check(r.cursorBoard === 7, `right-clicking a transport with soldiers means board (${r.cursorBoard})`);
 check(r.visibleMen === 0 && r.aboard === 2, `the soldiers went aboard and aren't drawn (${r.visibleMen} drawn, ${r.aboard} aboard)`);
 check(r.cursorUnload === 8, `right-clicking land with a loaded transport means put ashore (${r.cursorUnload})`);
-check(r.trains === 9 && r.name === "Galleon", `the dock trains nine boats (${r.trains})`);
+check(r.trains === 10 && r.name === "Galleon", `the dock trains ten boats (${r.trains})`);
 check(r.subButtons === 2, `a nuclear submarine has Launch and Arm buttons (${r.buttons})`);
+check(/Fuel \d+ of 45/.test(r.panel) && /Ammunition 12 of 12/.test(r.panel), `a fighter shows its fuel and ammunition (${r.panel})`);
 check(r.subArm !== 0, `arming away from a dock is refused (${r.subArm})`);
 if (shot) {
   await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: 120000 }).catch(() => {});
@@ -70,6 +75,14 @@ if (shot) {
     for (const el of document.querySelectorAll("#menu, #lobby, #start, .overlay")) el.hidden = true;
     readWorld(); for (let k = 0; k < 3; k++) render3d(1, performance.now() + k * 16, 0.016);
   });
+  if (process.env.SHOT2) {
+    // Low over open sea, looking towards the sun: reflections and glint.
+    const cdp2 = await page.context().newCDPSession(page);
+    await page.evaluate(() => { const w = W.map_w(); cam.x = w * 0.5; cam.y = 4; cam.dist = 22; cam.pitch = 0.42; cam.yaw = 2.4; clampCam(); readWorld(); for (let k = 0; k < 3; k++) render3d(1, performance.now() + k * 16, 0.016); });
+    const { data } = await cdp2.send("Page.captureScreenshot", { format: "png" });
+    (await import("fs")).writeFileSync(process.env.SHOT2, Buffer.from(data, "base64"));
+    await page.evaluate(() => { centerOn(W.map_w() * 0.2, W.map_h() * 0.8); cam.pitch = 0.95; cam.yaw = 0; cam.dist = 18; readWorld(); render3d(1, performance.now(), 0.016); });
+  }
   const cdp = await page.context().newCDPSession(page);
   const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
   (await import("fs")).writeFileSync(shot, Buffer.from(data, "base64"));

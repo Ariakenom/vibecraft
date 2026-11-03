@@ -201,6 +201,8 @@ pub enum Kind {
     /// Atomic: a submarine that carries a nuke, armed at one of its
     /// owner's docks and launched from anywhere at sea.
     NuclearSub = 29,
+    /// Modern: a floating airfield. Aircraft refuel next to it.
+    Carrier = 30,
     Capitol = 64,
     Barracks = 65,
     Range = 66,
@@ -366,6 +368,7 @@ static GALLEON: Stats = unit(420.0, 40.0, 8.0, 4.0, 2.4, 9.0, &[(Wood, 3), (Iron
 static IRONCLAD: Stats = unit(700.0, 60.0, 10.0, 4.0, 2.6, 10.0, &[(Steel, 2), (Coal, 1), (Explosives, 1)], 36.0);
 static SUBMARINE: Stats = unit(420.0, 120.0, 5.0, 5.0, 2.8, 8.0, &[(Steel, 2), (Explosives, 1)], 34.0);
 static NUCLEAR_SUB: Stats = unit(650.0, 90.0, 5.0, 5.0, 3.0, 9.0, &[(Steel, 3), (Uranium, 1)], 45.0);
+static CARRIER: Stats = unit(1600.0, 12.0, 6.0, 1.0, 2.2, 11.0, &[(Steel, 4), (Oil, 2), (Aluminum, 1)], 50.0);
 static DESTROYER: Stats = unit(800.0, 30.0, 9.0, 1.4, 3.6, 11.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, and
@@ -473,6 +476,32 @@ static DOCK: Stats = Stats { needs_deposit: Some(Dep::Water), ..building(700.0, 
 /// has it in sight (`Game::spot_submarines`).
 pub const SUB_DETECT: f32 = 3.0;
 
+/// Seconds an aircraft can stay out before it runs low on fuel; then it
+/// flies at `OUT_OF_FUEL_SPEED` of its speed until it's back within
+/// `AIR_BASE_REACH` of one of its owner's airfields or carriers, where it
+/// fills up in `REFUEL_TIME` seconds.
+pub fn air_fuel(k: Kind) -> f32 {
+    match k {
+        Kind::Fighter => 45.0,
+        Kind::Jet => 50.0,
+        Kind::Bomber => 60.0,
+        _ => 0.0,
+    }
+}
+pub const OUT_OF_FUEL_SPEED: f32 = 0.35;
+/// Shots an aircraft carries out (a bomber's are bomb runs). Empty, it
+/// can't attack until it rearms where it refuels, in `REFUEL_TIME`.
+pub fn air_ammo(k: Kind) -> u8 {
+    match k {
+        Kind::Fighter => 12,
+        Kind::Jet => 14,
+        Kind::Bomber => 3,
+        _ => 0,
+    }
+}
+pub const AIR_BASE_REACH: f32 = 3.0;
+pub const REFUEL_TIME: f32 = 5.0;
+
 /// A nuclear submarine within this many tiles of its owner's dock is at
 /// it, and arms its nuke there.
 pub const DOCK_REACH: f32 = 2.5;
@@ -561,10 +590,10 @@ pub const LAST_ERA: u8 = 5;
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 83] = {
+    pub const ALL: [Kind; 84] = {
         use Kind::*;
         [
-            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Submarine, Destroyer, NuclearSub, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, Dock, HuntingLodge, Orchard, Pasture,
+            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Submarine, Destroyer, Carrier, NuclearSub, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, Dock, HuntingLodge, Orchard, Pasture,
             Barracks, Range, Stable, Tower, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
             ExplosivesWorks, Cannery, CoalYard, Press, Factory, Infantry, Tank, Fighter, Bomber, Apartment, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
             RocketArtillery, Jet, TowerBlock, UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
@@ -662,6 +691,7 @@ impl Kind {
             Destroyer => &DESTROYER,
             Submarine => &SUBMARINE,
             NuclearSub => &NUCLEAR_SUB,
+            Carrier => &CARRIER,
             Dock => &DOCK,
         }
     }
@@ -715,7 +745,7 @@ impl Kind {
             Horseman | Knight | Dragoon | Tank => Class::Mounted,
             Trebuchet | Cannon | FieldGun | Bomber | RocketArtillery => Class::Siege,
             Fighter | Jet => Class::Air,
-            Galley | Cog | Galleon | Ironclad | Submarine | NuclearSub | Destroyer => Class::Naval,
+            Galley | Cog | Galleon | Ironclad | Submarine | NuclearSub | Destroyer | Carrier => Class::Naval,
             FishingBoat | Transport => Class::Civilian,
             _ => Class::Building,
         }
@@ -749,7 +779,7 @@ impl Kind {
             Cog | Horseman | Stable | Pasture | Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
             Galleon | Stoneworks | Kiln | Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
             Ironclad | Submarine | Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
-            Destroyer | Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,
+            Carrier | Destroyer | Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,
             NuclearSub | RocketArtillery | Jet | TowerBlock | UraniumMine | Reactor | CarPlant | TvPlant | MissileSilo => 5,
             _ => 0,
         }
@@ -776,7 +806,7 @@ impl Kind {
 
     /// Does it sail? Boats move on water only, land units on land only.
     pub fn is_naval(self) -> bool {
-        matches!(self, Kind::FishingBoat | Kind::Transport | Kind::Galley | Kind::Cog | Kind::Galleon | Kind::Ironclad | Kind::Submarine | Kind::NuclearSub | Kind::Destroyer)
+        matches!(self, Kind::FishingBoat | Kind::Transport | Kind::Galley | Kind::Cog | Kind::Galleon | Kind::Ironclad | Kind::Submarine | Kind::NuclearSub | Kind::Destroyer | Kind::Carrier)
     }
 
     /// Does it sail under the water? Hidden until spotted (`SUB_DETECT`),
@@ -788,7 +818,7 @@ impl Kind {
     /// Can it shoot at aircraft? Fighters, machine guns, modern infantry,
     /// destroyers, towers and the Capitol.
     pub fn hits_air(self) -> bool {
-        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Destroyer | Kind::Tower | Kind::Capitol | Kind::AirDefense)
+        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Destroyer | Kind::Carrier | Kind::Tower | Kind::Capitol | Kind::AirDefense)
     }
 
     /// Can a transport carry it? Anything that walks.
@@ -827,7 +857,7 @@ impl Kind {
             Kind::Factory => &[Kind::FieldGun, Kind::RocketArtillery],
             Kind::Stable => &[Kind::Horseman, Kind::Knight, Kind::Dragoon],
             Kind::SiegeWorkshop => &[Kind::Trebuchet, Kind::Cannon],
-            Kind::Dock => &[Kind::FishingBoat, Kind::Transport, Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Submarine, Kind::Destroyer, Kind::NuclearSub],
+            Kind::Dock => &[Kind::FishingBoat, Kind::Transport, Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Submarine, Kind::Destroyer, Kind::Carrier, Kind::NuclearSub],
             _ => &[],
         }
     }
@@ -849,6 +879,7 @@ impl Kind {
             Kind::Transport | Kind::Galley | Kind::Cog => 0.48,
             Kind::Galleon | Kind::Ironclad | Kind::Destroyer => 0.55,
             Kind::Submarine | Kind::NuclearSub => 0.5,
+            Kind::Carrier => 0.7,
             _ => 0.32,
         }
     }

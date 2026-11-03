@@ -36,7 +36,7 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 13: cheat mode.
 /// 14: maps vary more from seed to seed (the same seed draws another map).
 /// 15: an air defense fires at a nuke before it lands (`Nuke::shot`).
-const VERSION: u32 = 16;
+const VERSION: u32 = 18;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -284,6 +284,8 @@ impl Game {
             w.u32(e.goods);
             w.bool(e.starting);
             w.u32(e.aboard);
+            w.f32(e.fuel);
+            w.u8(e.ammo);
         }
 
         w.len(self.players.len());
@@ -386,7 +388,7 @@ impl Game {
             deps.push(Deposit { kind: Dep::from_u8(r.u8()?)?, tx: r.i32()?, ty: r.i32()? });
         }
 
-        let nents = r.len(60)?;
+        let nents = r.len(65)?;
         let mut ents = Vec::with_capacity(nents);
         for i in 0..nents {
             let id = r.u32()?;
@@ -437,6 +439,11 @@ impl Game {
             e.goods = r.u32()?;
             e.starting = r.bool()?;
             e.aboard = r.u32()?;
+            e.fuel = r.f32()?;
+            e.ammo = r.u8()?;
+            if !e.fuel.is_finite() {
+                return None;
+            }
             ents.push(e);
         }
 

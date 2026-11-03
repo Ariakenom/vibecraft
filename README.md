@@ -577,7 +577,14 @@ versions don't play together.
   Ten apartment blocks (full tenements with nine goods) bring the Modern
   era: oil wells, bauxite mines, power plants, radio factories, the
   Haber–Bosch plant (nitrate without saltpeter), tank works and airfields;
-  infantry, tanks, fighters and bombers. **Aircraft** fly straight over
+  infantry, tanks, fighters and bombers. **Aircraft** carry fuel for 45
+  (fighters), 50 (jets) or 60 seconds (bombers) away from an airfield or
+  aircraft carrier; out of fuel they fly at a third of their speed until
+  they're back within 3 tiles of one, where they fill up in 5 seconds
+  (`air_fuel`). They carry limited ammunition too (`air_ammo`: 12 bursts
+  for a fighter, 14 for a jet, 3 bomb runs for a bomber), and rearm there
+  as they refuel; empty, they can't attack. The computer sends them home
+  when low on fuel or out of ammunition. They fly straight over
   water and buildings and only fighters, machine gunners, infantry, towers
   and the Capitol can hit them; bombers flatten buildings but need fighters
   to protect them.
@@ -608,7 +615,8 @@ versions don't play together.
   them (destroyers at 2.5 times). The **nuclear submarine** (Atomic) is
   hidden the same way and carries a nuke: arm it (V) while it lies at one
   of your docks (it waits while the submarine is away), then launch it (C)
-  from anywhere at sea. Warships sink boats and
+  from anywhere at sea. The **aircraft carrier** (Modern) is a floating
+  airfield: aircraft refuel next to it. Warships sink boats and
   bombard buildings by the water; towers, siege guns and archers on the
   shore hit back, swords and spears hardly reach. Boats are people, like
   every unit: each one is a worker who went to the dock.
