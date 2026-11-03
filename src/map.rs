@@ -212,8 +212,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // forest. `pick(k, lo, hi)` is a number of the seed's in lo..hi.
     let pick = |k: i32, lo: f32, hi: f32| lo + (hi - lo) * hash(k, 911, seed);
     let land_scale = pick(1, 10.0, 22.0);
-    // (A little more water than before boats: bigger lakes.)
-    let water_at = pick(2, 0.325, 0.375);
+    let water_at = pick(2, 0.31, 0.36);
     let hill_at = pick(3, 0.66, 0.77);
     let wood_scale = pick(4, 5.0, 9.5);
     let wood_at = pick(5, 0.54, 0.66);
