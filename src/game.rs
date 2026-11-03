@@ -204,6 +204,8 @@ pub struct Entity {
     /// Submarines: which players see it, one bit per player (its owner
     /// always). Worked out every tick (`Game::spot_submarines`), so not saved.
     pub spotted: u8,
+    /// Aircraft: seconds of fuel left (see `air_fuel`). Saved.
+    pub fuel: f32,
 }
 
 /// A nuke in flight, from the silo at (sx, sy) to (x, y). Everyone sees it.
@@ -272,6 +274,7 @@ impl Entity {
             starting: false,
             aboard: 0,
             spotted: 0,
+            fuel: air_fuel(kind),
         }
     }
 
@@ -1590,6 +1593,7 @@ impl Game {
             mix(e.goods);
             mix(e.nuke as u32 | (e.starting as u32) << 8);
             mix(e.aboard);
+            mix(e.fuel.to_bits());
         }
         for p in &self.players[1..] {
             mix(p.cheat as u32);
@@ -1615,7 +1619,26 @@ impl Game {
         self.ents.iter().any(|d| d.alive && d.kind == Kind::Dock && d.owner == u.owner && d.built >= 1.0 && d.edge_dist(u.x, u.y) <= DOCK_REACH)
     }
 
+    /// Is unit `i` within reach of one of its owner's airfields or carriers?
+    pub fn at_air_base(&self, i: usize) -> bool {
+        let u = &self.ents[i];
+        self.ents.iter().any(|b| {
+            b.alive && b.owner == u.owner && ((b.kind == Kind::Airfield && b.built >= 1.0) || b.kind == Kind::Carrier) && b.edge_dist(u.x, u.y) <= AIR_BASE_REACH
+        })
+    }
+
+    /// Aircraft burn fuel while they're away from an airfield or carrier,
+    /// and fill up next to one.
+    fn burn_fuel(&mut self, i: usize) {
+        let max = air_fuel(self.ents[i].kind);
+        let fuel = if self.at_air_base(i) { (self.ents[i].fuel + DT * max / REFUEL_TIME).min(max) } else { (self.ents[i].fuel - DT).max(0.0) };
+        self.ents[i].fuel = fuel;
+    }
+
     fn update_unit(&mut self, i: usize) {
+        if self.ents[i].kind.is_air() {
+            self.burn_fuel(i);
+        }
         // A nuclear submarine arms its nuke while it lies at a dock, and
         // pauses while it's away.
         if self.ents[i].nuke == 1 && self.at_dock(i) {
@@ -2098,7 +2121,9 @@ impl Game {
         let (tx, ty) = goal.nearest_point(e.x, e.y);
         let (dx, dy) = (tx - e.x, ty - e.y);
         let d = (dx * dx + dy * dy).sqrt().max(1e-4);
-        let s = (e.kind.stats().speed * DT).min(d);
+        // Out of fuel: slow, until it's back at an airfield or carrier.
+        let slow = if e.fuel <= 0.0 { OUT_OF_FUEL_SPEED } else { 1.0 };
+        let s = (e.kind.stats().speed * slow * DT).min(d);
         e.x = (e.x + dx / d * s).clamp(0.5, self.map.w as f32 - 0.5);
         e.y = (e.y + dy / d * s).clamp(0.5, self.map.h as f32 - 0.5);
         e.facing = dy.atan2(dx);

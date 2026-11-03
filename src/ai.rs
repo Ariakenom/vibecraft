@@ -327,6 +327,7 @@ impl Game {
         self.ai_navy(next, &mut c);
         self.ai_scout(&mut c);
         self.ai_fight(&c);
+        self.ai_air(me);
         self.ai_nuke(me, c.home);
     }
 
@@ -968,6 +969,26 @@ impl Game {
             for id in self.navy(me) {
                 if self.ents[id as usize].order == Order::Idle {
                     self.order_attack_move(id, x, y);
+                }
+            }
+        }
+    }
+
+    /// Aircraft low on fuel fly back to the nearest airfield or carrier
+    /// (after `ai_fight`, so this has the last word); they go out again with
+    /// the next order once they've filled up there.
+    fn ai_air(&mut self, me: u8) {
+        let bases: Vec<(f32, f32)> = self.ents.iter().filter(|b| b.alive && b.owner == me && ((b.kind == Kind::Airfield && b.built >= 1.0) || b.kind == Kind::Carrier)).map(|b| (b.x, b.y)).collect();
+        for i in 0..self.ents.len() {
+            let e = &self.ents[i];
+            if !e.alive || e.owner != me || !e.kind.is_air() || e.fuel > air_fuel(e.kind) * 0.3 || self.at_air_base(i) {
+                continue;
+            }
+            let (x, y) = (e.x, e.y);
+            if let Some(&(bx, by)) = bases.iter().min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y))) {
+                if self.ents[i].order != (Order::Move { x: bx, y: by }) {
+                    let id = self.ents[i].id;
+                    self.order_move(id, bx, by);
                 }
             }
         }

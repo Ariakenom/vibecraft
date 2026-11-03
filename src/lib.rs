@@ -147,6 +147,8 @@ pub extern "C" fn render() -> u32 {
             // there and workers needed. Training buildings: recruits inside.
             let (n1, n2) = if e.kind.house_tier().is_some() {
                 (e.residents as f32, e.beds() as f32)
+            } else if e.kind.is_air() {
+                (e.fuel.ceil(), defs::air_fuel(e.kind))
             } else if e.kind == Kind::Transport {
                 (g.cargo(e.id).count() as f32, TRANSPORT_CAPACITY as f32)
             } else if e.kind.stats().workers > 0 {

@@ -9,7 +9,7 @@ const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
 const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
-  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29,
+  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29, Carrier: 30,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
@@ -21,7 +21,7 @@ const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossb
 // Aircraft fly above everything (drawn high up; see defs.rs Kind::is_air).
 const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
 // Boats sail on the water (see defs.rs Kind::is_naval).
-const isNaval = k => k >= K.FishingBoat && k <= K.NuclearSub;
+const isNaval = k => k >= K.FishingBoat && k <= K.Carrier;
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
@@ -49,7 +49,7 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo",
   [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense",
   [K.Dock]: "Dock", [K.FishingBoat]: "Fishing Boat", [K.Transport]: "Transport", [K.Galley]: "Galley", [K.Cog]: "War Cog",
-  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer", [K.Submarine]: "Submarine", [K.NuclearSub]: "Nuclear Submarine" };
+  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer", [K.Submarine]: "Submarine", [K.NuclearSub]: "Nuclear Submarine", [K.Carrier]: "Aircraft Carrier" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits in the town square. Free workers go where they're needed by themselves; training a soldier turns one into the soldier.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
@@ -71,10 +71,10 @@ const DESC = {
   [K.FieldGun]: "Horse-drawn artillery firing shells. The longest reach of all; flattens buildings. Costs steel, explosives and a horse.",
   [K.Infantry]: "Modern foot soldiers with automatic rifles. They can shoot at aircraft too. Costs steel and explosives.",
   [K.Tank]: "Armour: tough, fast and hard-hitting, it runs down guns and gunners. Infantry beat it. Costs steel, oil and explosives.",
-  [K.Fighter]: "Flies over everything. Shoots down aircraft, and strafes the ground a little. Costs aluminum and oil.",
-  [K.Bomber]: "Flies over everything and bombs buildings to rubble. Can't hit aircraft: escort it with fighters. Costs aluminum, oil and explosives.",
+  [K.Fighter]: "Flies over everything. Shoots down aircraft, and strafes the ground a little. Fuel for 45 seconds away from an airfield or carrier, then it's slow until it gets back. Costs aluminum and oil.",
+  [K.Bomber]: "Flies over everything and bombs buildings to rubble. Can't hit aircraft: escort it with fighters. Fuel for 60 seconds away from an airfield or carrier, then it's slow until it gets back. Costs aluminum, oil and explosives.",
   [K.RocketArtillery]: "Fires salvoes of rockets from further than anything else can shoot. Flattens buildings; poor against people.",
-  [K.Jet]: "A faster, tougher fighter. Owns the air. Costs aluminum and oil.",
+  [K.Jet]: "A faster, tougher fighter. Owns the air. Fuel for 50 seconds away from an airfield or carrier, then it's slow until it gets back. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against foot soldiers, weak against riders.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
   [K.Capitol]: "Your seat of power: it makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
@@ -94,6 +94,7 @@ const DESC = {
   [K.Galleon]: "A gun ship: broadsides that smash boats and bombard the coast, hurting everything around where they land. Costs iron and gunpowder.",
   [K.Ironclad]: "A steam-driven armoured ship with heavy guns. Long reach; flattens the waterfront.",
   [K.Destroyer]: "Fast and tough, with quick-firing guns that also shoot at aircraft. The submarine hunter: it sees them from its full sight, and does double and a half damage to them. Costs steel, oil and explosives.",
+  [K.Carrier]: "A floating airfield: your aircraft refuel next to it, so they can strike far from home. Anti-aircraft guns, but little else: escort it. Costs steel, oil and aluminum.",
   [K.NuclearSub]: "A submarine that carries a nuke. Arm it (V) while it lies at one of your docks (2 uranium and 2 explosives, 2 minutes; it waits while the submarine is away), then launch it (C) from anywhere at sea. Hidden like any submarine, but everyone sees where a nuke comes from. Torpedoes for boats too.",
   [K.Submarine]: "Sails under the water: enemies see it only when something of theirs is within 3 tiles of it, or a destroyer has it in sight. Its torpedoes hit boats hard, and nothing else; only warships can hit it. Costs steel and explosives.",
   [K.HuntingLodge]: "Hunts the game grazing next to it.",
@@ -124,7 +125,7 @@ const DESC = {
   [K.HaberBosch]: "Makes nitrate from coal and electricity: no saltpeter needed.",
   [K.RadioFactory]: "Makes radios from steel and electricity, for apartment blocks.",
   [K.TankWorks]: "Builds tanks.",
-  [K.Airfield]: "Builds fighters, bombers and, from the Atomic era, jets.",
+  [K.Airfield]: "Builds fighters, bombers and, from the Atomic era, jets. Aircraft refuel within 3 tiles of it (or of an aircraft carrier).",
   [K.UraniumMine]: "Mines uranium from the ore next to it.",
   [K.Reactor]: "Makes a great deal of electricity from a little uranium.",
   [K.CarPlant]: "Makes cars from steel and oil, for tower blocks.",
@@ -202,7 +203,7 @@ const TRAIN_KEYS = PAGE_KEYS; // enough for every unit when several kinds of bui
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet],
-  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Submarine, K.Destroyer, K.NuclearSub] };
+  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Submarine, K.Destroyer, K.Carrier, K.NuclearSub] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -903,6 +904,9 @@ function singleInfo(panel, i) {
   if (!isBld(k)) {
     const doing = k === K.FishingBoat && E(i, F.order) === 0 ? "Fishing: 3 fish while it lies still" : ORDER_TEXT[E(i, F.order)];
     if (owner === ME || observe) html += `<div class="statline">${doing}</div>`;
+    if (isAir(k) && (owner === ME || observe)) html += E(i, F.residents) > 0
+      ? `<div class="statline">Fuel <b>${E(i, F.residents)}</b> of ${E(i, F.beds)} s · refuels at an airfield or carrier</div>`
+      : `<div class="statline bad">Out of fuel: slow until it's back at an airfield or carrier.</div>`;
     if (k === K.Transport) html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} aboard${owner === ME && E(i, F.residents) > 0 ? " · right-click the shore to put them ashore" : ""}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
   } else if (E(i, F.flags) & 2) {

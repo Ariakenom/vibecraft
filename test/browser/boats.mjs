@@ -23,7 +23,7 @@ const r = await page.evaluate(() => {
   const wet = (x, y) => x >= 0 && y >= 0 && x < w && y < h && ter[y * w + x] === 1;
   const ids = {};
   // Boats on the water round the harbour.
-  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer, K.Submarine, K.NuclearSub];
+  const kinds = [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Destroyer, K.Submarine, K.NuclearSub, K.Carrier];
   let n = 0;
   for (let r = 0; r < 8 && n < kinds.length; r++) for (let dy = -r; dy <= r && n < kinds.length; dy++) for (let dx = -r; dx <= r && n < kinds.length; dx++) {
     const x = hx + dx * 2, y = hy + dy * 2;
@@ -56,11 +56,11 @@ const r = await page.evaluate(() => {
   centerOn(hx, hy); cam.dist = 18;
   return { subButtons, subArm, buttons: buttons.join("|"), n, cursorBoard, visibleMen, aboard, cursorUnload, trains: TRAINS[K.Dock].length, name: NAMES[K.Galleon] };
 });
-check(r.n === 9, `nine kinds of boat on the water (${r.n})`);
+check(r.n === 10, `ten kinds of boat on the water (${r.n})`);
 check(r.cursorBoard === 7, `right-clicking a transport with soldiers means board (${r.cursorBoard})`);
 check(r.visibleMen === 0 && r.aboard === 2, `the soldiers went aboard and aren't drawn (${r.visibleMen} drawn, ${r.aboard} aboard)`);
 check(r.cursorUnload === 8, `right-clicking land with a loaded transport means put ashore (${r.cursorUnload})`);
-check(r.trains === 9 && r.name === "Galleon", `the dock trains nine boats (${r.trains})`);
+check(r.trains === 10 && r.name === "Galleon", `the dock trains ten boats (${r.trains})`);
 check(r.subButtons === 2, `a nuclear submarine has Launch and Arm buttons (${r.buttons})`);
 check(r.subArm !== 0, `arming away from a dock is refused (${r.subArm})`);
 if (shot) {

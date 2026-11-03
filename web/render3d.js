@@ -397,7 +397,7 @@ function boatModel(kind, owner) {
     m.add(box(0.03, h * 0.5, w), col, x + 0.03, h * 0.62, 0); // a square sail across the ship
     m.add(box(0.025, 0.025, w + 0.08), DARKWOOD, x, h * 0.88, 0);
   };
-  let top = 0.9, mx = 0;
+  let top = 0.9, mx = 0, mz = 0;
   switch (kind) {
     case K.FishingBoat:
       hull(0.42, 0.2, 0.14, "#8a6a42");
@@ -461,6 +461,18 @@ function boatModel(kind, owner) {
       top = 0.38; mx = 0.05;
       break;
     }
+    case K.Carrier: {
+      // A long, flat grey deck with an island on the starboard side.
+      hull(1.5, 0.42, 0.2, DARKGREY, GREY);
+      m.add(box(1.6, 0.04, 0.5), "#5a6166", 0.02, 0.15, 0); // the flight deck, wider than the hull
+      for (let k = 0; k < 6; k++) m.add(box(0.12, 0.005, 0.02), "#d9dccf", -0.6 + k * 0.24, 0.175, 0); // the centre line
+      m.add(box(0.26, 0.24, 0.1), GREY, 0.1, 0.29, -0.2); // the island
+      m.add(box(0.14, 0.06, 0.11), "#2a2e31", 0.12, 0.39, -0.2);
+      m.add(cyl(0.01, 0.01, 0.25, 5), DARKGREY, 0.08, 0.53, -0.2);
+      m.add(box(0.2, 0.02, 0.12), team, -0.5, 0.18, 0.12);
+      top = 0.66; mx = 0.08; mz = -0.2;
+      break;
+    }
     case K.Destroyer:
       hull(1.15, 0.3, 0.18, DARKGREY, GREY);
       m.add(box(0.22, 0.2, 0.2), GREY, 0.12, 0.2, 0); // the bridge
@@ -473,7 +485,9 @@ function boatModel(kind, owner) {
       break;
   }
   t.flag(0.14, 0.07, team, 0.07, 0, 0);
-  return { body: m.build(), tool: t.build(), pivot: [mx, top, 0], height: top, scale: 1 };
+  // (A carrier is drawn larger, to look big beside the aircraft it carries.)
+  const scale = kind === K.Carrier ? 1.7 : 1;
+  return { body: m.build(), tool: t.build(), pivot: [mx, top, mz], height: top, scale };
 }
 
 // Buildings are centred on their footprint; y = 0 is the ground.
