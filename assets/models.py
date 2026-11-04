@@ -142,6 +142,56 @@ class Model:
         bmesh.ops.triangulate(t, faces=list(t.faces))
         return self._take(t, color, Matrix.Translation(P(x, y + r * flat * 0.55, z)) @ rot(0, random.random() * 6.28, 0) @ scale3(1, flat, 1), vary)
 
+    def boulder(self, r, color, x=0, y=0, z=0, flat=0.65, sx=1.0, sz=1.0, lumps=4, flecks=None, vary=0.06, facets=0.3):
+        """One big rock: a lumpy, faceted boulder rather than a pile of small ones.
+        `flecks` = (colour, share) paints that share of its facets another colour
+        (rust, ore), so streaks are part of the rock instead of loose pebbles."""
+        t = bmesh.new()
+        bmesh.ops.create_icosphere(t, subdivisions=2, radius=1.0)
+        # A few broad bulges, so it isn't a ball...
+        dirs = []
+        for _ in range(lumps):
+            a, e = random.random() * 6.28, (random.random() - 0.2) * 1.0
+            dirs.append((Vector((math.cos(a) * math.cos(e), math.sin(a) * math.cos(e), math.sin(e))), 0.1 + random.random() * 0.15))
+        for v in t.verts:
+            n = v.co.normalized()
+            k = 1.0 + sum(w * max(0.0, n.dot(d)) ** 2 for d, w in dirs) + (random.random() * 2 - 1) * 0.05
+            v.co = n * k
+        # ...then sliced by a few planes: the broad flat faces of split stone.
+        for i in range(5):
+            a = random.random() * 6.28 + i * 1.3
+            e = 1.2 if i == 0 else (random.random() - 0.1) * 0.9   # one cut across the top
+            d = Vector((math.cos(a) * math.cos(e), math.sin(a) * math.cos(e), math.sin(e)))
+            o = 0.68 + random.random() * 0.2
+            for v in t.verts:
+                s = v.co.dot(d)
+                if s > o:
+                    v.co -= (s - o) * d
+        for v in t.verts:  # a flat underside, sitting on the ground
+            v.co.z = max(v.co.z, -0.35)
+        # Keep the footprint the asked-for size whatever the bulges did: one tile's worth.
+        cx = sum(v.co.x for v in t.verts) / len(t.verts); cy = sum(v.co.y for v in t.verts) / len(t.verts)
+        reach = max(math.hypot(v.co.x - cx, v.co.y - cy) for v in t.verts)
+        for v in t.verts:
+            v.co.x = (v.co.x - cx) / reach; v.co.y = (v.co.y - cy) / reach
+        # Merge nearly flat neighbours into bigger facets, like split stone.
+        bmesh.ops.dissolve_limit(t, angle_limit=facets, verts=list(t.verts), edges=list(t.edges))
+        bmesh.ops.triangulate(t, faces=list(t.faces))
+        n0 = len(self.bm.faces)
+        self._take(t, color, Matrix.Translation(P(x, y + r * flat * 0.3, z)) @ rot(0, random.random() * 6.28, 0) @ scale3(r * sx, r * flat, r * sz), vary)
+        if flecks:
+            fc, share = flecks
+            base = lin(fc)
+            self.bm.faces.ensure_lookup_table()
+            for i in range(n0, len(self.bm.faces)):
+                f = self.bm.faces[i]; f.normal_update()
+                if random.random() < share and f.normal.z > -0.2:
+                    k = 1.0 + (random.random() * 2 - 1) * 0.1
+                    c = (min(1, base[0] * k), min(1, base[1] * k), min(1, base[2] * k), 1.0)
+                    for l in f.loops:
+                        l[self.col] = c
+        return self
+
     def prism(self, length, width, height, color, x=0, y=0, z=0, ry=0, vary=0.03):
         """A gable roof: triangle cross-section in the yz plane, running along x. y is the eave line."""
         t = bmesh.new()
@@ -694,19 +744,15 @@ def bush():
     return m
 
 def stone():
-    """Grey boulders. The game's shader paints a stony surface on the facets."""
+    """One big grey boulder. The game's shader paints a stony surface on the facets."""
     m = Model("Stone")
-    for x, z, r in [(0, 0, 0.33), (0.25, 0.13, 0.22), (-0.21, -0.14, 0.2), (0.05, -0.26, 0.14), (-0.16, 0.2, 0.11)]:
-        m.rock(r, "#99928a", x, 0, z, vary=0.06)
+    m.boulder(0.46, "#99928a", 0, 0, 0, flat=0.7, sx=1.05, sz=0.95)
     return m
 
 def gold():
-    """The same stone; the game's shader runs gold veins through it. A few loose nuggets."""
+    """The same boulder; the game's shader runs gold veins through it."""
     m = Model("Gold")
-    for x, z, r in [(0, 0, 0.33), (0.25, 0.13, 0.22), (-0.21, -0.14, 0.2), (0.08, -0.25, 0.13)]:
-        m.rock(r, "#948c80", x, 0, z, vary=0.06)
-    for x, y, z in [(-0.3, 0.04, 0.12), (0.34, 0.04, -0.1), (0.15, 0.04, 0.3)]:
-        m.ball(0.045, "#f4d462", x, y, z, sub=0, jitter=0.25, vary=0.1)
+    m.boulder(0.45, "#948c80", 0, 0, 0, flat=0.68, flecks=("#d9b24a", 0.05))
     return m
 
 # --- Units -----------------------------------------------------------------------------------
@@ -1213,21 +1259,15 @@ def siege_workshop():
     return m
 
 def iron_ore():
-    """Iron ore: dark stone streaked with rust."""
+    """Iron ore: one dark boulder streaked with rust."""
     m = Model("IronOre")
-    for x, z, r in [(0, 0, 0.3), (0.24, 0.14, 0.21), (-0.2, -0.13, 0.19), (0.06, -0.24, 0.13)]:
-        m.rock(r, "#6e655c", x, 0, z, vary=0.06)
-    for x, y, z in [(-0.27, 0.05, 0.12), (0.3, 0.06, -0.1), (0.12, 0.2, 0.15), (-0.05, 0.3, -0.05)]:
-        m.ball(0.05, "#9a4a2c", x, y, z, sub=0, jitter=0.25, vary=0.1)
+    m.boulder(0.44, "#6e655c", 0, 0, 0, flat=0.68, sx=1.05, sz=0.95, flecks=("#9a4a2c", 0.15))
     return m
 
 def clay_pit():
-    """A clay pit: a hollow of wet, reddish clay with a few cut lumps."""
+    """A clay pit: one broad, low mound of wet, reddish clay, cut flat on top."""
     m = Model("ClayPit")
-    m.cyl(0.42, 0.38, 0.05, "#8a5236", 0, 0.025, 0, seg=10, vary=0.04)
-    m.cyl(0.3, 0.27, 0.03, "#6e3e28", 0, 0.05, 0, seg=10, vary=0.04)
-    for x, z, s in [(0.2, 0.15, 0.09), (-0.18, 0.2, 0.07), (0.05, -0.22, 0.08)]:
-        m.box(s * 1.4, s, s, CLAY, x, 0.06 + s / 2, z, ry=random.random(), bevel=0.01, vary=0.06)
+    m.boulder(0.47, CLAY, 0, 0, 0, flat=0.4, lumps=3, flecks=("#8a5236", 0.25), facets=0.35)
     return m
 
 def sheep_herd():
@@ -1466,13 +1506,9 @@ def circus():
     return m
 
 def saltpeter():
-    """A saltpeter deposit: white crusts and crystals on bare ground."""
+    """A saltpeter deposit: one big mound crusted white."""
     m = Model("Saltpeter")
-    m.cyl(0.4, 0.36, 0.04, "#9a8f7c", 0, 0.02, 0, seg=9, vary=0.04)
-    for x, z, r in [(0.05, 0.02, 0.2), (-0.2, 0.15, 0.13), (0.2, -0.18, 0.12), (0.18, 0.2, 0.1)]:
-        m.rock(r, "#ece8dc", x, 0.0, z, flat=0.5, vary=0.04)
-    for x, z in [(-0.1, -0.2), (0.3, 0.05), (-0.28, -0.05)]:
-        m.cyl(0.03, 0.0, 0.1, "#f6f4ee", x, 0.07, z, seg=4, vary=0)
+    m.boulder(0.45, "#ece8dc", 0, 0, 0, flat=0.48, sx=1.05, sz=0.95, flecks=("#b8af9c", 0.15), vary=0.04)
     return m
 
 
@@ -1699,11 +1735,9 @@ def factory():
     return m
 
 def coal_seam():
-    """A coal deposit: black lumps breaking through the turf."""
+    """A coal deposit: one big black boulder breaking through the turf."""
     m = Model("CoalSeam")
-    m.cyl(0.4, 0.36, 0.04, "#4a443c", 0, 0.02, 0, seg=9, vary=0.04)
-    for x, z, r in [(0, 0, 0.24), (0.22, 0.12, 0.16), (-0.18, -0.14, 0.15), (0.05, -0.24, 0.1)]:
-        m.rock(r, COALC, x, 0, z, flat=0.6, vary=0.08)
+    m.boulder(0.44, COALC, 0, 0, 0, flat=0.6, sx=1.05, sz=0.95, vary=0.1)
     return m
 
 
@@ -1957,10 +1991,9 @@ def oil_field():
     return m
 
 def bauxite():
-    """Bauxite: red-brown earthy rocks."""
+    """Bauxite: one big red-brown, earthy boulder."""
     m = Model("Bauxite")
-    for x, z, r in [(0, 0, 0.27), (0.22, 0.14, 0.18), (-0.2, -0.12, 0.17), (0.08, -0.24, 0.11)]:
-        m.rock(r, "#b0603e", x, 0, z, flat=0.65, vary=0.08)
+    m.boulder(0.44, "#b0603e", 0, 0, 0, flat=0.62, sx=1.05, sz=0.95, flecks=("#8e4a30", 0.15), vary=0.08)
     return m
 
 
@@ -2116,12 +2149,9 @@ def missile_silo():
     return m
 
 def uranium_ore():
-    """Uranium ore: dark rock with sickly green-yellow flecks."""
+    """Uranium ore: one dark boulder with sickly green-yellow flecks."""
     m = Model("UraniumOre")
-    for x, z, r in [(0, 0, 0.27), (0.22, 0.13, 0.18), (-0.2, -0.12, 0.17)]:
-        m.rock(r, "#4a4a38", x, 0, z, vary=0.06)
-    for x, y, z in [(-0.22, 0.08, 0.15), (0.25, 0.08, -0.1), (0.1, 0.25, 0.12), (-0.05, 0.3, -0.08)]:
-        m.ball(0.04, URANIUM_GREEN, x, y, z, sub=0, jitter=0.2, vary=0.1)
+    m.boulder(0.44, "#4a4a38", 0, 0, 0, flat=0.66, flecks=(URANIUM_GREEN, 0.08))
     return m
 
 
