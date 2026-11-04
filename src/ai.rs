@@ -604,8 +604,9 @@ impl Game {
         Step::Blocked
     }
 
-    /// More fish: a dock if there's none, then fishing boats, two for each
-    /// shoal tile near home (ten at most). The boats go to the shoals by
+    /// More fish: a dock if there's none, then fishing boats while no fish
+    /// is spare: as many as the town's plan has (one over), two for each
+    /// shoal tile near home at most, and never more than ten. The boats go to the shoals by
     /// themselves (`ai_navy`).
     fn ai_fish(&mut self, c: &mut Census) -> Step {
         let me = c.me;
@@ -621,7 +622,11 @@ impl Game {
             return Step::Waiting;
         }
         let boats = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::FishingBoat).count() + self.ents[dock].queue.iter().filter(|&&k| k == Kind::FishingBoat).count();
-        if boats >= (2 * shoals).min(10) || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
+        // As many as the town's plan has (one over), and only while no fish
+        // is spare: each is a person, and holds wood.
+        let pl = &self.players[me as usize];
+        let want = (target(pl.era).count(Kind::FishingBoat) as usize + 1).min(2 * shoals).min(10);
+        if boats >= want || pl.spare(Res::Fish) > 0 || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
             return Step::Blocked;
         }
         if self.queue_unit(self.ents[dock].id, Kind::FishingBoat).is_ok() {
