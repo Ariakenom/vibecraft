@@ -240,7 +240,8 @@ fn target(era: u8) -> &'static econ::Plan {
 }
 
 fn house_goods(era: u8) -> Vec<Res> {
-    Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && producer_of(*r).is_some_and(|k| k.era() <= era)).collect()
+    // (Fish come from fishing boats, which `producer_of` doesn't list.)
+    Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && (*r == Res::Fish || producer_of(*r).is_some_and(|k| k.era() <= era))).collect()
 }
 
 // A second `impl Game` block, in a different file. Rust lets you split a
@@ -553,21 +554,21 @@ impl Game {
                 return step;
             }
         }
-        // Fish first, for a house that lacks a good: a fishing boat costs
-        // one wood (there are no fishing huts: boats fish the shoals).
-        if lacking && p.spare(Res::Fish) <= 0 {
-            let step = self.ai_fish(c);
-            ailog!("grow: fish: {step:?}");
-            if step != Step::Blocked {
-                return step;
-            }
-        }
         // Producers of goods for a house that lacks one, or for the next
         // house when none of a good is spare. More than that only hold slots
         // (and get torn down again for them).
         let mut by_supply: Vec<Res> = goods.iter().copied().filter(|&r| lacking || p.spare(r) <= 0).collect();
         by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in by_supply {
+            // Fish: fishing boats, from a dock.
+            if r == Res::Fish {
+                let step = self.ai_fish(c);
+                ailog!("grow: good Fish (supply {}) from fishing boats: {step:?}", p.supply[r.idx()]);
+                if step != Step::Blocked {
+                    return step;
+                }
+                continue;
+            }
             let Some(k) = self.ai_producer(c.me, r) else { continue };
             let step = self.ai_project(k, c, true);
             ailog!("grow: good {r:?} (supply {}) from {k:?}: {step:?}", p.supply[r.idx()]);
@@ -581,6 +582,14 @@ impl Game {
         others.retain(|r| !goods.contains(r));
         others.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in others {
+            if r == Res::Fish {
+                let step = self.ai_fish(c);
+                if step != Step::Blocked {
+                    c.relax = false;
+                    return step;
+                }
+                continue;
+            }
             let Some(k) = producer_of(r).filter(|&k| self.unlocked(c.me, k) && self.count_of(c.me, k) < Self::max_of(k)) else { continue };
             let step = self.ai_project(k, c, true);
             if step != Step::Blocked {
@@ -595,8 +604,8 @@ impl Game {
         Step::Blocked
     }
 
-    /// More fish: a dock if there's none, then a fishing boat for each
-    /// shoal tile near home (six at most). The boats go to the shoals by
+    /// More fish: a dock if there's none, then fishing boats, two for each
+    /// shoal tile near home (ten at most). The boats go to the shoals by
     /// themselves (`ai_navy`).
     fn ai_fish(&mut self, c: &mut Census) -> Step {
         let me = c.me;
@@ -612,7 +621,7 @@ impl Game {
             return Step::Waiting;
         }
         let boats = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::FishingBoat).count() + self.ents[dock].queue.iter().filter(|&&k| k == Kind::FishingBoat).count();
-        if boats >= shoals.min(6) || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
+        if boats >= (2 * shoals).min(10) || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
             return Step::Blocked;
         }
         if self.queue_unit(self.ents[dock].id, Kind::FishingBoat).is_ok() {
