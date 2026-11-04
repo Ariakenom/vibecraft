@@ -1,7 +1,10 @@
 //! People: beds, workers, builders and recruits.
 //!
 //! Everyone is a unit you can see. Workers with nothing to do stand around
-//! the **campfire** in front of the Capitol: they are the free people.
+//! the **campfire** (the town square) in front of a Capitol: they are the
+//! free people. Every finished Capitol has one. Newcomers turn up at the
+//! Capitol nearest the house with the free bed, workers go home to the
+//! square nearest them, and a job takes the nearest free worker.
 //! - A producer needs workers standing at it (`Stats::workers`); without its
 //!   full crew there it makes nothing. Workers can be killed there.
 //! - A foundation needs builders: workers who walk to it and build it while
@@ -42,15 +45,48 @@ impl Game {
     // -----------------------------------------------------------------------
     // Where people are
 
-    /// Where `owner`'s campfire burns, if they still have a Capitol: in
-    /// front of their oldest one.
+    /// Where `owner`'s home campfire burns, if they still have a Capitol:
+    /// in front of their oldest one. (Every finished Capitol has one: see
+    /// `campfires`.)
     pub fn campfire(&self, owner: u8) -> Option<(f32, f32)> {
-        self.home_capitol(owner).map(|c| (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD))
+        self.home_capitol(owner).map(|c| self.campfire_of(c))
     }
 
-    /// A spot on the ring around the campfire for worker `id` to stand on.
+    /// The campfire in front of Capitol `c` (an index into `ents`).
+    pub fn campfire_of(&self, c: usize) -> (f32, f32) {
+        (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD)
+    }
+
+    /// `owner`'s finished Capitols, oldest first.
+    pub fn capitols(&self, owner: u8) -> impl Iterator<Item = usize> + '_ {
+        (0..self.ents.len()).filter(move |&i| {
+            let e = &self.ents[i];
+            e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0
+        })
+    }
+
+    /// Every campfire of `owner`'s, oldest Capitol first.
+    pub fn campfires(&self, owner: u8) -> Vec<(f32, f32)> {
+        self.capitols(owner).map(|c| self.campfire_of(c)).collect()
+    }
+
+    /// `owner`'s finished Capitol nearest (x, y); ties go to the older.
+    pub fn nearest_capitol(&self, owner: u8, x: f32, y: f32) -> Option<usize> {
+        self.capitols(owner).min_by(|&a, &b| {
+            let d = |c: usize| (self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
+            d(a).total_cmp(&d(b)).then(a.cmp(&b))
+        })
+    }
+
+    /// A spot on the ring around `owner`'s home campfire for worker `id`.
+    #[cfg(test)]
     pub(crate) fn campfire_spot(&self, owner: u8, id: u32) -> Option<(f32, f32)> {
-        let (cx, cy) = self.campfire(owner)?;
+        Some(self.campfire_spot_at(self.home_capitol(owner)?, id))
+    }
+
+    /// A spot on the ring around Capitol `c`'s campfire for worker `id`.
+    pub(crate) fn campfire_spot_at(&self, c: usize, id: u32) -> (f32, f32) {
+        let (cx, cy) = self.campfire_of(c);
         // The golden angle spreads people evenly, whatever their ids.
         let a = id as f32 * 2.399_963;
         let r = 1.2 + (id % 3) as f32 * 0.5;
@@ -63,22 +99,28 @@ impl Game {
         if dy < -wall {
             dy = -dy;
         }
-        Some((cx + dx, cy + dy))
+        (cx + dx, cy + dy)
     }
 
-    /// Is this a free worker: idle, at the campfire?
+    /// Is this a free worker: idle, at one of its owner's campfires?
     pub fn is_free_worker(&self, e: &Entity) -> bool {
         if !e.alive || e.kind != Kind::Worker || e.order != Order::Idle || e.aboard != 0 {
             return false;
         }
-        self.campfire(e.owner).is_some_and(|(cx, cy)| (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA)
+        self.capitols(e.owner).any(|c| {
+            let (cx, cy) = self.campfire_of(c);
+            (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA
+        })
     }
 
-    /// Send a worker back to stand at the campfire.
+    /// Send a worker back to stand at the campfire nearest them.
     pub(crate) fn go_home(&mut self, i: usize) {
-        let (owner, id) = (self.ents[i].owner, self.ents[i].id);
-        match self.campfire_spot(owner, id) {
-            Some((x, y)) => self.ents[i].set_order(Order::Move { x, y }),
+        let (owner, id, x, y) = (self.ents[i].owner, self.ents[i].id, self.ents[i].x, self.ents[i].y);
+        match self.nearest_capitol(owner, x, y) {
+            Some(c) => {
+                let (x, y) = self.campfire_spot_at(c, id);
+                self.ents[i].set_order(Order::Move { x, y });
+            }
             None => self.ents[i].set_order(Order::Idle),
         }
     }
@@ -91,12 +133,19 @@ impl Game {
         e.selected = false;
     }
 
-    /// Spawn a worker at `owner`'s campfire (or at (x, y), walking home).
+    /// Spawn a worker at `owner`'s home campfire (or at (x, y), walking
+    /// home to the nearest).
     pub(crate) fn spawn_worker(&mut self, owner: u8, at: Option<(f32, f32)>) -> Option<u32> {
+        let c = self.home_capitol(owner);
+        self.spawn_worker_near(owner, c, at)
+    }
+
+    /// Spawn a worker at Capitol `c`'s campfire (or at `at`, walking home).
+    pub(crate) fn spawn_worker_near(&mut self, owner: u8, c: Option<usize>, at: Option<(f32, f32)>) -> Option<u32> {
         let id = self.ents.len() as u32;
         let (x, y) = match at {
             Some(p) => p,
-            None => self.campfire_spot(owner, id)?,
+            None => self.campfire_spot_at(c?, id),
         };
         let id = self.spawn_unit(Kind::Worker, owner, x, y);
         if at.is_some() {
@@ -178,19 +227,21 @@ impl Game {
         let mut used = vec![[0u32; N_RES]; n];
         // In cheat mode nothing a player has holds slots.
         let cheat: Vec<bool> = self.players.iter().map(|p| p.cheat).collect();
-        // Fishing boats lying still on a shoal (worked out first: the loop
-        // below borrows every entity).
-        let fishing: Vec<bool> = self.ents.iter().map(|e| e.alive && e.kind == Kind::FishingBoat && e.order == Order::Idle && e.aboard == 0 && self.on_shoal(e.x, e.y)).collect();
+        // Fishing boats lying still at a fishing spot, one to a spot (worked
+        // out first: the loop below borrows every entity).
+        let fishing: Vec<bool> = self.fishing_claims().into_iter().map(|c| c.is_some()).collect();
         for e in self.ents.iter_mut().filter(|e| e.alive) {
             let o = e.owner as usize;
             let st = e.kind.stats();
             e.crew = crew[e.id as usize];
             e.hired = hired[e.id as usize];
-            if e.is_building() && e.built < 1.0 {
+            // (Saved: a loaded game keeps the count it was saved with, which
+            // the next tick works out again exactly as the saved one would.)
+            if settle && e.is_building() && e.built < 1.0 {
                 e.builders_in = building[e.id as usize];
             }
             e.crewed = e.built >= 1.0 && e.crew >= st.workers;
-            // A fishing boat fishes while it lies still on a shoal.
+            // A fishing boat fishes while it lies still at a spot of its own.
             if e.kind == Kind::FishingBoat {
                 e.crewed = fishing[e.id as usize];
             }
@@ -407,16 +458,18 @@ impl Game {
         }
     }
 
-    /// Houses of `owner`, nearest the Capitol first (ties by id): squared
-    /// distance in whole tiles, so it's exact on every computer.
+    /// Houses of `owner`, nearest a Capitol first (ties by id): squared
+    /// distance in whole tiles to the nearest finished one, so it's exact on
+    /// every computer.
     pub(crate) fn houses_by_distance(&self, owner: u8) -> Vec<usize> {
-        let (cx, cy) = self.home_capitol(owner).map_or((0, 0), |c| (self.ents[c].tx, self.ents[c].ty));
+        let caps: Vec<(i32, i32)> = self.capitols(owner).map(|c| (self.ents[c].tx, self.ents[c].ty)).collect();
+        let near = |e: &Entity| caps.iter().map(|&(cx, cy)| (e.tx - cx).pow(2) + (e.ty - cy).pow(2)).min().unwrap_or(0);
         let mut hs: Vec<(i32, usize)> = self
             .ents
             .iter()
             .enumerate()
             .filter(|(_, e)| e.alive && e.owner == owner && e.kind.house_tier().is_some())
-            .map(|(i, e)| ((e.tx - cx).pow(2) + (e.ty - cy).pow(2), i))
+            .map(|(i, e)| (near(e), i))
             .collect();
         hs.sort();
         hs.into_iter().map(|(_, i)| i).collect()
@@ -536,8 +589,25 @@ impl Game {
     // -----------------------------------------------------------------------
     // Growth and hiring, every tick
 
-    /// Newcomers: while there's a free bed, someone turns up at the
-    /// campfire every `growth_interval(beds)` seconds.
+    /// Newcomers: while there's a free bed, someone turns up every
+    /// `growth_interval(beds)` seconds, at the campfire of the Capitol
+    /// nearest the house whose bed it is (`fill_houses` says which houses
+    /// have one free; a Capitol's own beds count as its).
+    fn newcomer_capitol(&self, owner: u8) -> Option<usize> {
+        let home = self.home_capitol(owner)?;
+        // Houses fill first (`fill_houses`): the first one with a bed free.
+        let mut order = self.houses_by_distance(owner);
+        order.sort_by_key(|&i| self.ents[i].kind.house_tier());
+        if let Some(h) = order.iter().copied().find(|&i| (self.ents[i].residents as u32) < self.ents[i].beds() as u32) {
+            return Some(self.nearest_capitol(owner, self.ents[h].x, self.ents[h].y).unwrap_or(home));
+        }
+        // Every house is full: the Capitols' own beds, oldest first.
+        let house_beds: u32 = order.iter().map(|&i| self.ents[i].beds() as u32).sum();
+        let over = self.players[owner as usize].people.saturating_sub(house_beds);
+        let caps: Vec<usize> = self.capitols(owner).collect();
+        Some(caps.get((over / CAPITOL_BEDS) as usize).copied().unwrap_or(home))
+    }
+
     pub(crate) fn grow(&mut self) {
         for owner in self.player_ids() {
             let p = &mut self.players[owner as usize];
@@ -552,7 +622,8 @@ impl Game {
             if p.people >= p.beds {
                 continue;
             }
-            if self.spawn_worker(owner, None).is_some() {
+            let c = self.newcomer_capitol(owner);
+            if self.spawn_worker_near(owner, c, None).is_some() {
                 let p = &mut self.players[owner as usize];
                 p.people += 1;
                 p.free += 1;

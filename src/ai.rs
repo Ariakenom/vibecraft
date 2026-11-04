@@ -316,8 +316,11 @@ impl Game {
     pub fn ai_think(&mut self, me: u8) {
         let Some(cap) = self.home_capitol(me) else { return };
         let mut c = self.census(me, (self.ents[cap].x, self.ents[cap].y));
-        // Cancel foundations nobody can reach (`census` left them out).
-        let cut_off: Vec<u32> = self.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0 && !c.unfinished.contains(&e.id)).map(|e| e.id).collect();
+        // Cancel foundations nobody can reach (`census` left them out), and
+        // tear down a dock the town has walled off from its people (its
+        // recruits could never get there: another goes up where they can).
+        let mut cut_off: Vec<u32> = self.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0 && !c.unfinished.contains(&e.id)).map(|e| e.id).collect();
+        cut_off.extend(self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::Dock && e.built >= 1.0 && !touches(&self.map, &c.reach, e.tx, e.ty, e.kind.stats().size)).map(|e| e.id));
         if !cut_off.is_empty() {
             let _ = self.apply(me, Command::Demolish { ids: cut_off });
         }
@@ -611,7 +614,7 @@ impl Game {
     fn ai_fish(&mut self, c: &mut Census) -> Step {
         let me = c.me;
         let home = c.home;
-        let shoals = self.deps.iter().filter(|d| d.kind == Dep::Fish && (d.center().0 - home.0).hypot(d.center().1 - home.1) < 26.0).count();
+        let shoals = self.deps.iter().filter(|d| d.kind == Dep::Fish && (d.center().0 - home.0).hypot(d.center().1 - home.1) < 40.0).count();
         if shoals == 0 {
             return Step::Blocked;
         }
@@ -625,7 +628,7 @@ impl Game {
         // As many as the town's plan has (one over), and only while no fish
         // is spare: each is a person, and holds wood.
         let pl = &self.players[me as usize];
-        let want = (target(pl.era).count(Kind::FishingBoat) as usize + 1).min(2 * shoals).min(10);
+        let want = (target(pl.era).count(Kind::FishingBoat) as usize + 1).min(shoals).min(10);
         if boats >= want || pl.spare(Res::Fish) > 0 || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
             return Step::Blocked;
         }
@@ -832,7 +835,13 @@ impl Game {
                     self.find_spot(me, kind, x, y, 1, 3, &c.reach)
                 })
             }
-            Some(_) => self.find_spot(me, kind, bx, by, 3, 32, &c.reach),
+            // On the coast of the open sea, not a lake: its boats must get
+            // out to the fishing spots and the other towns.
+            Some(_) => {
+                let s = kind.stats().size;
+                let coast = |tx: i32, ty: i32| (ty - 1..=ty + s).any(|y| (tx - 1..=tx + s).any(|x| self.map.inside(x, y) && self.sea[self.map.idx(x, y)]));
+                self.find_spot_where(me, kind, bx, by, 3, 40, &c.reach, &coast)
+            }
             // A second Capitol well away from the first, so losing one
             // doesn't take the other's town with it.
             None if kind == Kind::Capitol => {
@@ -1011,17 +1020,23 @@ impl Game {
                 }
             }
         }
-        // Fishing boats fish only on a shoal: an idle one elsewhere goes to
-        // the nearest shoal tile (that another of ours isn't lying on).
-        let shoals: Vec<(f32, f32)> = self.deps.iter().filter(|d| d.kind == Dep::Fish).map(|d| d.center()).collect();
+        // Fishing boats fish only at a spot of their own: an idle one that
+        // isn't fishing goes to the nearest spot no boat fishes or is
+        // sailing to (anyone's: a spot takes one boat).
+        let claims = self.fishing_claims();
+        let mut busy: Vec<(f32, f32)> = self.deps.iter().enumerate().filter(|&(d, _)| claims.contains(&Some(d))).map(|(_, d)| d.center()).collect();
+        busy.extend(self.ents.iter().filter(|o| o.alive && o.kind == Kind::FishingBoat).filter_map(|o| match o.order { Order::Move { x, y } => Some((x, y)), _ => None }));
+        let shoals: Vec<(f32, f32)> = self.deps.iter().filter(|d| d.kind == Dep::Fish && self.sea[self.map.idx(d.tx, d.ty)]).map(|d| d.center()).collect();
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || e.owner != me || e.kind != Kind::FishingBoat || e.order != Order::Idle || self.on_shoal(e.x, e.y) {
+            if !e.alive || e.owner != me || e.kind != Kind::FishingBoat || e.order != Order::Idle || claims[i].is_some() || !self.sea[self.map.idx(e.x as i32, e.y as i32)] {
                 continue;
             }
             let (x, y) = (e.x, e.y);
-            let taken = |p: (f32, f32)| self.ents.iter().any(|o| o.alive && o.kind == Kind::FishingBoat && o.id != e.id && (o.x - p.0).hypot(o.y - p.1) < 1.0);
-            let best = shoals.iter().copied().filter(|&p| !taken(p)).min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)));
+            let best = shoals.iter().copied().filter(|p| !busy.iter().any(|b| (b.0 - p.0).hypot(b.1 - p.1) < 1.0)).min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)));
+            if let Some(p) = best {
+                busy.push(p);
+            }
             if let Some((sx, sy)) = best {
                 let id = e.id;
                 self.order_move(id, sx, sy);

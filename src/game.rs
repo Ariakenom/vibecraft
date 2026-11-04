@@ -510,6 +510,9 @@ pub struct Game {
     pub ais: Vec<Ai>,
     pf: Pathfinder,
     grid: Vec<Vec<u32>>,
+    /// Water joined to the open sea round the map (lakes aren't), worked out
+    /// from the map: never saved, as the water never changes.
+    pub sea: Vec<bool>,
     alert_cooldown: f32,
     idle_cursor: u32,
 }
@@ -574,9 +577,11 @@ impl Game {
             ais,
             pf: Pathfinder::new(n),
             grid: vec![Vec::new(); cells],
+            sea: Vec::new(),
             alert_cooldown: 0.0,
             idle_cursor: 0,
         };
+        g.sea = g.open_sea();
         // Slots aren't saved: they follow from what exists. Only counted
         // here: a loaded game settles its houses on its next tick, exactly
         // as the saved one would have.
@@ -1160,7 +1165,7 @@ impl Game {
                 }
                 let i = self.map.idx(x, y);
                 let here = match dep {
-                    Dep::Water => self.map.terrain[i] == map::WATER,
+                    Dep::Water => self.map.wet(x, y),
                     _ => self.map.dep_at[i] >= 0 && self.deps[self.map.dep_at[i] as usize].kind == dep,
                 };
                 if here {
@@ -1185,7 +1190,7 @@ impl Game {
                 }
                 let i = self.map.idx(x, y);
                 let inner = x >= tx && y >= ty && x < tx + s && y < ty + s;
-                if (self.map.bld_at[i] >= 0 && self.map.bld_at[i] != except) || (inner && (self.map.terrain[i] == map::WATER || self.map.dep_at[i] >= 0)) {
+                if (self.map.bld_at[i] >= 0 && self.map.bld_at[i] != except) || (inner && (self.map.wet(x, y) || self.map.dep_at[i] >= 0)) {
                     return false;
                 }
             }
@@ -1193,7 +1198,7 @@ impl Game {
         // Keep every campfire clear: the free workers stand there.
         let (x0, y0, x1, y1) = (tx as f32, ty as f32, (tx + s) as f32, (ty + s) as f32);
         for p in self.player_ids() {
-            if let Some((cx, cy)) = self.campfire(p) {
+            for (cx, cy) in self.campfires(p) {
                 let (nx, ny) = (cx.clamp(x0, x1), cy.clamp(y0, y1));
                 if (nx - cx).powi(2) + (ny - cy).powi(2) < CAMPFIRE_CLEAR * CAMPFIRE_CLEAR {
                     return false;
@@ -1620,8 +1625,65 @@ impl Game {
     // -----------------------------------------------------------------------
     // Units
 
+    /// Every water tile a boat can reach from the map's corner (the open sea).
+    fn open_sea(&self) -> Vec<bool> {
+        let m = &self.map;
+        let mut seen = vec![false; (m.w * m.h) as usize];
+        if !m.sailable(0, 0) {
+            return seen;
+        }
+        seen[0] = true;
+        let mut stack = vec![(0, 0)];
+        while let Some((x, y)) = stack.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if m.sailable(nx, ny) && !seen[m.idx(nx, ny)] {
+                    seen[m.idx(nx, ny)] = true;
+                    stack.push((nx, ny));
+                }
+            }
+        }
+        seen
+    }
+
+    /// The fishing spot each fishing boat fishes, by entity index: one boat
+    /// to a spot. A boat lying still within `SHOAL_REACH` of a spot nobody
+    /// has yet takes the nearest such (older boats choose first).
+    pub fn fishing_claims(&self) -> Vec<Option<usize>> {
+        let mut out = vec![None; self.ents.len()];
+        let mut taken = vec![false; self.deps.len()];
+        for (i, e) in self.ents.iter().enumerate() {
+            if !e.alive || e.kind != Kind::FishingBoat || e.order != Order::Idle || e.aboard != 0 {
+                continue;
+            }
+            let (cx, cy) = (e.x.floor() as i32, e.y.floor() as i32);
+            let mut best: Option<(f32, usize)> = None;
+            for ty in cy - 2..=cy + 2 {
+                for tx in cx - 2..=cx + 2 {
+                    if !self.map.inside(tx, ty) {
+                        continue;
+                    }
+                    let d = self.map.dep_at[self.map.idx(tx, ty)];
+                    if d < 0 || taken[d as usize] || self.deps[d as usize].kind != Dep::Fish {
+                        continue;
+                    }
+                    let dist = (tx as f32 + 0.5 - e.x).hypot(ty as f32 + 0.5 - e.y);
+                    if dist <= SHOAL_REACH && best.is_none_or(|(b, j)| dist < b || (dist == b && (d as usize) < j)) {
+                        best = Some((dist, d as usize));
+                    }
+                }
+            }
+            if let Some((_, d)) = best {
+                taken[d] = true;
+                out[i] = Some(d);
+            }
+        }
+        out
+    }
+
     /// Is (x, y) on or right next to a fish shoal (within `SHOAL_REACH` of
     /// a shoal tile's middle)?
+    #[cfg(test)]
     pub fn on_shoal(&self, x: f32, y: f32) -> bool {
         let (cx, cy) = (x.floor() as i32, y.floor() as i32);
         (cy - 2..=cy + 2).any(|ty| {
@@ -2414,7 +2476,7 @@ impl Game {
         }
     }
 
-    /// Select every free worker at the local player's campfire. Returns one
+    /// Select every free worker at the local player's campfires. Returns one
     /// of their ids, or -1 if there are none.
     pub fn select_free_workers(&mut self) -> i32 {
         let free: Vec<usize> = (0..self.ents.len()).filter(|&i| self.ents[i].owner == self.local && self.is_free_worker(&self.ents[i])).collect();

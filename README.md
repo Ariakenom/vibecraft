@@ -523,8 +523,11 @@ versions don't play together.
 - **Winning:** destroy every rival Capitol. From the Medieval era a player
   can found as many as they like (8 wood, 8 stone, 6 brick, 4 builders; the
   first holds nothing). Losing one costs only that one; lose the last (a
-  foundation doesn't count) and you're out. The town square, with its
-  statue, lies in front of your oldest Capitol.
+  foundation doesn't count) and you're out. Every Capitol has a town
+  square, with its statue, in front of it: newcomers turn up at the one
+  nearest the house whose bed is free, free workers wait at the nearest,
+  and a job takes the nearest free worker. So a second Capitol grows its
+  own town.
 - **The start:** a Capitol (2 wood, 1 stone, 1 grain and 1 fruit by itself,
   and 4 beds), nobody and no houses. Four newcomers arrive in the town square
   (the first after 2 seconds, then every 10) to fill the Capitol's beds: they build the
@@ -549,8 +552,8 @@ versions don't play together.
 - **People are workers you can see.** A hut gets 2 beds for each
   different food it receives (up to 3 kinds); bigger houses get 3 for each
   good past the third (a tower block with 13 goods has 36). While there's a free bed, a
-  newcomer appears in the town square in front of the Capitol (faster as the
-  town grows). Workers idle in the town square are free; they walk off
+  newcomer appears in a town square (the one of the Capitol nearest that
+  bed's house; faster as the town grows). Workers idle in the town square are free; they walk off
   by themselves to build foundations, work producers and become soldiers.
   A producer works only while its workers stand at it, so raids that kill
   them hurt. Move its workers away to pause it.
@@ -604,10 +607,11 @@ versions don't play together.
   and everyone sees its missile go up and the nuke burst in the air.
 - **Boats.** A **Dock** (Ancient, 2 wood) stands on the shore, next to water,
   and builds boats, which come out on the water next to it. A
-  **fishing boat** (1 wood) makes 3 fish while it lies still on or next to a
-  **fish shoal** (moving it stops the catch). Shoals lie in every start's
-  harbour and along the sea between the towns; they're drawn as pale
-  ripples. There's no fishing hut any more: fish come from boats. A **transport** (2 wood) carries up to 8 land units:
+  **fishing boat** (1 wood) makes 3 fish while it lies still at a
+  **fishing spot** (drawn as pale ripples; moving it stops the catch). One
+  boat fishes a spot: a second one there catches nothing. Four spots lie
+  in the sea nearest every start, and more out on the open sea. There's no
+  fishing hut any more: fish come from boats. A **transport** (2 wood) carries up to 8 land units:
   right-click it with them selected to board (an idle transport comes in to
   meet them), then select it and right-click the shore to put them ashore
   there; if it sinks, everyone aboard is lost. **Warships**, one for each
@@ -645,12 +649,14 @@ versions don't play together.
   submarines in turn). It doesn't use transports or nuclear submarines yet. Easy, Normal and Hard
   differ in how much of its people it puts under arms, how soon it attacks,
   and its supply (80%, 100%, 130%).
-- **Maps:** two players get a 120×120 map with 180° symmetry; three or four
-  get 144×144 with four-way symmetry, so every start is the same, just turned.
-  Open sea six tiles wide runs along every edge, so boats can sail round
-  the map, and every start has a harbour about a dozen tiles from its
-  Capitol, joined to the sea by a channel. Lakes are a little bigger than
-  before boats. A base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
+- **Maps:** two players get 120×120 tiles of land and coast with 180°
+  symmetry; three or four get 144×144 with four-way symmetry, so every
+  start is the same, just turned. Round it lies open sea, 18 more tiles on
+  every side (`OPEN_SEA`: the maps are 156 and 180 tiles across), so boats
+  sail round the map. **Rivers** wind in from the sea, too deep to wade,
+  with **shallow fords** every few tiles and wherever one crosses the way
+  to the middle: people wade a ford and boats sail it (`map::SHALLOW`).
+  Lakes are a little bigger than before boats. A base's deposits lie 1.5 times as far out as on the first, 80-tile maps.
   More lie out on the map, the same for everyone: clay, iron, coal,
   saltpeter, sheep hills, oil and bauxite as well as the Ancient ones.
   A deposit that would sit in a lake moves to the nearest dry land, and

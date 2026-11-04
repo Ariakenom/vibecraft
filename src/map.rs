@@ -10,9 +10,15 @@ const SPREAD: f32 = 1.5;
 /// Free tiles kept between the edges of two clusters of different kinds, so
 /// a building fits next to each.
 const CLUSTER_GAP: f32 = 4.0;
-/// Tiles of open sea along every edge of the map (the shore shelves up to
+/// Tiles of open sea along every edge of the land (the shore shelves up to
 /// the land over the next few). Boats sail round the map on it.
 const SEA: i32 = 6;
+/// More open sea all round, outside the land: the whole map is this much
+/// wider and taller on each side (about four times the sea there was).
+pub const OPEN_SEA: i32 = 18;
+/// Fishing spots by every base, and out on the open sea along each edge.
+const FISH_NEAR_BASE: usize = 4;
+const FISH_OPEN: i32 = 5;
 
 pub const GRASS: u8 = 0;
 pub const WATER: u8 = 1;
@@ -20,6 +26,8 @@ pub const SAND: u8 = 2;
 pub const HILL: u8 = 3;
 /// Where a nuke fell: blocked for good.
 pub const CRATER: u8 = 4;
+/// Shallow water: a ford across a river. Boats sail it and people wade it.
+pub const SHALLOW: u8 = 5;
 
 /// One tile of a deposit: a tree of a forest, a rock of a stone outcrop, a
 /// fruit bush, grazing horses or game. Extractors are built next to them.
@@ -61,9 +69,13 @@ impl Map {
     pub fn passable(&self, x: i32, y: i32) -> bool {
         self.inside(x, y) && !self.blocked[self.idx(x, y)]
     }
-    /// Open water a boat can sail on.
+    /// Water a boat can sail on, shallows too.
     pub fn sailable(&self, x: i32, y: i32) -> bool {
-        self.inside(x, y) && self.terrain[self.idx(x, y)] == WATER
+        self.inside(x, y) && matches!(self.terrain[self.idx(x, y)], WATER | SHALLOW)
+    }
+    /// Any water, deep or shallow.
+    pub fn wet(&self, x: i32, y: i32) -> bool {
+        self.sailable(x, y)
     }
     /// `passable` for land units, `sailable` for boats.
     pub fn passable_for(&self, naval: bool, x: i32, y: i32) -> bool {
@@ -324,42 +336,83 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     ];
     let mirror = hash(6, 911, seed) < 0.5;
     let flip = |dx: i32, dy: i32| if mirror { (-dy, -dx) } else { (dx, dy) };
-    // (First, so the clusters below keep clear of it.)
-    // A pond by every base, so every start has fish: houses need three
-    // different foods to grow, and the others are few.
-    // It's a harbour: a channel joins it to the sea, so a dock there can
-    // send boats out to everyone else's coast.
-    let pond = { let (dx, dy) = flip(-5, 12); (b1.0 + dx, b1.1 + dy) };
-    let mut wet = |x: i32, y: i32| {
+    // Rivers: from the sea up into the land, winding, three tiles wide
+    // and too deep to wade, with shallow fords every few tiles (and where
+    // one crosses a road to the middle) for people to cross. Two from the
+    // first base's edges, and their turned images: every base gets the
+    // same. (Before the clusters, so deposits keep clear of them.)
+    let near_base = |x: f32, y: f32| all_bases.iter().map(|&b| dist((x, y), b)).fold(f32::MAX, f32::min);
+    let near_road = |x: f32, y: f32| all_bases.iter().map(|&b| dist_to_segment((x, y), b, centre)).fold(f32::MAX, f32::min);
+    let carve = |x: i32, y: i32, t: u8, terrain: &mut Vec<u8>, shade: &mut Vec<u8>, feat: &mut Vec<Feat>| {
         if x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
             return;
         }
         for (px, py) in images(x, y) {
             let i = (py * w + px) as usize;
-            terrain[i] = WATER;
-            shade[i] = shade[i].min(70);
+            // A ford never fills in the sea: only river (and land) turns shallow.
+            if t == SHALLOW && terrain[i] == WATER && shade[i] < 60 {
+                continue;
+            }
+            terrain[i] = t;
+            shade[i] = if t == WATER { shade[i].min(70) } else { 88 };
             feat[i] = Feat::None;
         }
     };
-    for dy in -2..=2 {
-        for dx in -2..=2 {
-            if (dx * dx + dy * dy) as f32 <= 2.6 {
-                wet(pond.0 + dx, pond.1 + dy);
+    let rivers = [
+        // (start on an edge, heading in): along the bottom edge, and up the left.
+        ((w as f32 * pick(60, 0.5, 0.66), h as f32 - 3.0), -std::f32::consts::FRAC_PI_2),
+        ((2.0, h as f32 * pick(61, 0.34, 0.48)), 0.0),
+    ];
+    for (k, &((x0, y0), heading)) in rivers.iter().enumerate() {
+        let len = pick(62 + k as i32, 26.0, 38.0) as i32;
+        let (mut x, mut y, mut a) = (x0, y0, heading);
+        let mut path: Vec<(f32, f32)> = Vec::new();
+        let mut inland = 0;
+        for step in 0..(len + 20) {
+            // Wander, pulled back toward the way in, so it winds but goes on.
+            a += (hash(step, 70 + k as i32, seed) - 0.5) * 0.7 + (heading - a) * 0.15;
+            x += a.cos();
+            y += a.sin();
+            if near_base(x, y) < 16.0 || dist((x, y), centre) < 9.0 || x < 1.0 || y < 1.0 || x > w as f32 - 2.0 || y > h as f32 - 2.0 {
+                break;
+            }
+            let i = (y as i32 * w + x as i32) as usize;
+            if terrain[i] != WATER || inland > 0 {
+                inland += 1;
+            }
+            path.push((x, y));
+            if inland >= len {
+                break;
             }
         }
-    }
-    // Straight out to the nearest edge, three tiles wide, to the sea.
-    let (sx, sy) = if pond.0.min(w - 1 - pond.0) < pond.1.min(h - 1 - pond.1) {
-        (if pond.0 < w / 2 { -1 } else { 1 }, 0)
-    } else {
-        (0, if pond.1 < h / 2 { -1 } else { 1 })
-    };
-    let (mut x, mut y) = pond;
-    while x.min(y).min(w - 1 - x).min(h - 1 - y) > 1 {
-        x += sx;
-        y += sy;
-        for k in -1..=1 {
-            wet(x + k * sy.abs(), y + k * sx.abs());
+        // Deep water along it...
+        for &(px, py) in &path {
+            for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                carve(px as i32 + dx, py as i32 + dy, WATER, &mut terrain, &mut shade, &mut feat);
+            }
+        }
+        // ...then fords across it, and its head, shallow.
+        let n = path.len();
+        let mut last_ford = -100i32;
+        for (j, &(px, py)) in path.iter().enumerate() {
+            let land = j + 1 + inland as usize > n; // (the inland part: the last `inland` steps)
+            let ford = land && ((j as i32 - last_ford >= 9 && j + 3 < n) || near_road(px, py) < 4.0 || j + 3 >= n);
+            if !ford {
+                continue;
+            }
+            if j + 3 < n && near_road(px, py) >= 4.0 {
+                last_ford = j as i32;
+            }
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    if dx * dx + dy * dy <= 4 {
+                        let (tx, ty) = (px as i32 + dx, py as i32 + dy);
+                        if tx >= 0 && ty >= 0 && tx < w && ty < h && terrain[(ty * w + tx) as usize] == WATER {
+                            carve(tx, ty, SHALLOW, &mut terrain, &mut shade, &mut feat);
+                        }
+                    }
+                }
+            }
         }
     }
     // A cluster that would sit in a lake moves to the nearest dry ground
@@ -371,7 +424,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             (-ri..=ri).all(|dx| {
                 let (x, y) = (cx + dx, cy + dy);
                 let d = ((dx * dx + dy * dy) as f32).sqrt();
-                d > r + 2.0 || (x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && !matches!(terrain[(y * w + x) as usize], WATER | SAND))
+                d > r + 2.0 || (x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && !matches!(terrain[(y * w + x) as usize], WATER | SAND | SHALLOW))
             })
         })
     };
@@ -421,7 +474,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 if d <= r + 1.0 {
                     for (px, py) in images(x, y) {
                         let i = (py * w + px) as usize;
-                        if terrain[i] == WATER || terrain[i] == SAND {
+                        if matches!(terrain[i], WATER | SAND | SHALLOW) {
                             terrain[i] = GRASS;
                             shade[i] = shade[i].max(110); // drawn as grass, not as the lake bed
                         }
@@ -499,10 +552,10 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         for y in 1..h - 1 {
             for x in 1..w - 1 {
                 let i = (y * w + x) as usize;
-                if feat[i] != Feat::None || near_town(x, y) {
+                if feat[i] != Feat::None || near_town(x, y) || before[i] == SHALLOW {
                     continue;
                 }
-                let wet = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().filter(|&&(dx, dy)| before[((y + dy) * w + x + dx) as usize] == WATER).count();
+                let wet = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().filter(|&&(dx, dy)| matches!(before[((y + dy) * w + x + dx) as usize], WATER | SHALLOW)).count();
                 if before[i] != WATER && wet >= 6 {
                     terrain[i] = WATER;
                     shade[i] = shade[i].min(80);
@@ -514,34 +567,48 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
 
-    // Fish shoals, on the water: the middle of every start's harbour, and
-    // spots along the sea between the towns (bottom and left edges, and
-    // their turned images). A spot is the water tile nearest a point, if
-    // one is near; a shoal is it and the water right around it.
-    let shoal = |cx: i32, cy: i32, feat: &mut Vec<Feat>, terrain: &[u8]| {
-        let near = (0..=3).find_map(|r| (0..(8 * r).max(1)).map(|k| if r == 0 { (0, 0) } else { ring_point(r, k) }).find(|&(dx, dy)| {
-            let (x, y) = (cx + dx, cy + dy);
-            x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && terrain[(y * w + x) as usize] == WATER
-        }));
-        let Some((dx, dy)) = near else { return };
-        let (x0, y0) = (cx + dx, cy + dy);
-        for (ox, oy) in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1)] {
-            let (x, y) = (x0 + ox, y0 + oy);
-            if x < 1 || y < 1 || x >= w - 1 || y >= h - 1 || terrain[(y * w + x) as usize] != WATER {
-                continue;
-            }
-            for (px, py) in images(x, y) {
-                if terrain[(py * w + px) as usize] == WATER {
-                    feat[(py * w + px) as usize] = Feat::Fish;
+    // Fishing spots, one tile each (one boat fishes a spot): the sea
+    // nearest every base, a few tiles apart, and more out on the open sea
+    // (placed once it's added, below). Only on water joined to the sea,
+    // where a dock on the coast can send boats.
+    let sea = {
+        let mut seen = vec![false; n];
+        let mut stack = vec![(0, 0)];
+        seen[0] = terrain[0] == WATER;
+        while let Some((x, y)) = stack.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx >= 0 && ny >= 0 && nx < w && ny < h && !seen[(ny * w + nx) as usize] && terrain[(ny * w + nx) as usize] == WATER {
+                    seen[(ny * w + nx) as usize] = true;
+                    stack.push((nx, ny));
                 }
             }
         }
+        seen
     };
-    shoal(pond.0, pond.1, &mut feat, &terrain);
-    for k in 0..6 {
-        let along = w * (2 * k + 1) / 12 + ((hash(k, 51, seed) - 0.5) * 6.0) as i32;
-        shoal(along, h - 3, &mut feat, &terrain);
-        shoal(2, along, &mut feat, &terrain);
+    {
+        let mut spots: Vec<(i32, i32)> = Vec::new();
+        let mut near: Vec<(i32, i32, i32)> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| sea[(y * w + x) as usize])
+            .map(|(x, y)| ((x - b1.0).pow(2) + (y - b1.1).pow(2), x, y))
+            .collect();
+        near.sort();
+        for (_, x, y) in near {
+            if spots.len() >= FISH_NEAR_BASE {
+                break;
+            }
+            // A tile out from the shore, and apart from the others.
+            let open = (-1..=1).all(|dy| (-1..=1).all(|dx| terrain[((y + dy).clamp(0, h - 1) * w + (x + dx).clamp(0, w - 1)) as usize] == WATER));
+            if open && spots.iter().all(|&(sx, sy)| (sx - x).abs().max((sy - y).abs()) >= 4) {
+                spots.push((x, y));
+            }
+        }
+        for (x, y) in spots {
+            for (px, py) in images(x, y) {
+                feat[(py * w + px) as usize] = Feat::Fish;
+            }
+        }
     }
 
     // Half the maps are mirrored left to right, so the starts sit on the
@@ -557,6 +624,31 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     } else {
         bases
     };
+
+    // The open sea all round: the land sits in the middle of a map
+    // `OPEN_SEA` tiles wider on every side. (Still symmetric: the margin is.)
+    let (iw, ih) = (w, h);
+    let (w, h) = (iw + 2 * OPEN_SEA, ih + 2 * OPEN_SEA);
+    let n = (w * h) as usize;
+    let (mut t2, mut s2, mut f2) = (vec![WATER; n], vec![20u8; n], vec![Feat::None; n]);
+    for y in 0..ih {
+        for x in 0..iw {
+            let (i, j) = (((y + OPEN_SEA) * w + x + OPEN_SEA) as usize, (y * iw + x) as usize);
+            (t2[i], s2[i], f2[i]) = (terrain[j], shade[j], feat[j]);
+        }
+    }
+    let (terrain, shade, mut feat) = (t2, s2, f2);
+    let bases: Vec<(i32, i32)> = bases.into_iter().map(|(x, y)| (x + OPEN_SEA, y + OPEN_SEA)).collect();
+    // Fishing spots out there: along each edge, half way out, and turned.
+    let images = |x: i32, y: i32| syms.iter().map(move |s| s.apply(x, y, w, h));
+    for k in 0..FISH_OPEN {
+        let along = OPEN_SEA + iw * (2 * k + 1) / (2 * FISH_OPEN) + ((hash(k, 81, seed) - 0.5) * 6.0) as i32;
+        for (x, y) in [(along, h - 1 - OPEN_SEA / 2), (OPEN_SEA / 2, along)] {
+            for (px, py) in images(x, y) {
+                feat[(py * w + px) as usize] = Feat::Fish;
+            }
+        }
+    }
 
     // Turn features into deposits and mark blocked tiles.
     let mut deps = Vec::new();

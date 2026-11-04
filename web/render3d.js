@@ -997,16 +997,21 @@ function computeHeights() {
   // How much of each corner's ground is land (0..1): the shore runs where
   // land meets water, so a corner half and half sits at the waterline.
   const landShare = new Float32Array(cw * ch);
+  // Shallow water (5, the fords): of the water round a corner, how much is
+  // shallow. Its ground lies just under the surface, so people wade.
+  const shallowShare = new Float32Array(cw * ch);
   for (let cy = 0; cy <= MH; cy++) for (let cx = 0; cx <= MW; cx++) {
-    let sum = 0, n = 0, land = 0;
+    let sum = 0, n = 0, land = 0, shallow = 0;
     for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
       const tx = cx + dx, ty = cy + dy;
       if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
       sum += elevOf(shade[ty * MW + tx] / 255); n++;
-      if (ter[ty * MW + tx] === 1) wet[cy * cw + cx] = 1; else land++;
+      const t = ter[ty * MW + tx];
+      if (t === 1 || t === 5) { wet[cy * cw + cx] = 1; if (t === 5) shallow++; } else land++;
     }
     h[cy * cw + cx] = n ? sum / n : -1;
     landShare[cy * cw + cx] = n ? land / n : 0;
+    shallowShare[cy * cw + cx] = n > land ? shallow / (n - land) : 0;
   }
   // Two blur passes turn the blocky per-tile steps into rolling hills.
   for (let pass = 0; pass < 2; pass++) {
@@ -1029,8 +1034,8 @@ function computeHeights() {
   // corner that touched water down to the seabed drew beaches half a tile
   // into the sea, and sank thin strips of land you could still walk on.)
   for (let i = 0; i < h.length; i++) {
-    const l = landShare[i];
-    h[i] = l === 0 ? Math.min(h[i], -0.4) : l === 1 ? Math.max(h[i], 0.02) : WATER_Y + (l - 0.5) * 0.3;
+    const l = landShare[i], sh = shallowShare[i];
+    h[i] = l === 0 ? (sh > 0 ? -0.4 + sh * 0.16 : Math.min(h[i], -0.4)) : l === 1 ? Math.max(h[i], 0.02) : WATER_Y + (l - 0.5) * 0.3;
   }
   R3.heights = h;
   R3.wet = wet;
@@ -1791,8 +1796,9 @@ function render3d(alpha, now, dt) {
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
     o.residents = E(i, F.residents);
-    // Only a player's home Capitol (their oldest finished one) has the campfire.
-    if (o.campfire) o.campfire.visible = W.home_capitol(o.owner) === id;
+    // Every finished Capitol has its town square (people.rs: newcomers come
+    // to the one nearest their house, and free workers wait at the nearest).
+    if (o.campfire) o.campfire.visible = !(E(i, F.flags) & 2);
     if (isBld(kind)) {
       const building = flags & 2;
       // Placed, but no builder there yet: only its owner sees where it will go.
@@ -2120,7 +2126,7 @@ function waterSide(x, y, s) {
   const ter = u8(W.terrain_ptr(), MW * MH), r = s / 2 + 2;
   let dx = 0, dz = 0;
   for (let ty = Math.floor(y - r); ty <= Math.floor(y + r); ty++) for (let tx = Math.floor(x - r); tx <= Math.floor(x + r); tx++) {
-    if (tx < 0 || ty < 0 || tx >= MW || ty >= MH || ter[ty * MW + tx] !== 1) continue;
+    if (tx < 0 || ty < 0 || tx >= MW || ty >= MH || (ter[ty * MW + tx] !== 1 && ter[ty * MW + tx] !== 5)) continue;
     const vx = tx + 0.5 - x, vz = ty + 0.5 - y, d = Math.hypot(vx, vz) || 1;
     dx += vx / d; dz += vz / d;
   }

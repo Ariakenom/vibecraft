@@ -443,7 +443,7 @@ function bakeTerrain() {
     c = mixc(c, [c[0] * 1.08, c[1] * 1.05, c[2] * 0.95], Math.max(0, Math.min(1, ht - 0.8))); // sunnier up high
     // Beaches follow the (smooth) height near the water, not the square tiles.
     if (beach) c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
-    if (t === 1) c = mixc(SAND, SEABED, Math.min(1, -ht));
+    if (t === 1 || t === 5) c = mixc(SAND, SEABED, Math.min(1, -ht));
     const k = 0.98 + n3 * 0.04;
     return [c[0] * k, c[1] * k, c[2] * k];
   };
@@ -452,7 +452,8 @@ function bakeTerrain() {
   const sc = terrainSmall.getContext("2d");
   const img = sc.createImageData(MW, MH);
   for (let i = 0; i < MW * MH; i++) {
-    const c = ter[i] === 1 ? [40, 96, 118] : colourAt((i % MW) + 0.5, ((i / MW) | 0) + 0.5);
+    // Deep water blue, shallow fords a paler blue-green, land its colours.
+    const c = ter[i] === 1 ? [40, 96, 118] : ter[i] === 5 ? [92, 150, 150] : colourAt((i % MW) + 0.5, ((i / MW) | 0) + 0.5);
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   sc.putImageData(img, 0, 0);
@@ -1574,7 +1575,7 @@ window.addEventListener("keydown", e => {
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
-  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free in the town square."); return; }
+  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; } else toast("Nobody is free in the town square."); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
   const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }

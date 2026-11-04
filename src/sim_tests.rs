@@ -1965,3 +1965,84 @@ fn ai_report() {
         println!("REPORT army at {label} min: {:.0} soldiers on average; {}", total as f32 / armies.len().max(1) as f32, mix.join(", "));
     }
 }
+
+/// A second Capitol is a town of its own: newcomers for the houses near it
+/// turn up at its square, and jobs near it take its free workers.
+#[test]
+fn every_capitol_has_its_own_town_square() {
+    let mut g = town(5, 1, 2);
+    g.players[1].cheat = true;
+    empty_campfire(&mut g);
+    // A second Capitol, well away from home, and a hut beside it.
+    let home = g.home_capitol(1).unwrap();
+    let (hx, hy) = (g.ents[home].tx, g.ents[home].ty);
+    let mut second = None;
+    'find: for r in 18..40 {
+        for (dx, dy) in [(r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, -r), (r, -r), (-r, r)] {
+            if g.can_place(Kind::Capitol, hx + dx, hy + dy, 1, 2) {
+                second = Some((hx + dx, hy + dy));
+                break 'find;
+            }
+        }
+    }
+    let (sx, sy) = second.expect("no room for a second Capitol");
+    let c2 = g.spawn_building(Kind::Capitol, 1, sx, sy, 1.0) as usize;
+    let mut hut = None;
+    'hut: for r in 4..10 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if g.can_place(Kind::Hut, sx + dx, sy + dy, 1, 1) {
+                    hut = Some(g.spawn_building(Kind::Hut, 1, sx + dx, sy + dy, 1.0));
+                    break 'hut;
+                }
+            }
+        }
+    }
+    let hut = hut.expect("no room for a hut") as usize;
+    // Every bed elsewhere taken, so the free ones are the new hut's (it
+    // needs food: the Capitols make grain and fruit).
+    g.resolve();
+    assert_eq!(g.nearest_capitol(1, g.ents[hut].x, g.ents[hut].y), Some(c2));
+    assert_eq!(g.campfires(1).len(), 2, "both Capitols have a square");
+    // Fill every other house's beds with workers busy elsewhere.
+    for h in houses(&g, 1) {
+        if h != hut {
+            for _ in 0..g.ents[h].beds() {
+                let w = g.spawn_unit(Kind::Worker, 1, 1.5, 1.5);
+                g.ents[w as usize].order = Order::Move { x: 1.5, y: 1.5 };
+            }
+        }
+    }
+    for _ in 0..(CAPITOL_BEDS * 2) {
+        let w = g.spawn_unit(Kind::Worker, 1, 1.5, 1.5);
+        g.ents[w as usize].order = Order::Move { x: 1.5, y: 1.5 };
+    }
+    g.resolve();
+    let before = g.ents.len();
+    g.players[1].arrive_timer = 0.0;
+    run(&mut g, 0.1);
+    let newcomer = (before..g.ents.len()).find(|&i| g.ents[i].kind == Kind::Worker).expect("nobody came");
+    let (fx, fy) = g.campfire_of(c2);
+    let e = &g.ents[newcomer];
+    assert!((e.x - fx).hypot(e.y - fy) <= crate::people::CAMPFIRE_AREA, "the newcomer for the far hut turned up {:.1} tiles from its Capitol's square", (e.x - fx).hypot(e.y - fy));
+    assert!(g.is_free_worker(e), "free at the second square");
+    // A foundation near the second Capitol takes that worker.
+    let (fx2, fy2) = spot_near(&g, Kind::Barracks, sx, sy);
+    let f = g.spawn_building(Kind::Barracks, 1, fx2, fy2, 0.0);
+    run(&mut g, 0.2);
+    assert_eq!(g.ents[newcomer].order, Order::Build(f), "the nearby worker wasn't sent");
+}
+
+/// A spot for `kind` near tile (x, y).
+fn spot_near(g: &Game, kind: Kind, x: i32, y: i32) -> (i32, i32) {
+    for r in 3..20 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if g.can_place(kind, x + dx, y + dy, 1, 1) {
+                    return (x + dx, y + dy);
+                }
+            }
+        }
+    }
+    panic!("no spot for {kind:?} near {x},{y}");
+}
