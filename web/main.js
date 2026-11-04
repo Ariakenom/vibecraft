@@ -11,7 +11,7 @@ const SIM_MS = 50;
 const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
   FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29, Carrier: 30,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
-  LumberCamp: 70, Quarry: 71, FishingHut: 72, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
+  LumberCamp: 70, Quarry: 71, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
   Townhouse: 86, SaltpeterWorks: 87, PowderMill: 88, Carpenter: 89, Printer: 90, Circus: 91,
   Tenement: 92, CoalMine: 93, SteelMill: 94, ExplosivesWorks: 95, Cannery: 96, CoalYard: 97, Press: 98, Factory: 99,
@@ -32,7 +32,7 @@ const isBigGun = k => k === K.AirDefense || k === K.Cannon || k === K.FieldGun |
 const isBld = k => k >= 64;
 const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
-  [K.FishingHut]: "Fishing Hut", [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture",
+  [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture",
   [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
   [K.Cottage]: "Cottage", [K.SheepFarm]: "Sheep Farm", [K.IronMine]: "Iron Mine", [K.Brickworks]: "Brickworks", [K.Bakery]: "Bakery",
   [K.Weaver]: "Weaver", [K.Brewery]: "Brewery", [K.SiegeWorkshop]: "Siege Workshop",
@@ -85,9 +85,8 @@ const DESC = {
   [K.Farm]: "Grows grain anywhere on open ground.",
   [K.LumberCamp]: "Cuts wood from a forest next to it. Costs nothing. For more, a Sawmill from the Medieval era.",
   [K.Quarry]: "Cuts stone from rock next to it. For more, a Stone Works from the Gunpowder era.",
-  [K.FishingHut]: "Catches fish from the water next to it.",
   [K.Dock]: "Builds boats, which come out on the water next to it: fishing boats, transports and warships. Build it on the sea shore to reach other towns' coasts.",
-  [K.FishingBoat]: "Fishes wherever it lies still on the water: 3 fish while it's there. A person, like any unit. Moving it stops the catch.",
+  [K.FishingBoat]: "Fishes the fish shoals out on the water (the pale ripples; every harbour has one): 3 fish while it lies still on or next to a shoal. Moving it stops the catch. A person, like any unit.",
   [K.Transport]: "Carries up to 8 land units over the water. Right-click it with land units to board (it comes in to meet them); with it selected, right-click the shore to put them ashore there. If it sinks, everyone aboard is lost.",
   [K.Galley]: "An oared warship with archers on deck. Sinks boats, and shoots at anything near the shore.",
   [K.Cog]: "A sturdier Medieval warship with crossbows. Costs iron.",
@@ -134,7 +133,7 @@ const DESC = {
   [K.Stoneworks]: "Cuts stone in bulk from rock next to it: more than two quarries, with two workers.",
   [K.Kiln]: "Fires bricks in bulk from the clay next to it: more than three brickworks, with two workers. Needs no wood.",
   [K.AirDefense]: "A surface-to-air missile battery. Every 5 seconds it fires a missile that brings down any aircraft in one hit, out to 10 tiles. It shoots down any nuke falling within 10 tiles of it, then needs 90 seconds to reload. It can't hit anything on the ground.",
-  [K.MissileSilo]: "Arms a nuke (2 uranium and 2 explosives, held until it's launched; 2 minutes), then launches it anywhere on the map. Everyone sees it coming, and is told when a silo is built and when it starts arming: 20 seconds after launch everything within 15 tiles of where it lands is destroyed, and a crater stays. An enemy Air Defense near the target shoots it down.",
+  [K.MissileSilo]: "Arms a nuke (V) (2 uranium and 2 explosives, held until it's launched; 2 minutes), then launches it (C) anywhere on the map. Everyone sees it coming, and is told when a silo is built and when it starts arming: 20 seconds after launch everything within 15 tiles of where it lands is destroyed, and a crater stays. An enemy Air Defense near the target shoots it down.",
 };
 // The six eras, and the house each brings. Which kinds and resources
 // belong to which era comes from Rust (kind_era, res_era); so do the
@@ -147,7 +146,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore", "a fish shoal"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist", "On the way to board", "Sailing to put its cargo ashore"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
@@ -176,13 +175,12 @@ function setNames(o) {
 // The build menu has a page per era: Tab goes to the next page, Shift+Tab
 // back. Each page hands out the same hotkeys in order (`PAGE_KEYS`, which
 // avoid W, A, S and D, the camera keys). Buildings in tech-tree order:
-const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.FishingHut, K.HuntingLodge, K.Orchard, K.Pasture, K.Barracks, K.Range, K.Stable, K.Tower,
+const BUILD_ORDER = [K.Hut, K.Farm, K.LumberCamp, K.Quarry, K.Dock, K.HuntingLodge, K.Orchard, K.Pasture, K.Barracks, K.Range, K.Stable, K.Tower,
   K.Sawmill, K.SheepFarm, K.Weaver, K.IronMine, K.Brickworks, K.Bakery, K.Brewery, K.SiegeWorkshop, K.Capitol,
   K.Stoneworks, K.Kiln, K.SaltpeterWorks, K.PowderMill, K.Carpenter, K.Printer, K.Circus,
   K.CoalMine, K.SteelMill, K.ExplosivesWorks, K.Cannery, K.CoalYard, K.Press, K.Factory,
   K.OilWell, K.BauxiteMine, K.PowerPlant, K.HaberBosch, K.RadioFactory, K.TankWorks, K.Airfield, K.AirDefense,
-  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo,
-  K.Dock]; // (last, so the Ancient page's hotkeys stay as they were: the dock is U)
+  K.UraniumMine, K.Reactor, K.CarPlant, K.TvPlant, K.MissileSilo]; // (the dock has the fishing hut's old place: F)
 const PAGE_KEYS = "QERTFGCVBYUIOJLN"; // the left hand's keys first (Y is a stretch)
 // Every building (for code that wants them all; keys are per page).
 const BUILD_MENU = BUILD_ORDER.map(k => [k, ""]);
@@ -200,6 +198,11 @@ function buildMenu() {
   return ks.map((k, n) => [k, PAGE_KEYS[n] || ""]);
 }
 const TRAIN_KEYS = PAGE_KEYS; // enough for every unit when several kinds of building are selected
+// The command panel's bottom row: each action in the slot of its key, the
+// same for every selection. Z the main action (attack-move, pause, upgrade),
+// X the second (stop), C and V a nuke's launch and arming, and the last slot
+// demolish or disband (Shift+Q or Delete). One slot is kept free.
+const ACTION_SLOTS = ["Z", "X", "C", "V", "", "⇧Q"];
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet],
@@ -608,8 +611,8 @@ function drawMinimap() {
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep), every era's: fruit bushes, forest, stone,
   // horses, game, (5, water, has no dots), iron ore, clay, sheep hills,
-  // saltpeter, coal, oil, bauxite, uranium.
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a"], dot = Math.max(1.5, s);
+  // saltpeter, coal, oil, bauxite, uranium, fish shoals.
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a", "#cfe9f0"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
@@ -827,7 +830,7 @@ function renderSelection(force) {
   const sel = selection();
   // Only rebuild the DOM when something visible changed.
   let freeSig = ""; for (let r = 0; r < 13; r++) freeSig += free(r) + ",";
-  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 370}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${sel.some(i => E(i, F.kind) === K.Capitol) ? `${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}` : ""}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
+  const sig = sel.map(i => `${E(i, F.id)}:${Math.ceil(E(i, F.hp))}:${E(i, F.order)}:${E(i, F.flags) & 1394}:${E(i, F.residents)}/${E(i, F.beds)}:${W.house_goods(E(i, F.id))}:${W.builders_in(E(i, F.id))}:${Math.floor(E(i, F.prog) * 40)}:${W.queue_len(E(i, F.id))}`).join(",") + `|${placing}|${amode}|${W.people(0)}|${demolishArm ? 1 : 0}|${BUILD_MENU.map(([k]) => W.has_built(k)).join("")}|${freeSig}|${W.era()}:${W.era_progress(0)}:${buildPage}|${sel.map(i => W.silo_state(E(i, F.id))).join("")}|${sel.map(i => E(i, F.kind) === K.NuclearSub ? W.at_dock(E(i, F.id)) : "").join("")}|${sel.some(i => E(i, F.kind) === K.Capitol) ? `${Math.floor(W.next_arrival() * 40)}:${W.people(1)}:${W.people(4)}` : ""}|${sel.map(i => HOUSE_UP[E(i, F.kind)] ? W.house_upgrade_state(E(i, F.id)) : "").join(",")}`;
   if (!force && sig === selKey) return;
   // A button held down: rebuilding the panel now would swallow its click
   // (the button under the pointer is replaced before it's released).
@@ -903,26 +906,34 @@ function singleInfo(panel, i) {
   if (atk > 0) html += ` · attack <b>${atk}</b> · ${stat(k, 2) > 1.5 ? `range <b>${stat(k, 2)}</b>` : "melee"}`;
   html += `</div>`;
   if (!isBld(k)) {
-    const doing = k === K.FishingBoat && E(i, F.order) === 0 ? "Fishing: 3 fish while it lies still" : ORDER_TEXT[E(i, F.order)];
+    const doing = k !== K.FishingBoat || E(i, F.order) !== 0 ? ORDER_TEXT[E(i, F.order)]
+      : E(i, F.flags) & 1024 ? "Fishing: 3 fish while it lies here" : "No fish here: send it to a fish shoal (the pale ripples on the water)";
     if (owner === ME || observe) html += `<div class="statline">${doing}</div>`;
     if (isAir(k) && (owner === ME || observe)) html += E(i, F.residents) > 0
       ? `<div class="statline">Fuel <b>${E(i, F.residents)}</b> of ${E(i, F.beds)} s · refuels at an airfield or carrier</div>`
       : `<div class="statline bad">Out of fuel: slow until it's back at an airfield or carrier.</div>`;
     if (isAir(k) && (owner === ME || observe)) html += W.ammo(id, 0) > 0
-      ? `<div class="statline">${k === K.Bomber ? "Bombs" : "Ammunition"} <b>${W.ammo(id, 0)}</b> of ${W.ammo(id, 1)} · rearms where it refuels</div>`
+      ? `<div class="statline">${k === K.Bomber ? "Bombs" : "Ammunition"} <b>${W.ammo(id, 0)}</b> of ${W.ammo(id, 1)} · rearms where it refuels, and flies back by itself when empty</div>`
       : `<div class="statline bad">Out of ${k === K.Bomber ? "bombs" : "ammunition"}: it can't attack until it's back at an airfield or carrier.</div>`;
     if (k === K.Transport) html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} aboard${owner === ME && E(i, F.residents) > 0 ? " · right-click the shore to put them ashore" : ""}</div>`;
     if (E(i, F.flags) & 16) html += `<div class="statline bad">Unsupplied: losing health. Make more ${slotsOf(k).map(([r]) => RES_NAMES[r]).join(" and ")}.</div>`;
+    if (k === K.NuclearSub && (owner === ME || observe)) {
+      // Like a silo's, but it arms only while it lies at a dock.
+      const st = W.silo_state(id), docked = W.at_dock(id);
+      html += st === 1 ? `<div class="statline${docked ? "" : " bad"}">${docked ? "Arming a nuke" : "Arming paused: back to one of your docks to go on"} · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`
+        : st === 2 ? `<div class="statline">Armed: Launch (C), then click where it should fall.</div>`
+        : `<div class="statline">Empty: Arm a nuke (V)${docked ? "" : " at one of your docks"}.</div>`;
+    }
   } else if (E(i, F.flags) & 2) {
     const need = stat(k, 9), got = W.builders_in(id);
     html += got < need
-      ? `<div class="statline">Waiting for builders · ${got} of ${need} here. Free workers in the town square come by themselves.</div>`
+      ? `<div class="statline">Waiting for builders: ${got} of ${need} here. Free workers in the town square come by themselves.</div>`
       : `<div class="statline">Under construction · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`;
   } else if (stat(k, 10) >= 0) {
     // A house: which goods it has and which it wants; its beds.
     const goods = W.house_goods(id), { have, wants } = houseWants(k, goods);
     const icons = list => `<span class="cost inline">${list.map(r => `<span title="${RES_NAMES[r]}">${resIcon(r)}</span>`).join("")}</span>`;
-    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken · 2 beds for each good, 3 past the third</div>`;
+    html += `<div class="statline"><b>${E(i, F.residents)}</b> of ${E(i, F.beds)} beds taken</div>`;
     if (owner === ME || observe) {
       html += `<div class="statline">Has ${have.length ? icons(have) : "nothing yet"}</div>`;
       html += wants.length ? `<div class="statline">Wants ${icons(wants)} <span class="muted">(any ${wants.length > 1 ? `${house_room(k, goods)} of these` : "one"})</span></div>` : `<div class="statline">Has every good a ${NAMES[k]} can use.</div>`;
@@ -937,7 +948,7 @@ function singleInfo(panel, i) {
   } else if (k === K.MissileSilo) {
     const st = W.silo_state(id);
     html += st === 1 ? `<div class="statline">Arming a nuke · ${Math.floor(E(i, F.prog) * 100)}%</div><div class="bar prog"><i style="width:${E(i, F.prog) * 100}%"></i></div>`
-      : st === 2 ? `<div class="statline">A nuke is armed: Launch (Z), then click a target.</div>` : `<div class="statline">Empty: Arm a nuke (X).</div>`;
+      : st === 2 ? `<div class="statline">Armed: Launch (C), then click where it should fall.</div>` : `<div class="statline">Empty: Arm a nuke (V).</div>`;
   } else if (TRAINS[k] && W.queue_len(id) > 0 && E(i, F.residents) === 0) {
     html += `<div class="statline">Waiting for a recruit from the town square.</div>`;
   }
@@ -992,14 +1003,24 @@ $("cmd").addEventListener("pointerdown", () => { cmdHeld = true; });
 window.addEventListener("pointerup", () => { cmdHeld = false; });
 window.addEventListener("pointercancel", () => { cmdHeld = false; });
 function renderCommands(sel) {
+  // Three parts, top to bottom: the build menu's era tabs; what the
+  // selection builds or trains, in hotkey order; and a row of actions where
+  // each one always has the same slot, the slot of its key (`ACTION_SLOTS`).
   const box = $("cmd");
   const tip = $("tip");
+  const tabs = document.createElement("div"), items = document.createElement("div"), actions = document.createElement("div");
+  tabs.className = "tabs"; items.className = "items"; actions.className = "actions";
   box.replaceChildren(tip);
   cmdKeys = {};
   const mine = sel.filter(i => E(i, F.owner) === ME);
   if (!mine.length || observe) return;
+  box.append(tabs, items, actions);
   const kinds = new Set(mine.map(i => E(i, F.kind)));
-  const add = (b, key, fn) => { box.append(b); if (key) cmdKeys[key.toLowerCase()] = fn; };
+  const bind = (key, fn) => { if (key) cmdKeys[key.toLowerCase()] = fn; };
+  const add = (b, key, fn) => { items.append(b); bind(key, fn); };
+  const tab = (b, key, fn) => { tabs.append(b); bind(key, fn); };
+  const slots = ACTION_SLOTS.map(() => null);
+  const act = (b, key, fn) => { slots[ACTION_SLOTS.indexOf(key)] = b; bind(key, fn); };
   const unitTip = k => {
     let h = `<h4>${NAMES[k]}</h4>${costHtml(k)}<p>${DESC[k] || ""}</p>`;
     const makes = slotsOf(k, 1), takes = slotsOf(k, 2);
@@ -1035,7 +1056,7 @@ function renderCommands(sel) {
             tip: `<h4>${ERA_NAMES[e]} buildings</h4><p>Shift+${PAGE_KEYS[e + 1]}, or Tab for the next page and Shift+Tab to go back.</p>` });
         b.classList.add("page");
         if (e === buildPage) b.classList.add("on");
-        add(b, key, fn);
+        tab(b, key, fn);
       }
       cmdKeys["tab"] = () => turn(1);
       cmdKeys["⇧tab"] = () => turn(-1);
@@ -1060,21 +1081,23 @@ function renderCommands(sel) {
     const paused = workplaces.every(i => E(i, F.flags) & 64);
     const ids = workplaces.map(i => E(i, F.id));
     const fn = () => { issue({ c: 10, ids, a: paused ? 1 : 0 }); Sfx.ui("command", 1); selKey = ""; };
-    add(cmdButton(paused ? "Resume" : "Pause", "Z", fn, { glyph: paused ? "▶" : "❚❚", tip: paused
+    act(cmdButton(paused ? "Resume" : "Pause", "Z", fn, { glyph: paused ? "▶" : "❚❚", tip: paused
       ? "<h4>Resume</h4><p>Hire workers again: free workers from the town square come.</p>"
       : "<h4>Pause</h4><p>Its workers go back to the town square. It keeps its slots but makes nothing.</p>" }), "Z", fn);
   }
-  box.classList.toggle("dense", box.children.length > 15 && box.children.length <= 22);
-  box.classList.toggle("denser", box.children.length > 22 && box.children.length <= 36);
-  box.classList.toggle("densest", box.children.length > 36);
-  // Missile silos: Launch (Z) and Arm a nuke (X), both always there, greyed
-  // out when no selected silo can do it. With several silos selected, each
-  // press arms the next empty one, and each launch uses the next armed one.
-  // Nuclear submarines get the same two, on C and V (Z and X are a unit's
-  // attack-move and stop); they arm only at one of your docks.
+  // Many things to build or train: smaller buttons, so they still fit in
+  // the same space (two rows, or three when there are very many).
+  const n = items.children.length;
+  items.classList.toggle("dense", n > 12 && n <= 16);
+  items.classList.toggle("denser", n > 16);
+  // Missile silos and nuclear submarines: Launch (C) and Arm a nuke (V),
+  // both always there, greyed out when nothing selected can do it. With
+  // several selected, each press arms the next empty one, and each launch
+  // uses the next armed one. (Not Z and X: those are a unit's attack-move
+  // and stop.) Submarines arm only at one of your docks.
   const subs = hasUnits ? mine.filter(i => E(i, F.kind) === K.NuclearSub).map(i => E(i, F.id)) : [];
   const silos = subs.length ? subs : hasUnits ? [] : mine.filter(i => E(i, F.kind) === K.MissileSilo && !(E(i, F.flags) & 2)).map(i => E(i, F.id));
-  const [kLaunch, kArm, what] = subs.length ? ["C", "V", "submarine"] : ["Z", "X", "silo"];
+  const [kLaunch, kArm, what] = ["C", "V", subs.length ? "submarine" : "silo"];
   if (silos.length) {
     const states = silos.map(id => W.silo_state(id)), count = s => states.filter(x => x === s).length;
     const empty = count(0), arming = count(1), armed = count(2), many = silos.length > 1;
@@ -1084,7 +1107,7 @@ function renderCommands(sel) {
     };
     const b1 = cmdButton("Launch", kLaunch, fnLaunch, { glyph: "🚀", count: many && armed, tip: `<h4>Launch the nuke</h4>${many ? `<p>${armed} of ${silos.length} ${what}s armed.</p>` : ""}<p>Click where it should fall${many ? "; Shift-click to launch the next one too" : ""}. It lands ${W.nuke_numbers(1)} seconds later, destroying everything within ${W.nuke_numbers(2)} tiles, yours too. Everyone sees it coming. An enemy Air Defense within ${W.nuke_numbers(3)} tiles of the target shoots it down.</p>` });
     if (!armed) b1.classList.add("off");
-    add(b1, kLaunch, fnLaunch);
+    act(b1, kLaunch, fnLaunch);
     const fnArm = () => {
       const id = silos.find(id => W.silo_state(id) === 0);
       if (id == null) { toast(many ? `Every selected ${what} already has a nuke.` : `This ${what} already has a nuke.`, "bad"); Sfx.ui("error"); return; }
@@ -1092,7 +1115,7 @@ function renderCommands(sel) {
     };
     const b2 = cmdButton("Arm a nuke", kArm, fnArm, { glyph: "☢", count: many && empty, tip: `<h4>Arm a nuke</h4>${many ? `<p>${empty} of ${silos.length} ${what}s empty; each press arms one.</p>` : ""}<p>Holds 2 uranium and 2 explosives until it's launched, and takes ${W.nuke_numbers(0) / 60} minutes${subs.length ? ", lying at one of your docks (it waits while the submarine is away)" : ""}.</p>` });
     if (!empty) b2.classList.add("off");
-    add(b2, kArm, fnArm);
+    act(b2, kArm, fnArm);
   }
   // Houses: upgrade the ones that are ready (it holds more materials, so
   // it's your call).
@@ -1102,16 +1125,16 @@ function renderCommands(sel) {
     const ready = states.filter(s => s === 0).length, k = E(homes[0], F.kind), [up, mats] = HOUSE_UP[k];
     const fn = () => { const code = issue({ c: 14, ids }); if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("place"); selKey = ""; };
     const why = ready ? "" : explain(states.find(s => s !== 11) ?? 11);
-    add(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
+    act(cmdButton(ready > 1 ? `Upgrade ${ready} houses` : `Upgrade to ${NAMES[up]}`, "Z", fn, { icon: iconEl(up, ME, 48), locked: !ready,
       tip: `<h4>Upgrade${homes.length > 1 ? ` (${ready} of ${homes.length} ready)` : ""}</h4><p>A ${NAMES[up]} has more beds and can use more goods. It holds ${mats}.</p>${why ? `<p class="short">${why}.</p>` : ""}` }), "Z", fn);
   }
   if (hasUnits) { // every unit, workers too
     const fn = () => setAmode(true);
-    add(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way. Click it on the map or on the minimap.</p>" }), "Z", fn);
+    act(cmdButton("Attack-move", "Z", fn, { glyph: "⚔︎", tip: "<h4>Attack-move</h4><p>Walk to a spot and fight anything met on the way. Click it on the map or on the minimap.</p>" }), "Z", fn);
   }
   if (hasUnits) {
     const fn = () => issue({ c: 3, ids: myIds(false) });
-    add(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
+    act(cmdButton("Stop", "X", fn, { glyph: "■", tip: "<h4>Stop</h4><p>Drop the current order.</p>" }), "X", fn);
   }
   // Demolish your buildings (Delete or Shift+Q, at once), or disband your
   // units (the same keys, pressed twice: an army is hard to get back).
@@ -1123,16 +1146,21 @@ function renderCommands(sel) {
     const what = hasUnits ? "Disband" : "Demolish";
     const fn = () => {
       if (!hasUnits || (demolishArm && demolishArm.key === key && performance.now() - demolishArm.t < 4000)) { demolishArm = null; issue({ c: 9, ids: doomed }); Sfx.ui("place"); }
-      else { demolishArm = { key, t: performance.now() }; toast(`Press ${what} again (Shift+Q) to disband ${doomed.length > 1 ? "them" : "it"}`); }
+      else { demolishArm = { key, t: performance.now() }; toast(`Press ${what} (Shift+Q) again to disband ${doomed.length > 1 ? "them" : "it"}.`); }
       selKey = "";
     };
     const tip = hasUnits
       ? "<h4>Disband</h4><p>Your selected units are gone: their slots and beds come free, and newcomers can take their place. Press twice (Shift+Q or Delete).</p>"
       : "<h4>Demolish</h4><p>Tear it down at once. Its slots and workers come free; anyone in a house or a training queue is lost. (Shift+Q or Delete.)</p>";
     const b = cmdButton(armed ? `Really ${what.toLowerCase()}?` : what, "⇧Q", fn, { glyph: armed ? "!" : "⌧", tip });
-    b.classList.add("end");
-    add(b, "Delete", fn);
-    cmdKeys["⇧q"] = fn;
+    act(b, "⇧Q", fn);
+    bind("Delete", fn);
+  }
+  // The action row: every slot drawn, empty ones faintly, so nothing moves
+  // when an action comes or goes.
+  for (const b of slots) {
+    if (b) { actions.append(b); continue; }
+    const e = document.createElement("div"); e.className = "slot"; actions.append(e);
   }
 }
 
@@ -1187,7 +1215,8 @@ function explain(code) {
   if (code >= 20 && code < 30) return `It has to be next to ${DEP_NAMES[code - 20]}`;
   if (code >= 30 && code < 40) return `Not until the ${ERA_NAMES[code - 30]} era`;
   return { 10: "That queue is full", 11: "Select a building that can train this", 12: "Can't build there",
-    13: "Nobody is free in the town square to train", 14: "Not yet: it needs every bed taken and all the goods it can use" }[code] || "Can't do that";
+    13: "Nobody is free in the town square to train", 14: "Not yet: it needs every bed taken and all the goods it can use",
+    15: "A submarine arms its nuke only at one of your docks: sail it there first" }[code] || "Can't do that";
 }
 // Why `k` can't be had right now, as an error code, or 0.
 function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
@@ -1524,13 +1553,13 @@ window.addEventListener("keydown", e => {
       // Ctrl+N: the selection becomes group N.
       e.preventDefault();
       groups[g] = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
-      toast(`Group ${g} set`);
+      toast(`Group ${g} set.`);
     } else if (e.shiftKey) {
       // Shift+N: add the selection to group N (no one twice).
       e.preventDefault();
       const mine = selection().filter(i => E(i, F.owner) === ME).map(i => E(i, F.id));
       groups[g] = [...new Set([...(groups[g] || []), ...mine])];
-      toast(`Added to group ${g}`);
+      toast(`Added to group ${g}.`);
     } else if (groups[g]) {
       const now = performance.now();
       if (groups._last === g && now - groups._t < 400) focusSelection();
@@ -1545,7 +1574,7 @@ window.addEventListener("keydown", e => {
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
-  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free in the town square"); return; }
+  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); centerOn(W.campfire(0), W.campfire(1)); selKey = ""; } else toast("Nobody is free in the town square."); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
   const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
@@ -1618,10 +1647,10 @@ function handleEvents() {
         // Say what this building unlocked, but only the first time.
         const opened = BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k) && !knownUnlocked.has(k));
         opened.forEach(k => knownUnlocked.add(k));
-        toast(`${NAMES[d]} complete` + (opened.length ? `. You can now build: ${opened.map(k => NAMES[k]).join(", ")}` : ""), "good");
+        toast(`${NAMES[d]} complete.` + (opened.length ? ` You can now build: ${opened.map(k => NAMES[k]).join(", ")}.` : ""), "good");
         Sfx.ui("built");
         break; }
-      case EV.Lost: toast(`Your ${NAMES[d]} was destroyed`, "bad"); break;
+      case EV.Lost: toast(`Your ${NAMES[d]} was destroyed.`, "bad"); break;
       case EV.Death: { const kind = d % 100;
         if (isBld(kind)) Sfx.at("crumble", x, y, 200);
         else Sfx.at("death", x, y, 90, isMounted(kind));
@@ -1650,7 +1679,7 @@ function handleEvents() {
         if (d !== ME) { toast(`Warning: ${pnc(d)} has started arming a nuke. It takes ${W.nuke_numbers(0) / 60} minutes. An Air Defense shoots one down.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
         break;
       case EV.NukeArmed:
-        if (d === ME) { toast("A nuke is armed. Select the silo and press Z to launch it.", "good"); Sfx.ui("trained"); }
+        if (d === ME) { toast("A nuke is armed. Select it and press C to launch.", "good"); Sfx.ui("trained"); }
         else { toast(`Warning: ${pnc(d)} has a nuke ready to launch.`, "bad"); Sfx.ui("siren"); lastAlert = { x, y, t: performance.now() }; }
         break;
       case EV.NukeIntercepted:
@@ -1669,7 +1698,7 @@ function handleEvents() {
         break;
       case EV.Upgraded: { // (the count only when it's the kind of house the next era needs)
         const era = W.era(), got = W.era_progress(0), need = W.era_progress(1);
-        toast(`A house grew into a ${NAMES[d]}` + (era < W.era_progress(2) && stat(d, 10) > era ? ` · ${got} of ${need} for the ${ERA_NAMES[era + 1]} era` : ""), "good");
+        toast(`A house grew into a ${NAMES[d]}.` + (era < W.era_progress(2) && stat(d, 10) > era ? ` ${got} of ${need} for the ${ERA_NAMES[era + 1]} era.` : ""), "good");
         Sfx.at("hammer", x, y, 90);
         break; }
       case EV.EraReached: {
@@ -1678,7 +1707,7 @@ function handleEvents() {
           const opened = BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k) && !knownUnlocked.has(k));
           opened.forEach(k => knownUnlocked.add(k));
           const units = Object.values(TRAINS).flat().filter(k => W.kind_era(k) === era);
-          toast(`The ${ERA_NAMES[era]} era! New: ${opened.concat(units).map(k => NAMES[k]).join(", ")}`, "good");
+          toast(`The ${ERA_NAMES[era]} era! New: ${opened.concat(units).map(k => NAMES[k]).join(", ")}.`, "good");
           Sfx.ui("fanfare", true);
           selKey = "";
         } else {
@@ -2684,7 +2713,7 @@ async function saveGame() {
     const list = readSaves();
     list.unshift(save);
     const kept = writeSaves(list.slice(0, SAVE_MAX));
-    if (kept) toast(`Game saved (${fmtTime(save.time)})` + (kept < Math.min(list.length, SAVE_MAX) ? ". Older saves were removed to make room." : ""));
+    if (kept) toast(`Game saved (${fmtTime(save.time)}).` + (kept < Math.min(list.length, SAVE_MAX) ? " Older saves were removed to make room." : ""));
     else { toast("This browser won't store the save. Downloading it instead.", "bad"); downloadSave(save); }
   } catch (err) {
     toast("Couldn't save the game.", "bad");
@@ -2721,7 +2750,7 @@ async function loadSave(save) {
   running = true; Rec.real = true;
   lastPlayers = W.n_players(); // for Restart and Play again
   publishLobby(); // friends who open our link now wait for the next game
-  toast(`Loaded: ${fmtTime(W.game_time())} into the game`);
+  toast(`Loaded: ${fmtTime(W.game_time())} into the game.`);
 }
 
 let loadReturn = "menuScreen";

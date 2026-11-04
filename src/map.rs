@@ -156,6 +156,8 @@ enum Feat {
     Oil,
     Bauxite,
     Uranium,
+    /// A fish shoal: on the water.
+    Fish,
 }
 
 /// A symmetry of the map: a way to turn it that lands it on itself.
@@ -512,6 +514,36 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
 
+    // Fish shoals, on the water: the middle of every start's harbour, and
+    // spots along the sea between the towns (bottom and left edges, and
+    // their turned images). A spot is the water tile nearest a point, if
+    // one is near; a shoal is it and the water right around it.
+    let shoal = |cx: i32, cy: i32, feat: &mut Vec<Feat>, terrain: &[u8]| {
+        let near = (0..=3).find_map(|r| (0..(8 * r).max(1)).map(|k| if r == 0 { (0, 0) } else { ring_point(r, k) }).find(|&(dx, dy)| {
+            let (x, y) = (cx + dx, cy + dy);
+            x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && terrain[(y * w + x) as usize] == WATER
+        }));
+        let Some((dx, dy)) = near else { return };
+        let (x0, y0) = (cx + dx, cy + dy);
+        for (ox, oy) in [(0, 0), (1, 0), (0, 1), (-1, 0), (0, -1)] {
+            let (x, y) = (x0 + ox, y0 + oy);
+            if x < 1 || y < 1 || x >= w - 1 || y >= h - 1 || terrain[(y * w + x) as usize] != WATER {
+                continue;
+            }
+            for (px, py) in images(x, y) {
+                if terrain[(py * w + px) as usize] == WATER {
+                    feat[(py * w + px) as usize] = Feat::Fish;
+                }
+            }
+        }
+    };
+    shoal(pond.0, pond.1, &mut feat, &terrain);
+    for k in 0..6 {
+        let along = w * (2 * k + 1) / 12 + ((hash(k, 51, seed) - 0.5) * 6.0) as i32;
+        shoal(along, h - 3, &mut feat, &terrain);
+        shoal(2, along, &mut feat, &terrain);
+    }
+
     // Half the maps are mirrored left to right, so the starts sit on the
     // other diagonal (top left and bottom right). Still symmetric and fair.
     let bases = if hash(7, 911, seed) < 0.5 {
@@ -535,6 +567,11 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             let i = (y * w + x) as usize;
             if terrain[i] == WATER {
                 blocked[i] = true;
+                // (Boats sail over shoals: `sailable` goes by the terrain.)
+                if feat[i] == Feat::Fish {
+                    dep_at[i] = deps.len() as i32;
+                    deps.push(Deposit { kind: Dep::Fish, tx: x, ty: y });
+                }
                 continue;
             }
             let kind = match feat[i] {
@@ -552,6 +589,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 Feat::Oil => Dep::Oil,
                 Feat::Bauxite => Dep::Bauxite,
                 Feat::Uranium => Dep::Uranium,
+                Feat::Fish => continue, // (only ever on water, above)
             };
             dep_at[i] = deps.len() as i32;
             blocked[i] = true;
@@ -571,7 +609,7 @@ mod tests {
     fn islands(seed: u32, players: usize) -> usize {
         let (m, deps, _) = generate(seed, players);
         deps.iter()
-            .filter(|d| d.kind != Dep::Forest)
+            .filter(|d| d.kind != Dep::Forest && d.kind != Dep::Fish)
             .filter(|d| {
                 let mut wet = 0;
                 for dy in -2..=2 {
@@ -598,7 +636,8 @@ mod tests {
     /// Fewest free tiles between two deposits of different kinds (not trees).
     fn tightest(seed: u32, players: usize) -> f32 {
         let (_, deps, _) = generate(seed, players);
-        let d: Vec<_> = deps.iter().filter(|d| d.kind != Dep::Forest).collect();
+        // (Shoals are out on the water: nothing is built on them.)
+        let d: Vec<_> = deps.iter().filter(|d| d.kind != Dep::Forest && d.kind != Dep::Fish).collect();
         let mut best = f32::MAX;
         for (i, a) in d.iter().enumerate() {
             for b in &d[i + 1..] {

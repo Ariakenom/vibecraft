@@ -115,6 +115,8 @@ pub enum Dep {
     Bauxite = 12,
     /// Atomic: uranium ore.
     Uranium = 13,
+    /// A fish shoal, out on the water: where fishing boats fish.
+    Fish = 14,
 }
 
 impl Dep {
@@ -134,6 +136,7 @@ impl Dep {
             11 => Dep::Oil,
             12 => Dep::Bauxite,
             13 => Dep::Uranium,
+            14 => Dep::Fish,
             _ => return None,
         })
     }
@@ -211,7 +214,8 @@ pub enum Kind {
     Farm = 69,
     LumberCamp = 70,
     Quarry = 71,
-    FishingHut = 72,
+    // 72 was the fishing hut (removed November 2026: fishing boats fish
+    // the shoals instead).
     HuntingLodge = 73,
     Orchard = 74,
     Pasture = 75,
@@ -354,8 +358,8 @@ static BOMBER: Stats = unit(260.0, 140.0, 1.0, 4.0, 4.0, 9.0, &[(Aluminum, 2), (
 // Atomic: rocket artillery outranges everything; jets are faster, tougher fighters.
 static ROCKET_ARTILLERY: Stats = unit(200.0, 70.0, 13.0, 4.0, 2.2, 10.0, &[(Steel, 2), (Oil, 1), (Explosives, 2)], 36.0);
 static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
-// Boats. A fishing boat makes fish while it lies still (it's crewed then,
-// see `Game::resolve`); a transport carries `TRANSPORT_CAPACITY` land
+// Boats. A fishing boat makes fish while it lies still on a fish shoal
+// (it's crewed then, see `Game::resolve`); a transport carries `TRANSPORT_CAPACITY` land
 // units. Warships shoot from the water, so they hold the coasts: galleys
 // (archers on deck), cogs, galleons and ironclads (guns, shells), destroyers
 // (fast, and they shoot at aircraft).
@@ -400,7 +404,6 @@ static TOWER: Stats = Stats { attack: 7.0, range: 7.0, cooldown: 1.5, ..building
 static FARM: Stats = extractor(250.0, &[(Wood, 1)], &[(Grain, 2)], 1, None, 12.0, 3);
 static LUMBER_CAMP: Stats = extractor(400.0, &[], &[(Wood, 8)], 1, Some(Dep::Forest), 15.0, 2);
 static QUARRY: Stats = extractor(500.0, &[(Wood, 2)], &[(Stone, 6)], 2, Some(Dep::Stone), 18.0, 2);
-static FISHING_HUT: Stats = extractor(300.0, &[(Wood, 1)], &[(Fish, 2)], 1, Some(Dep::Water), 12.0, 2);
 static HUNTING_LODGE: Stats = extractor(300.0, &[(Wood, 1)], &[(Meat, 2)], 1, Some(Dep::Game), 12.0, 2);
 static ORCHARD: Stats = extractor(300.0, &[(Wood, 1)], &[(Fruit, 2)], 1, Some(Dep::Fertile), 12.0, 2);
 static PASTURE: Stats = extractor(400.0, &[(Wood, 2)], &[(Horses, 2)], 1, Some(Dep::Horses), 15.0, 3);
@@ -468,7 +471,7 @@ static KILN: Stats = extractor(900.0, &[(Stone, 4)], &[(Brick, 20)], 2, Some(Dep
 // any aircraft in one hit (a bomber has 260 health).
 static AIR_DEFENSE: Stats = Stats { attack: 320.0, range: AIR_DEFENSE_COVER, cooldown: 5.0, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
 static MISSILE_SILO: Stats = Stats { builders: 2, ..building(1500.0, 6.0, &[(Steel, 4), (Brick, 2)], 60.0, 3) };
-// Next to water, like a fishing hut. Its boats come out on that water.
+// Next to water. Its boats come out on that water.
 static DOCK: Stats = Stats { needs_deposit: Some(Dep::Water), ..building(700.0, 7.0, &[(Wood, 2)], 25.0, 2) };
 
 /// A submarine is hidden from a player unless one of their units or
@@ -505,6 +508,9 @@ pub const REFUEL_TIME: f32 = 5.0;
 /// A nuclear submarine within this many tiles of its owner's dock is at
 /// it, and arms its nuke there.
 pub const DOCK_REACH: f32 = 2.5;
+
+/// A fishing boat this close to the middle of a fish shoal's tile fishes.
+pub const SHOAL_REACH: f32 = 1.5;
 
 /// Land units a transport carries at once.
 pub const TRANSPORT_CAPACITY: usize = 8;
@@ -590,10 +596,10 @@ pub const LAST_ERA: u8 = 5;
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 84] = {
+    pub const ALL: [Kind; 83] = {
         use Kind::*;
         [
-            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Submarine, Destroyer, Carrier, NuclearSub, Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, Dock, HuntingLodge, Orchard, Pasture,
+            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Submarine, Destroyer, Carrier, NuclearSub, Capitol, Hut, Farm, LumberCamp, Quarry, Dock, HuntingLodge, Orchard, Pasture,
             Barracks, Range, Stable, Tower, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
             ExplosivesWorks, Cannery, CoalYard, Press, Factory, Infantry, Tank, Fighter, Bomber, Apartment, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
             RocketArtillery, Jet, TowerBlock, UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
@@ -621,7 +627,6 @@ impl Kind {
             Farm => &FARM,
             LumberCamp => &LUMBER_CAMP,
             Quarry => &QUARRY,
-            FishingHut => &FISHING_HUT,
             HuntingLodge => &HUNTING_LODGE,
             Orchard => &ORCHARD,
             Pasture => &PASTURE,
@@ -725,10 +730,10 @@ impl Kind {
     /// Every buildable building, in tech-tree order (used by the UI and AI).
     /// Cottages aren't built: huts become cottages.
     #[allow(dead_code)]
-    pub const BUILDABLE: [Kind; 49] = {
+    pub const BUILDABLE: [Kind; 48] = {
         use Kind::*;
         [
-            Capitol, Hut, Farm, LumberCamp, Quarry, FishingHut, Dock, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
+            Capitol, Hut, Farm, LumberCamp, Quarry, Dock, HuntingLodge, Orchard, Pasture, Barracks, Range, Stable, Tower, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, SaltpeterWorks, PowderMill,
             Carpenter, Printer, Circus, CoalMine, SteelMill, ExplosivesWorks, Cannery, CoalYard, Press, Factory, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
             UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
         ]

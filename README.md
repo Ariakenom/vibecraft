@@ -583,8 +583,11 @@ versions don't play together.
   they're back within 3 tiles of one, where they fill up in 5 seconds
   (`air_fuel`). They carry limited ammunition too (`air_ammo`: 12 bursts
   for a fighter, 14 for a jet, 3 bomb runs for a bomber), and rearm there
-  as they refuel; empty, they can't attack. The computer sends them home
-  when low on fuel or out of ammunition. They fly straight over
+  a shot at a time while they refuel (5 seconds from empty to full); empty,
+  they can't attack. An aircraft out of ammunition or fuel flies back to the
+  nearest airfield or carrier by itself, and doesn't go off fighting by
+  itself until it's full again (orders still work). The computer also sends
+  them home when low on fuel. They fly straight over
   water and buildings and only fighters, machine gunners, infantry, towers
   and the Capitol can hit them; bombers flatten buildings but need fighters
   to protect them.
@@ -599,10 +602,12 @@ versions don't play together.
   aircraft and shoots down a nuke falling within 10 tiles of it, then
   reloads for 90 seconds: it fires 4 seconds before the nuke would land,
   and everyone sees its missile go up and the nuke burst in the air.
-- **Boats.** A **Dock** (Ancient, 2 wood) stands on the shore like a
-  fishing hut and builds boats, which come out on the water next to it. A
-  **fishing boat** (1 wood) makes 3 fish wherever it lies still (moving it
-  stops the catch). A **transport** (2 wood) carries up to 8 land units:
+- **Boats.** A **Dock** (Ancient, 2 wood) stands on the shore, next to water,
+  and builds boats, which come out on the water next to it. A
+  **fishing boat** (1 wood) makes 3 fish while it lies still on or next to a
+  **fish shoal** (moving it stops the catch). Shoals lie in every start's
+  harbour and along the sea between the towns; they're drawn as pale
+  ripples. There's no fishing hut any more: fish come from boats. A **transport** (2 wood) carries up to 8 land units:
   right-click it with them selected to board (an idle transport comes in to
   meet them), then select it and right-click the shore to put them ashore
   there; if it sinks, everyone aboard is lost. **Warships**, one for each
@@ -670,14 +675,20 @@ versions don't play together.
   Medieval, Shift+T Gunpowder, Shift+F Industrial, Shift+G Modern, Shift+C
   Atomic; or Tab for the next, Shift+Tab back), and each page's buildings
   take the hotkeys in order. Ancient: Q hut, E farm, R lumber camp, T
-  quarry, F fishing hut, G hunting lodge, C orchard, V barracks, B range,
-  Y tower, U dock. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
+  quarry, F dock, G hunting lodge, C orchard, V barracks, B range,
+  Y tower. (Pastures, stables and horsemen come in the Medieval era.) Shift+Q or Del demolishes the
   selected buildings, or disbands the selected units (units need a second press).
-- **Missile silo:** X arms a nuke; Z and a click launches it (a ring shows
-  the blast, and blue rings the cover of enemy air defenses). Both buttons
-  are always there, greyed out when they can't be used. With several silos
-  selected, each X arms one more, and each launch uses the next armed one
-  (Shift-click to keep launching). Demolish is always the bottom-right button.
+- **The command panel:** era tabs at the top (for builders), then what the
+  selection builds or trains, then a row of actions at the bottom where each
+  has the slot of its key, whatever is selected: Z the main action
+  (attack-move, pause or resume, upgrade a house), X stop, C launch a nuke,
+  V arm one, and Shift+Q (or Del) demolish or disband in the last slot.
+  Empty slots are drawn faintly, so nothing moves.
+- **Missile silo and nuclear submarine:** V arms a nuke; C and a click
+  launches it (a ring shows the blast, and blue rings the cover of enemy air
+  defenses). Both buttons are always there, greyed out when they can't be
+  used. With several selected, each V arms one more, and each launch uses
+  the next armed one (Shift-click to keep launching).
 - **Train:** Q, E, R, T, … for the units the selected buildings train,
   oldest first (with several kinds of building selected, every unit still
   gets a key).

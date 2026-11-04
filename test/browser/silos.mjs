@@ -1,6 +1,6 @@
-// Missile silo buttons: Launch (Z) and Arm a nuke (X) are always there,
+// Missile silo buttons: Launch (C) and Arm a nuke (V) are always there,
 // greyed out when no selected silo can do them; Demolish stays in the
-// bottom-right corner. With several silos selected, each Arm press arms the
+// bottom-right corner (the action row's last slot). With several silos selected, each Arm press arms the
 // next empty one, and nukes launch one by one (Shift-click keeps aiming).
 import { browser, open, check, failed } from "./lib.mjs";
 const b = await browser();
@@ -8,7 +8,7 @@ const pg = await open(b);
 await pg.evaluate(() => { newGame(7, 0, 2); running = false; Rec.real = true; $("startScreen").hidden = true; });
 // Where each button is (grid column), and whether it's greyed out.
 const layout = () => pg.evaluate(() => {
-  const box = $("cmd"), r0 = box.getBoundingClientRect(), cs = getComputedStyle(box);
+  const box = $("cmd").querySelector(".actions"), r0 = box.getBoundingClientRect(), cs = getComputedStyle(box);
   const tracks = cs.gridTemplateColumns.split(" ").map(parseFloat), gap = parseFloat(cs.columnGap) || 0;
   const starts = tracks.map((_, n) => tracks.slice(0, n).reduce((a, t) => a + t + gap, 0));
   const btns = [...box.querySelectorAll(".cbtn")].map(e => { const r = e.getBoundingClientRect(), x = r.left - r0.left;
@@ -40,14 +40,14 @@ for (const [st, label, launchOff, armOff] of [[0, "empty", true, false], [1, "ar
 }
 check(spots.every(s => s === spots[0]), "Demolish doesn't move as the silo arms and becomes armed");
 
-// Three silos, all empty: each Arm press (X) arms one more (cheat mode, so
+// Three silos, all empty: each Arm press (V) arms one more (cheat mode, so
 // arming costs nothing).
 await pg.evaluate(ids => { applyCmd(0, [15, 1, 0, 0]); ids.forEach(id => W.debug_set_nuke(id, 0)); }, silos);
 await select(silos);
 console.log("3 empty", show(await layout()));
 const armed = [];
 for (let n = 0; n < 3; n++) {
-  armed.push(await pg.evaluate(ids => { cmdKeys["x"](); return ids.filter(id => W.silo_state(id) === 1).length; }, silos));
+  armed.push(await pg.evaluate(ids => { cmdKeys["v"](); return ids.filter(id => W.silo_state(id) === 1).length; }, silos));
 }
 check(armed.join() === "1,2,3", `each Arm press arms one more silo (${armed})`);
 await select(silos);
@@ -61,7 +61,7 @@ console.log("2 armed", show(l2));
 check(l2.btns.find(e => e.name === "Launch").count === "2", "Launch shows 2 armed");
 const r = await pg.evaluate(ids => {
   const out = {};
-  cmdKeys["z"]();
+  cmdKeys["c"]();
   out.aiming = amode && aimSilo != null;
   out.hint = $("hint").textContent;
   launchAt({ x: MW / 2, y: MH / 2 }, true); // Shift-click
@@ -78,12 +78,12 @@ check(r.aiming && /2 armed/.test(r.hint), "Z aims, and the hint says 2 armed");
 check(r.afterFirst === "021" && r.stillAiming, "a Shift-click launches one nuke and keeps aiming");
 check(r.afterSecond === "001" && r.doneAiming && r.inFlight === 2, "the next launches the second, then aiming ends");
 // A plain click launches only one.
-const plain = await pg.evaluate(ids => { W.debug_set_nuke(ids[0], 2); W.debug_set_nuke(ids[1], 2); readWorld(); cmdKeys["z"](); launchAt({ x: MW / 2 - 2, y: MH / 2 }, false); return [ids.map(id => W.silo_state(id)).join(""), amode]; }, silos);
+const plain = await pg.evaluate(ids => { W.debug_set_nuke(ids[0], 2); W.debug_set_nuke(ids[1], 2); readWorld(); cmdKeys["c"](); launchAt({ x: MW / 2 - 2, y: MH / 2 }, false); return [ids.map(id => W.silo_state(id)).join(""), amode]; }, silos);
 check(plain[0] === "021" && plain[1] === false, "a plain click launches one, then stops aiming");
 // Greyed-out buttons still answer, with a message.
 await pg.evaluate(ids => ids.forEach(id => W.debug_set_nuke(id, 1)), silos);
 await select(silos);
-const msg = await pg.evaluate(() => { cmdKeys["z"](); cmdKeys["x"](); return [...$("toasts").children].map(t => t.textContent).slice(-2); });
+const msg = await pg.evaluate(() => { cmdKeys["c"](); cmdKeys["v"](); return [...$("toasts").children].map(t => t.textContent).slice(-2); });
 check(/still arming/.test(msg[0]) && /already has a nuke/.test(msg[1]), `greyed-out buttons explain (${msg.join(" | ")})`);
 
 // An enemy air defense shoots one down: its missile is drawn going up, and

@@ -49,11 +49,12 @@ pub fn capped(k: Kind) -> bool {
 }
 
 /// The producer used for each resource: the one that makes the most of it
-/// among those of `era` or earlier. Where two are worth comparing
+/// among those of `era` or earlier. Fish come from fishing boats (a unit:
+/// there are no fishing huts), which need a dock. Where two are worth comparing
 /// (electricity, nitrate), `alt` picks the later one instead.
 fn producer(r: Res, alt: bool, era: u8) -> Option<Kind> {
     let makes = |k: Kind| k.stats().produces.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, a)| a);
-    let found: Vec<Kind> = Kind::ALL.iter().copied().filter(|&k| k.is_building() && makes(k) > 0 && k.house_tier().is_none() && k != Kind::Capitol && k.era() <= era).collect();
+    let found: Vec<Kind> = Kind::ALL.iter().copied().filter(|&k| (k.is_building() || k == Kind::FishingBoat) && makes(k) > 0 && k.house_tier().is_none() && k != Kind::Capitol && k.era() <= era).collect();
     if matches!(r, Res::Electricity | Res::Nitrate) && found.len() > 1 {
         return Some(if alt { found[1] } else { found[0] });
     }
@@ -120,6 +121,9 @@ fn solve(houses: u32, house: Kind, goods: &[Res], extra: &[Kind], extra_slots: S
                 for &q in k.requires() {
                     need_kind(&mut count, q);
                 }
+                if k == Kind::FishingBoat {
+                    need_kind(&mut count, Kind::Dock);
+                }
             }
         }
         let mut need = fixed_need;
@@ -150,7 +154,8 @@ fn solve(houses: u32, house: Kind, goods: &[Res], extra: &[Kind], extra_slots: S
         }
         if !changed {
             let counts: Vec<(Kind, u32)> = Kind::ALL.iter().map(|&k| (k, count[k as usize])).filter(|&(_, n)| n > 0).collect();
-            let workers = counts.iter().map(|&(k, n)| k.stats().workers as u32 * n).sum();
+            // (A fishing boat is a person too.)
+            let workers = counts.iter().map(|&(k, n)| if k == Kind::FishingBoat { n } else { k.stats().workers as u32 * n }).sum();
             let beds = houses * beds_for(goods.len() as u32) as u32;
             return Some(Plan { counts, workers, beds, goods: goods.to_vec() });
         }

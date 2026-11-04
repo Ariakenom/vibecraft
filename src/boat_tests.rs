@@ -172,16 +172,51 @@ fn a_sunk_transport_takes_its_cargo_down() {
 fn fishing_boats_fish_while_they_lie_still() {
     let mut g = quiet(4, 2);
     g.players[1].cheat = false;
-    let (hx, hy) = harbour(&g, 1).unwrap();
+    let shoal = nearest_shoal(&g, 1);
     let fish = |g: &Game| g.players[1].supply[Res::Fish.idx()];
     let before = fish(&g);
-    let b = g.spawn_unit(Kind::FishingBoat, 1, hx as f32 + 0.5, hy as f32 + 0.5);
+    let b = g.spawn_unit(Kind::FishingBoat, 1, shoal.0, shoal.1);
     run(&mut g, 0.2);
-    assert_eq!(fish(&g), before + 3);
-    // Out to sea: no fish on the way.
-    g.order_move(b, 2.5, 2.5);
+    assert_eq!(fish(&g), before + 3, "a boat on a shoal makes 3 fish");
+    // Sailing: no fish on the way.
+    let (fx, fy) = water_between(&g, (shoal.0 as i32, shoal.1 as i32), 8, 14);
+    g.order_move(b, fx, fy);
     run(&mut g, 0.5);
     assert_eq!(fish(&g), before);
+    // Lying still on open water, away from any shoal: none either.
+    run(&mut g, 20.0);
+    let e = &g.ents[b as usize];
+    assert_eq!(e.order, Order::Idle);
+    if !g.on_shoal(e.x, e.y) {
+        assert_eq!(fish(&g), before, "fishing off a shoal");
+    }
+}
+
+/// The fish shoal nearest `p`'s Capitol.
+fn nearest_shoal(g: &Game, p: u8) -> (f32, f32) {
+    let c = &g.ents[g.home_capitol(p).unwrap()];
+    let (cx, cy) = (c.x, c.y);
+    g.deps.iter().filter(|d| d.kind == Dep::Fish).map(|d| d.center()).min_by(|a, b| (a.0 - cx).hypot(a.1 - cy).total_cmp(&(b.0 - cx).hypot(b.1 - cy))).expect("no shoal on the map")
+}
+
+/// Every start has a fish shoal in its harbour, on the open sea, and the
+/// same number of shoals as every other start (the map is symmetric).
+#[test]
+fn every_start_has_a_shoal_in_its_harbour() {
+    for seed in 0..30 {
+        for players in [2u8, 4] {
+            let g = Game::new(seed, 1, players);
+            let sea = sea_from(&g.map, 1, 1);
+            let shoals: Vec<_> = g.deps.iter().filter(|d| d.kind == Dep::Fish).collect();
+            assert!(shoals.iter().all(|d| g.map.terrain[g.map.idx(d.tx, d.ty)] == crate::map::WATER), "seed {seed}: a shoal on land");
+            assert!(shoals.len() >= players as usize * 5, "seed {seed}/{players}: only {} shoal tiles", shoals.len());
+            for p in 1..=players {
+                let c = &g.ents[g.home_capitol(p).unwrap()];
+                let near = shoals.iter().filter(|d| sea[g.map.idx(d.tx, d.ty)] && (d.center().0 - c.x).hypot(d.center().1 - c.y) < 18.0).count();
+                assert!(near >= 3, "seed {seed}/{players}: P{p} has {near} shoal tiles on the sea near home");
+            }
+        }
+    }
 }
 
 /// A dock's boats come out on the water.
@@ -436,4 +471,45 @@ fn aircraft_run_out_of_ammunition_and_rearm_at_base() {
     run(&mut g, REFUEL_TIME + 0.5);
     assert!(g.ents[f as usize].alive);
     assert_eq!(g.ents[f as usize].ammo, air_ammo(Kind::Fighter));
+}
+
+/// Out of ammunition, an aircraft flies back to the nearest carrier by
+/// itself, and doesn't pick a fight there until it's full again.
+#[test]
+fn empty_aircraft_go_home_and_wait_until_full() {
+    let mut g = quiet(4, 2);
+    g.players[2].cheat = true;
+    let h = harbour(&g, 2).unwrap();
+    let (tx, ty) = water_between(&g, h, 6, 9);
+    let prey = g.spawn_unit(Kind::Transport, 2, tx, ty);
+    // A carrier of ours further out.
+    let (cx, cy) = water_between(&g, (tx as i32, ty as i32), 14, 20);
+    let carrier = g.spawn_unit(Kind::Carrier, 1, cx, cy);
+    let f = g.spawn_unit(Kind::Fighter, 1, tx + 1.0, ty);
+    g.apply(1, Command::Smart { ids: vec![f], x: tx, y: ty }).unwrap();
+    // Guns empty, then home.
+    let mut home = false;
+    for _ in 0..20 * 90 {
+        g.tick();
+        if g.ents[f as usize].ammo == 0 && g.at_air_base(f as usize) {
+            home = true;
+            break;
+        }
+    }
+    let e = &g.ents[f as usize];
+    assert!(home, "not back at the carrier: ammo {} at {:.1},{:.1}, order {:?}", e.ammo, e.x, e.y, e.order);
+    assert!(g.ents[prey as usize].alive, "test setup: the prey sank");
+    // An enemy boat comes alongside while it fills up: it waits.
+    let (bx, by) = (g.ents[carrier as usize].x + 2.0, g.ents[carrier as usize].y);
+    let intruder = g.spawn_unit(Kind::Transport, 2, bx, by);
+    for _ in 0..20 * 3 {
+        g.tick();
+        assert!(!matches!(g.ents[f as usize].order, Order::Attack { .. }), "it went for the intruder before it was full (ammo {}, fuel {:.0})", g.ents[f as usize].ammo, g.ents[f as usize].fuel);
+    }
+    // Full: now it does.
+    run(&mut g, REFUEL_TIME);
+    assert_eq!(g.ents[f as usize].ammo, air_ammo(Kind::Fighter));
+    run(&mut g, 2.0);
+    let o = g.ents[f as usize].order;
+    assert!(matches!(o, Order::Attack { target, .. } if target == intruder) || g.ents[intruder as usize].hp < Kind::Transport.stats().hp, "full and idle, it leaves the intruder alone: {o:?}");
 }

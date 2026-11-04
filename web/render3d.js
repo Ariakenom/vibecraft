@@ -496,7 +496,7 @@ function buildingModel(kind, owner) {
   const m = new Model();
   const s = stat(kind, 6);
   // A plinth that reaches into the ground hides slopes under the building.
-  if (kind !== K.Farm) m.add(box(s * 0.94, 0.5, s * 0.94), "#6f6553", 0, -0.2, 0);
+  if (kind !== K.Farm && kind !== K.Dock) m.add(box(s * 0.94, 0.5, s * 0.94), "#6f6553", 0, -0.2, 0); // (the dock has its own footing)
   const banner = (x, z, h) => {
     m.add(cyl(0.02, 0.02, h, 5), DARKWOOD, x, h / 2, z);
     m.flag(0.3, 0.18, team, x + 0.15, h - 0.12, z);
@@ -580,13 +580,36 @@ function buildingModel(kind, owner) {
       m.add(cyl(0.02, 0.02, 0.8, 5), DARKWOOD, -0.72, 0.4, 0.55); m.flag(0.24, 0.15, team, -0.6, 0.72, 0.55);
       break;
     }
-    case K.FishingHut: {
-      hall(1.0, 0.5, 0.8, "#a38a63", "#5f6b6f");
-      // A jetty of planks and a rack of drying fish.
-      for (let i = 0; i < 5; i++) m.add(box(0.14, 0.05, 0.7), i % 2 ? WOOD : "#8a6a42", -0.3 + i * 0.15, 0.06, 0.75);
-      m.add(box(0.04, 0.45, 0.04), DARKWOOD, 0.55, 0.22, -0.3).add(box(0.04, 0.45, 0.04), DARKWOOD, 0.55, 0.22, 0.3).add(box(0.04, 0.04, 0.64), DARKWOOD, 0.55, 0.44, 0);
-      for (let i = 0; i < 4; i++) m.add(box(0.03, 0.14, 0.06), "#b9c4c9", 0.55, 0.34, -0.22 + i * 0.15);
-      banner(-0.65, -0.55, 1.0);
+    case K.Dock: {
+      // A boathouse on the land half, a plank pier running out over the
+      // water (+z; the whole thing is turned to face the water, see
+      // `waterSide`), a crane, a boat tied up alongside, crates and rope.
+      // The boathouse: stone footing, timber walls, a steep dark roof, and
+      // a big open door to the pier.
+      m.add(box(1.5, 0.16, 1.0), STONE2, 0, 0.08, -0.4);
+      m.add(box(1.4, 0.62, 0.92), "#8a6a42", 0, 0.47, -0.4);
+      for (const x of [-0.69, 0.69]) for (const z of [-0.85, 0.05]) m.add(box(0.07, 0.66, 0.07), DARKWOOD, x, 0.47, z);
+      m.add(roof(1.58, 1.1, 0.55), "#5a4a3a", 0, 0.78, -0.4);
+      m.add(box(0.62, 0.48, 0.03), "#2a1f15", 0, 0.38, 0.07);       // the open door
+      m.add(box(0.7, 0.06, 0.05), DARKWOOD, 0, 0.64, 0.08);           // its lintel
+      // The pier: planks across two beams on posts, out past the footprint.
+      for (let k = 0; k < 11; k++) m.add(box(0.62, 0.035, 0.12), k % 2 ? WOOD : "#8a6a42", 0.2, 0.06, 0.12 + k * 0.15);
+      for (const x of [-0.1, 0.5]) m.add(box(0.05, 0.05, 1.7), DARKWOOD, x, 0.02, 0.92);
+      for (const x of [-0.1, 0.5]) for (const z of [0.5, 1.1, 1.7]) m.add(cyl(0.035, 0.04, 0.55, 6), DARKWOOD, x, -0.17, z);
+      for (const z of [1.1, 1.7]) m.add(cyl(0.03, 0.03, 0.2, 6), "#3a2a1a", 0.5, 0.16, z);   // bollards
+      // A crane at the end: a post, a jib, a rope and a crate on the hook.
+      m.add(cyl(0.04, 0.05, 1.0, 6), DARKWOOD, -0.05, 0.55, 1.6);
+      { const jib = box(0.05, 0.05, 0.7); jib.rotateX(-0.35); m.add(jib, DARKWOOD, -0.05, 1.0, 1.85); }
+      m.add(cyl(0.006, 0.006, 0.45, 4), "#d9c9a8", -0.05, 0.8, 2.15);
+      m.add(box(0.14, 0.12, 0.14), "#a07a4f", -0.05, 0.53, 2.15);
+      // A rowing boat tied up beside the pier.
+      { const hull = cyl(0.11, 0.07, 0.6, 8); hull.rotateX(Math.PI / 2); hull.scale(1, 0.55, 1); m.add(hull, "#7a5532", 0.82, -0.08, 1.2); }
+      m.add(box(0.16, 0.02, 0.5), "#5e4128", 0.82, -0.03, 1.2);
+      // Crates, a barrel and a coil of rope on the quay; a banner.
+      m.add(box(0.2, 0.18, 0.2), "#a07a4f", -0.5, 0.09, 0.3).add(box(0.16, 0.14, 0.16), "#8a6438", -0.5, 0.25, 0.32);
+      m.add(cyl(0.09, 0.09, 0.2, 8), "#6e4a2c", -0.25, 0.1, 0.45);
+      m.add(new THREE.TorusGeometry(0.07, 0.025, 5, 10).rotateX(Math.PI / 2), "#d9c9a8", 0.25, 0.1, 0.5);
+      banner(-0.72, -0.9, 1.3);
       break;
     }
     case K.Orchard: {
@@ -682,6 +705,14 @@ function resourceModels() {
   const clay = new Model();
   clay.add(cyl(0.42, 0.38, 0.05, 10), "#8a5236", 0, 0.025, 0).add(cyl(0.3, 0.27, 0.03, 10), "#6e3e28", 0, 0.05, 0);
   for (const [x, z] of [[0.2, 0.15], [-0.18, 0.2], [0.05, -0.22]]) clay.add(box(0.12, 0.08, 0.08), "#b9764a", x, 0.1, z);
+  // A fish shoal: rings of ripples on the surface, fins breaking it, and
+  // the backs of fish just under it (seen through the clear water).
+  const fish = new Model();
+  for (const [r, y] of [[0.34, 0.012], [0.2, 0.016]]) fish.add(new THREE.TorusGeometry(r, 0.007, 3, 24).rotateX(Math.PI / 2), "#bfe0e6", 0, y, 0);
+  for (const [x, z, a] of [[0.12, 0.05, 0.3], [-0.14, -0.1, 2.1], [0.02, -0.2, 4.0], [-0.05, 0.2, 5.2]]) {
+    const body = ball(0.06, 1).scale(2.2, 0.6, 0.8).rotateY(a); fish.add(body, "#3d5f6e", x, -0.03, z);
+    const fin = cone(0.025, 0.07, 3).rotateY(a); fish.add(fin, "#2c4652", x, 0.02, z);
+  }
   const sheep = new Model();
   for (const [x, z] of [[-0.12, -0.08], [0.18, 0.14]]) {
     for (const [lx, lz] of [[0.08, 0.04], [0.08, -0.04], [-0.07, 0.04], [-0.07, -0.04]]) sheep.add(box(0.025, 0.1, 0.025), "#2a221c", x + lx, 0.05, z + lz);
@@ -689,7 +720,7 @@ function resourceModels() {
   }
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
     deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]),
-    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false), uranium: rock(false) };
+    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false), uranium: rock(false), fish: fish.build() };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -1073,7 +1104,7 @@ function buildWorld() {
   };
   R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
     horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false),
-    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false), oil: mk(R3.resGeo.oil, n, false), bauxite: mk(R3.resGeo.bauxite, n, false), uranium: mk(R3.resGeo.uranium, n, false) };
+    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), fish: mk(R3.resGeo.fish, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false), oil: mk(R3.resGeo.oil, n, false), bauxite: mk(R3.resGeo.bauxite, n, false), uranium: mk(R3.resGeo.uranium, n, false) };
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -1544,9 +1575,11 @@ function makeObj(i) {
   if (isBld(kind)) {
     const s = stat(kind, 6);
     o.baseY = flattenUnder(o.x, o.y, s);
-    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.FishingHut]: 1.0, [K.Tower]: 3 }[kind] || 1.6;
+    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
+    // A dock turns its pier (+z) to the water beside it.
+    if (kind === K.Dock) root.rotation.y = waterSide(o.x, o.y, s);
     if (kind === K.Capitol) { o.campfire = campfire(); root.add(o.campfire); }
   } else if (mdl.rig) {
     root.remove(body);
@@ -2081,6 +2114,21 @@ function updatePuffs(now) {
 
 // Rebuild the resource instances when anything about them changed.
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _v3 = new THREE.Vector3(), _c = new THREE.Color();
+// Which way the water is from a building's middle: the angle that turns
+// its +z side to face it (the mean direction of the water tiles round it).
+function waterSide(x, y, s) {
+  const ter = u8(W.terrain_ptr(), MW * MH), r = s / 2 + 2;
+  let dx = 0, dz = 0;
+  for (let ty = Math.floor(y - r); ty <= Math.floor(y + r); ty++) for (let tx = Math.floor(x - r); tx <= Math.floor(x + r); tx++) {
+    if (tx < 0 || ty < 0 || tx >= MW || ty >= MH || ter[ty * MW + tx] !== 1) continue;
+    const vx = tx + 0.5 - x, vz = ty + 0.5 - y, d = Math.hypot(vx, vz) || 1;
+    dx += vx / d; dz += vz / d;
+  }
+  // Square to the shore: the nearest of the four sides.
+  const a = Math.atan2(dx, dz);
+  return Math.round(a / (Math.PI / 2)) * (Math.PI / 2);
+}
+
 function updateResources() {
   if (!R3.res) return;
   // A number that changes when resources do (was a string: garbage every frame).
@@ -2088,13 +2136,14 @@ function updateResources() {
   for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
-  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [], oil: [], bauxite: [], uranium: [] };
+  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [], oil: [], bauxite: [], uranium: [], fish: [] };
   for (const m of Object.values(R3.res)) m.count = 0;
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
     // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game,
-    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal, 11 oil, 12 bauxite, 13 uranium.
+    // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal, 11 oil, 12 bauxite, 13 uranium,
+    // 14 fish shoals (out on the water).
     let mesh, scale;
     if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
@@ -2108,6 +2157,7 @@ function updateResources() {
     else if (kind === 11) { mesh = "oil"; scale = 0.85 + 0.2 * h2; }
     else if (kind === 12) { mesh = "bauxite"; scale = 0.8 + 0.3 * h2; }
     else if (kind === 13) { mesh = "uranium"; scale = 0.8 + 0.3 * h2; }
+    else if (kind === 14) { mesh = "fish"; scale = 0.9 + 0.3 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;

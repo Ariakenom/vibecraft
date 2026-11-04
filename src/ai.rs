@@ -117,7 +117,7 @@ const NAVY: [Kind; 6] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad,
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 62] = [
+const PLAN: [(Kind, u32); 61] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -129,7 +129,6 @@ const PLAN: [(Kind, u32); 62] = [
     // A fourth, for slack: cottages eat every spare stone, and the Sawmill
     // (2 stone) that gets the town out of its wood ceiling needs some.
     (Kind::Quarry, 4),
-    (Kind::FishingHut, 1),
     (Kind::HuntingLodge, 1),
     (Kind::Orchard, 1),
     // A dock, where there's water: fishing boats, and a few warships.
@@ -241,7 +240,8 @@ fn target(era: u8) -> &'static econ::Plan {
 }
 
 fn house_goods(era: u8) -> Vec<Res> {
-    Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && producer_of(*r).is_some_and(|k| k.era() <= era)).collect()
+    // (Fish come from fishing boats, which `producer_of` doesn't list.)
+    Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && (*r == Res::Fish || producer_of(*r).is_some_and(|k| k.era() <= era))).collect()
 }
 
 // A second `impl Game` block, in a different file. Rust lets you split a
@@ -560,6 +560,15 @@ impl Game {
         let mut by_supply: Vec<Res> = goods.iter().copied().filter(|&r| lacking || p.spare(r) <= 0).collect();
         by_supply.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in by_supply {
+            // Fish: fishing boats, from a dock.
+            if r == Res::Fish {
+                let step = self.ai_fish(c);
+                ailog!("grow: good Fish (supply {}) from fishing boats: {step:?}", p.supply[r.idx()]);
+                if step != Step::Blocked {
+                    return step;
+                }
+                continue;
+            }
             let Some(k) = self.ai_producer(c.me, r) else { continue };
             let step = self.ai_project(k, c, true);
             ailog!("grow: good {r:?} (supply {}) from {k:?}: {step:?}", p.supply[r.idx()]);
@@ -573,6 +582,14 @@ impl Game {
         others.retain(|r| !goods.contains(r));
         others.sort_by_key(|r| (p.supply[r.idx()], r.idx()));
         for r in others {
+            if r == Res::Fish {
+                let step = self.ai_fish(c);
+                if step != Step::Blocked {
+                    c.relax = false;
+                    return step;
+                }
+                continue;
+            }
             let Some(k) = producer_of(r).filter(|&k| self.unlocked(c.me, k) && self.count_of(c.me, k) < Self::max_of(k)) else { continue };
             let step = self.ai_project(k, c, true);
             if step != Step::Blocked {
@@ -583,6 +600,38 @@ impl Game {
         c.relax = false;
         if !hut_first && goods.iter().any(|&r| p.spare(r) > 0) {
             return self.ai_project(Kind::Hut, c, true);
+        }
+        Step::Blocked
+    }
+
+    /// More fish: a dock if there's none, then fishing boats while no fish
+    /// is spare: as many as the town's plan has (one over), two for each
+    /// shoal tile near home at most, and never more than ten. The boats go to the shoals by
+    /// themselves (`ai_navy`).
+    fn ai_fish(&mut self, c: &mut Census) -> Step {
+        let me = c.me;
+        let home = c.home;
+        let shoals = self.deps.iter().filter(|d| d.kind == Dep::Fish && (d.center().0 - home.0).hypot(d.center().1 - home.1) < 26.0).count();
+        if shoals == 0 {
+            return Step::Blocked;
+        }
+        let Some(dock) = self.ents.iter().position(|e| e.alive && e.owner == me && e.kind == Kind::Dock) else {
+            return self.ai_project(Kind::Dock, c, true);
+        };
+        if self.ents[dock].built < 1.0 {
+            return Step::Waiting;
+        }
+        let boats = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::FishingBoat).count() + self.ents[dock].queue.iter().filter(|&&k| k == Kind::FishingBoat).count();
+        // As many as the town's plan has (one over), and only while no fish
+        // is spare: each is a person, and holds wood.
+        let pl = &self.players[me as usize];
+        let want = (target(pl.era).count(Kind::FishingBoat) as usize + 1).min(2 * shoals).min(10);
+        if boats >= want || pl.spare(Res::Fish) > 0 || !self.ents[dock].queue.is_empty() || c.spare == 0 || self.ai_short_of(me, Kind::FishingBoat).is_some() {
+            return Step::Blocked;
+        }
+        if self.queue_unit(self.ents[dock].id, Kind::FishingBoat).is_ok() {
+            c.spare -= 1;
+            return Step::Started;
         }
         Step::Blocked
     }
@@ -960,6 +1009,22 @@ impl Game {
                     c.spare -= 1;
                     ailog!("navy: P{me} trains a {u:?}");
                 }
+            }
+        }
+        // Fishing boats fish only on a shoal: an idle one elsewhere goes to
+        // the nearest shoal tile (that another of ours isn't lying on).
+        let shoals: Vec<(f32, f32)> = self.deps.iter().filter(|d| d.kind == Dep::Fish).map(|d| d.center()).collect();
+        for i in 0..self.ents.len() {
+            let e = &self.ents[i];
+            if !e.alive || e.owner != me || e.kind != Kind::FishingBoat || e.order != Order::Idle || self.on_shoal(e.x, e.y) {
+                continue;
+            }
+            let (x, y) = (e.x, e.y);
+            let taken = |p: (f32, f32)| self.ents.iter().any(|o| o.alive && o.kind == Kind::FishingBoat && o.id != e.id && (o.x - p.0).hypot(o.y - p.1) < 1.0);
+            let best = shoals.iter().copied().filter(|&p| !taken(p)).min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)));
+            if let Some((sx, sy)) = best {
+                let id = e.id;
+                self.order_move(id, sx, sy);
             }
         }
         // Enemy boats near home: the warships go for them.
