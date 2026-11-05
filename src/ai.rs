@@ -1123,7 +1123,7 @@ impl Game {
             }
             // Not into anyone's town: a scout there brings their army out
             // (and the fighting back home). Towns it has seen buildings of.
-            let towns: Vec<(f32, f32)> = g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && g.explored_by(me, e.tx, e.ty)).map(|e| (e.x, e.y)).collect();
+            let towns: Vec<(f32, f32)> = g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && g.staked(e) && g.explored_by(me, e.tx, e.ty)).map(|e| (e.x, e.y)).collect();
             let mut best: Option<(f32, (f32, f32))> = None;
             for ty in (2..m.h - 2).step_by(3) {
                 for tx in (2..m.w - 2).step_by(3) {

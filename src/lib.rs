@@ -92,6 +92,10 @@ pub extern "C" fn render() -> u32 {
             if !visible && !(e.is_building() && e.seen) {
                 continue;
             }
+            // Someone else's plan not begun yet isn't there for you.
+            if e.owner != g.local && !g.staked(e) {
+                continue;
+            }
             let st = e.kind.stats();
             let mut flags = 0u32;
             if e.selected {

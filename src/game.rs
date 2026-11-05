@@ -88,6 +88,7 @@ pub enum Ev {
     SiloBuilt = 23,  // someone finished a missile silo at (x, y) (data = owner); everyone hears
     NukeArming = 24, // someone started arming a nuke (data = owner); everyone hears
     Cheats = 25,     // the host turned cheat mode on or off (data = 1 on); everyone hears
+    SpotTaken = 26,  // the player's planned building was dropped: its spot was taken (data = kind)
 }
 
 /// Why a command was refused. `code()` is the number JavaScript receives.
@@ -668,6 +669,31 @@ impl Game {
         }
         e.seen = owner == self.local;
         self.ents.push(e);
+        self.stamp(id);
+        id
+    }
+
+    /// A building placed by a player: only a plan, seen by its owner alone,
+    /// until a builder gets there (`stake_foundations`). Until then it takes
+    /// no tiles, blocks nothing and nobody, sees nothing and can't be hit.
+    pub fn spawn_foundation(&mut self, kind: Kind, owner: u8, tx: i32, ty: i32) -> u32 {
+        let id = self.ents.len() as u32;
+        let half = kind.stats().size as f32 / 2.0;
+        let mut e = Entity::new(id, kind, owner, tx as f32 + half, ty as f32 + half);
+        e.tx = tx;
+        e.ty = ty;
+        e.built = 0.0;
+        e.hp = kind.stats().hp * 0.1;
+        e.seen = owner == self.local;
+        self.ents.push(e);
+        id
+    }
+
+    /// A building takes its tiles: they're its, and blocked if it blocks.
+    fn stamp(&mut self, id: u32) {
+        let e = &self.ents[id as usize];
+        let (kind, tx, ty) = (e.kind, e.tx, e.ty);
+        let size = kind.stats().size;
         for y in ty..ty + size {
             for x in tx..tx + size {
                 let i = self.map.idx(x, y);
@@ -680,7 +706,52 @@ impl Game {
         if kind.blocks() {
             self.evict_units(tx, ty, size);
         }
-        id
+    }
+
+    /// Is this on the map? Units always are; a building once it holds its
+    /// tiles. A foundation no builder has reached yet isn't (`spawn_foundation`).
+    pub fn staked(&self, e: &Entity) -> bool {
+        Self::staked_on(&self.map, e)
+    }
+
+    /// `staked`, borrowing only the map (for loops that change other fields).
+    fn staked_on(map: &Map, e: &Entity) -> bool {
+        !e.is_building() || (map.inside(e.tx, e.ty) && map.bld_at[map.idx(e.tx, e.ty)] == e.id as i32)
+    }
+
+    /// Foundations whose first builder has got there take their tiles now.
+    /// If an enemy stands on the spot, they wait (and don't rise). If a
+    /// building or a campfire took it meanwhile, the plan is dropped: its
+    /// slots come free and its builders go home.
+    pub(crate) fn stake_foundations(&mut self) {
+        for i in 0..self.ents.len() {
+            let e = &self.ents[i];
+            if !e.alive || !e.is_building() || e.builders_in == 0 || self.staked(e) {
+                continue;
+            }
+            let (kind, tx, ty, owner, id) = (e.kind, e.tx, e.ty, e.owner, e.id);
+            if self.enemy_on(kind, tx, ty, owner) {
+                self.ents[i].builders_in = 0;
+            } else if self.spot_free_but(kind, tx, ty, owner, 0, id as i32) {
+                self.stamp(id);
+            } else {
+                self.ents[i].alive = false;
+                self.ents[i].selected = false;
+                if owner == self.local {
+                    let (x, y) = (self.ents[i].x, self.ents[i].y);
+                    self.push_event(Ev::SpotTaken, x, y, kind as u32 as f32);
+                }
+            }
+        }
+    }
+
+    /// Does an enemy unit stand on this footprint?
+    fn enemy_on(&self, kind: Kind, tx: i32, ty: i32, owner: u8) -> bool {
+        let s = kind.stats().size;
+        self.ents.iter().any(|e| {
+            let (ux, uy) = (e.x.floor() as i32, e.y.floor() as i32);
+            e.alive && !e.is_building() && e.owner != owner && ux >= tx && ux < tx + s && uy >= ty && uy < ty + s
+        })
     }
 
     /// Push any units standing on a new building's footprint out to a free tile.
@@ -912,7 +983,7 @@ impl Game {
             return best;
         }
         for e in self.ents.iter() {
-            if e.alive && e.is_building() && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) {
+            if e.alive && e.is_building() && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && self.staked(e) {
                 let k = key(e);
                 if better(k, bk) {
                     bk = k;
@@ -943,6 +1014,7 @@ impl Game {
             e.hit_flash = (e.hit_flash - DT).max(0.0);
         }
         self.resolve();
+        self.stake_foundations();
         self.grow();
         self.recruit();
         self.rebuild_grid();
@@ -1206,10 +1278,14 @@ impl Game {
             }
         }
         // Don't build on top of enemy soldiers.
+        if self.enemy_on(kind, tx, ty, owner) {
+            return false;
+        }
+        // Nor across your own plans not begun yet (others' you can't see).
         for e in self.ents.iter() {
-            if e.alive && !e.is_building() && e.owner != owner {
-                let (ux, uy) = (e.x.floor() as i32, e.y.floor() as i32);
-                if ux >= tx && ux < tx + s && uy >= ty && uy < ty + s {
+            if e.alive && e.is_building() && e.owner == owner && e.id as i32 != except && !self.staked(e) {
+                let es = e.kind.stats().size;
+                if e.tx < tx + s + margin && tx - margin < e.tx + es && e.ty < ty + s + margin && ty - margin < e.ty + es {
                     return false;
                 }
             }
@@ -1232,7 +1308,7 @@ impl Game {
             return Err(CmdError::Locked(missing));
         }
         self.pay(owner, kind.stats().cost)?;
-        let id = self.spawn_building(kind, owner, tx, ty, 0.0);
+        let id = self.spawn_foundation(kind, owner, tx, ty);
         for &b in builders {
             self.order_build(b, id);
         }
@@ -1328,6 +1404,13 @@ impl Game {
             if !fog || e.owner == self.local || e.seen {
                 return Pick::Ent(b as u32);
             }
+        }
+        // Your own plans not begun yet hold no tiles, but you can pick them.
+        if let Some(e) = self.ents.iter().find(|e| {
+            let s = e.kind.stats().size;
+            e.alive && e.is_building() && e.owner == self.local && tx >= e.tx && tx < e.tx + s && ty >= e.ty && ty < e.ty + s && !self.staked(e)
+        }) {
+            return Pick::Ent(e.id);
         }
         let d = self.map.dep_at[i];
         if d >= 0 {
@@ -2152,6 +2235,9 @@ impl Game {
             for yy in ty..ty + s {
                 for xx in tx..tx + s {
                     let j = self.map.idx(xx, yy);
+                    if self.map.bld_at[j] != i as i32 {
+                        continue; // a plan not begun holds no tiles
+                    }
                     self.map.bld_at[j] = -1;
                     self.map.blocked[j] = self.map.terrain[j] == map::CRATER; // craters stay blocked
                 }
@@ -2368,7 +2454,8 @@ impl Game {
     /// Mark what every player's things can see as explored by them.
     pub(crate) fn explore(&mut self) {
         let (w, h) = (self.map.w, self.map.h);
-        for e in self.ents.iter().filter(|e| e.alive && e.owner != GAIA && e.owner < 8) {
+        let map = &self.map;
+        for e in self.ents.iter().filter(|e| e.alive && e.owner != GAIA && e.owner < 8 && Self::staked_on(map, e)) {
             let st = e.kind.stats();
             let r = st.sight + st.size as f32 / 2.0;
             let ri = r.ceil() as i32;
@@ -2405,7 +2492,8 @@ impl Game {
         }
         let w = self.map.w;
         let me = self.local;
-        for e in self.ents.iter().filter(|e| e.alive && e.owner == me) {
+        let map = &self.map;
+        for e in self.ents.iter().filter(|e| e.alive && e.owner == me && Self::staked_on(map, e)) {
             let st = e.kind.stats();
             let r = st.sight + st.size as f32 / 2.0;
             let ri = r.ceil() as i32;
@@ -2421,7 +2509,7 @@ impl Game {
         }
         for k in 0..self.ents.len() {
             let e = &self.ents[k];
-            if e.alive && e.is_building() && !e.seen && self.visible_to_player(e.x, e.y) {
+            if e.alive && e.is_building() && !e.seen && self.visible_to_player(e.x, e.y) && self.staked(e) {
                 self.ents[k].seen = true;
             }
         }

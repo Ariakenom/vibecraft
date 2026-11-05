@@ -1679,7 +1679,7 @@ function scrollCamera(dt) {
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
 const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, Eliminated: 14,
   Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20,
-  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24, Cheats: 25 };
+  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24, Cheats: 25, SpotTaken: 26 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1716,6 +1716,7 @@ function handleEvents() {
         Sfx.ui("built");
         break; }
       case EV.Lost: toast(`Your ${NAMES[d]} was destroyed.`, "bad"); break;
+      case EV.SpotTaken: toast(`Your planned ${NAMES[d]} was dropped: something took its spot before a builder got there.`, "bad"); break;
       case EV.Death: { const kind = d % 100;
         if (isBld(kind)) Sfx.at("crumble", x, y, 200);
         else Sfx.at("death", x, y, 90, isMounted(kind));

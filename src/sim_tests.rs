@@ -2046,3 +2046,48 @@ fn spot_near(g: &Game, kind: Kind, x: i32, y: i32) -> (i32, i32) {
     }
     panic!("no spot for {kind:?} near {x},{y}");
 }
+
+/// A placed building is only a plan until a builder gets there: it holds no
+/// tiles and blocks nothing, others can't see or hit it, and it gives no
+/// sight. Then it takes its tiles. If something took the spot meanwhile,
+/// the plan is dropped and its slots come free.
+#[test]
+fn foundations_appear_when_a_builder_gets_there() {
+    let mut g = town(7, 0, 2);
+    g.players[1].cheat = true;
+    let c = g.find_first(1, Kind::Capitol).unwrap();
+    let (cx, cy) = (g.ents[c].tx, g.ents[c].ty);
+    let (bx, by) = spot_near(&g, Kind::Barracks, cx, cy);
+    let f = g.place(1, Kind::Barracks, bx, by, &[]).unwrap();
+    let tile = g.map.idx(bx, by);
+    assert_eq!(g.map.bld_at[tile], -1, "a plan holds no tiles");
+    assert!(!g.map.blocked[tile], "a plan blocks nothing");
+    assert!(!g.staked(&g.ents[f as usize]));
+    assert!(!g.spot_free(Kind::Barracks, bx, by, 1, 0), "your own plans still keep your other buildings off");
+    assert!(g.spot_free(Kind::Barracks, bx, by, 2, 0), "others' plans don't");
+    // It rises once a builder is there.
+    for _ in 0..2000 {
+        g.tick();
+        if g.staked(&g.ents[f as usize]) {
+            break;
+        }
+    }
+    assert!(g.staked(&g.ents[f as usize]), "nobody came to build it");
+    assert_eq!(g.map.bld_at[tile], f as i32);
+    assert!(g.ents[f as usize].builders_in > 0);
+    run(&mut g, 60.0);
+    assert!(g.ents[f as usize].built >= 1.0, "it never got built");
+
+    // A plan whose spot is taken before anyone gets there is dropped.
+    let (bx, by) = spot_near(&g, Kind::Barracks, cx, cy);
+    g.resolve();
+    let used = g.players[1].used.clone();
+    let f2 = g.place(1, Kind::Barracks, bx, by, &[]).unwrap();
+    let hut = g.spawn_building(Kind::Hut, 2, bx, by, 1.0); // rival's hut on the same spot
+    run(&mut g, 60.0);
+    assert!(!g.ents[f2 as usize].alive, "the plan wasn't dropped");
+    g.resolve();
+    assert_eq!(g.players[1].used, used, "its slots didn't come free");
+    let h = &g.ents[hut as usize];
+    assert_eq!(g.map.bld_at[g.map.idx(bx, by)], hut as i32, "dropping it freed the hut's tiles");
+}
