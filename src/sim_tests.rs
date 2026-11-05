@@ -2091,3 +2091,29 @@ fn foundations_appear_when_a_builder_gets_there() {
     let h = &g.ents[hut as usize];
     assert_eq!(g.map.bld_at[g.map.idx(bx, by)], hut as i32, "dropping it freed the hut's tiles");
 }
+
+/// A right-click on your own plan not begun yet must mean the same on every
+/// computer. Only its owner sees the plan, and the simulation once looked it
+/// up as the local player: the owner's workers went to build it, everyone
+/// else's copy sent them walking, and the game drifted apart (5 Nov 2026).
+#[test]
+fn right_click_on_a_plan_is_the_same_from_every_seat() {
+    let mut a = town(7, 0, 2);
+    a.players[1].cheat = true;
+    let c = a.find_first(1, Kind::Capitol).unwrap();
+    let (cx, cy) = (a.ents[c].tx, a.ents[c].ty);
+    let (bx, by) = spot_near(&a, Kind::LumberCamp, cx, cy);
+    let plan = a.place(1, Kind::LumberCamp, bx, by, &[]).unwrap();
+    let mut b = a.clone();
+    a.local = 1; // the plan's owner
+    b.local = 2; // someone else
+    let ws: Vec<u32> = a.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker).map(|e| e.id).take(3).collect();
+    let (x, y) = (bx as f32 + 0.5, by as f32 + 0.5);
+    for g in [&mut a, &mut b] {
+        g.smart_order(&ws, x, y, 1);
+        assert_eq!(g.ents[ws[0] as usize].order, Order::Build(plan), "seat {}: the workers weren't sent to build their own plan", g.local);
+    }
+    run(&mut a, 20.0);
+    run(&mut b, 20.0);
+    assert_eq!(a.checksum(), b.checksum(), "the two seats drifted apart");
+}
