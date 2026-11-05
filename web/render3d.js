@@ -1015,13 +1015,19 @@ function computeHeights() {
     shallowShare[cy * cw + cx] = n > land ? shallow / (n - land) : 0;
   }
   // Two blur passes turn the blocky per-tile steps into rolling hills.
+  // Land is smoothed with land and water with water: blurred together, a
+  // river bed pulled the land beside it down below the sand line, and every
+  // river ran through a wide strip of sand like a dried-up lake. (Corners on
+  // the shore are set below anyway.)
+  const kind = i => landShare[i] === 1 ? 1 : landShare[i] === 0 ? 0 : 2;
   for (let pass = 0; pass < 2; pass++) {
     const o = new Float32Array(h.length);
     for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+      const me = kind(cy * cw + cx);
       let sum = 0, n = 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const x = cx + dx, y = cy + dy;
-        if (x < 0 || y < 0 || x >= cw || y >= ch) continue;
+        if (x < 0 || y < 0 || x >= cw || y >= ch || (me !== 2 && kind(y * cw + x) !== me)) continue;
         const wgt = dx || dy ? 1 : 2;
         sum += h[y * cw + x] * wgt; n += wgt;
       }
@@ -1197,12 +1203,18 @@ function buildWater() {
   withFow(mat, sh => {
     sh.uniforms.uTime = timeUniform;
     sh.uniforms.uHeight = { value: htex };
+    // The height map's corner and size, as a uniform and never written into
+    // the shader's text: three.js reuses a compiled shader whose source looks
+    // the same (withFow), so a new map of another size got the last map's
+    // numbers, read the heights at the wrong scale, and drew lakes as dry
+    // sand and dry land as deep water.
+    sh.uniforms.uHeightBox = { value: new THREE.Vector4(pad, pad, MW + pad * 2, MH + pad * 2) };
     sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
       vDepth = aDepth;
       vWPos = position.xz;
       // A slow swell, calm in the shallows.
       transformed.y += (sin(position.x * 0.9 + uTime * 0.9) + cos(position.z * 0.7 + uTime * 0.65) + sin((position.x + position.z) * 1.6 + uTime * 1.4) * 0.5) * 0.018 * clamp(aDepth * 3.0, 0.0, 1.0);`);
-    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + `
+    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nuniform vec4 uHeightBox;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + `
       // The water's surface: waves running different ways, and noise to
       // break them up. Returns its slope (d height / dx, dz), for the normal.
       vec2 waterSlope(vec2 p, float t) {
@@ -1220,7 +1232,7 @@ function buildWater() {
       }
     ` + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
-        float ground = texture2D(uHeight, (vWPos + ${pad}.0) / vec2(${MW + pad * 2}.0, ${MH + pad * 2}.0)).r;
+        float ground = texture2D(uHeight, (vWPos + uHeightBox.xy) / uHeightBox.zw).r;
         float dRaw = ${WATER_Y.toFixed(3)} - ground;
         if (dRaw < -0.01) discard;
         float d = clamp(dRaw, 0.0, 2.0);
