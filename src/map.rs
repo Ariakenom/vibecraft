@@ -5,6 +5,12 @@ use crate::defs::Dep;
 
 pub const MAP_W: i32 = 120;
 pub const MAP_H: i32 = 120;
+
+#[cfg(test)]
+thread_local! {
+    /// Tests only: make `generate` build land of this side instead (0: as normal).
+    pub static SIZE_OVERRIDE: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
 /// How far apart a base's deposits are, against the first maps (80 tiles).
 const SPREAD: f32 = 1.5;
 /// Free tiles kept between the edges of two clusters of different kinds, so
@@ -219,6 +225,8 @@ fn ring_point(r: i32, t: i32) -> (i32, i32) {
 pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>) {
     let players = players.clamp(2, 4);
     let (w, h) = if players <= 2 { (MAP_W, MAP_H) } else { (144, 144) };
+    #[cfg(test)]
+    let (w, h) = match SIZE_OVERRIDE.with(|c| c.get()) { 0 => (w, h), s => (s, s) };
     let n = (w * h) as usize;
     let syms: &[Sym] = if players <= 2 { &[Sym::Id, Sym::Rot180] } else { &[Sym::Id, Sym::Rot90, Sym::Rot180, Sym::Rot270] };
     let images = |x: i32, y: i32| syms.iter().map(move |s| s.apply(x, y, w, h));

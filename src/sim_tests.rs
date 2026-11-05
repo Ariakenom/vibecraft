@@ -2116,3 +2116,60 @@ fn right_click_on_a_plan_is_the_same_from_every_seat() {
     run(&mut b, 20.0);
     assert_eq!(a.checksum(), b.checksum(), "the two seats drifted apart");
 }
+
+/// Frontier: what a much bigger map costs. For each land size: making the
+/// map and game, a tick at 5 and 10 minutes with every player run by the
+/// AI, a path from one Capitol to the farthest, copying the game (as
+/// multiplayer does), a checksum, and the save's size.
+/// `cargo test --release diag_big_map -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn diag_big_map() {
+    use crate::path::{Goal, Pathfinder};
+    use std::time::Instant;
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+    for (players, size) in [(2u8, 0), (2, 270), (2, 380), (4, 0), (4, 455)] {
+        crate::map::SIZE_OVERRIDE.with(|c| c.set(size));
+        let t = Instant::now();
+        let mut g = Game::new(7, 1, players);
+        let t_new = ms(t);
+        for p in 1..=players {
+            g.set_ai(p, true);
+        }
+        for a in g.ais.iter_mut() {
+            a.next_attack = 1.0e9;
+        }
+        let caps: Vec<(f32, f32)> = g.ents.iter().filter(|e| e.alive && e.kind == Kind::Capitol).map(|e| (e.x, e.y)).collect();
+        let (a, b) = (caps[0], *caps.iter().max_by(|p, q| ((p.0 - caps[0].0).hypot(p.1 - caps[0].1)).total_cmp(&(q.0 - caps[0].0).hypot(q.1 - caps[0].1))).unwrap());
+        let mut pf = Pathfinder::new((g.map.w * g.map.h) as usize);
+        let t = Instant::now();
+        let path = pf.find(&g.map, false, a.0 + 2.5, a.1 + 2.5, &Goal::point(b.0, b.1, 3.0));
+        let t_path = ms(t);
+        // The worst case: a goal out at sea, so A* searches all the land it can reach.
+        let t = Instant::now();
+        pf.find(&g.map, false, a.0 + 2.5, a.1 + 2.5, &Goal::point(1.0, 1.0, 0.5));
+        let t_worst = ms(t);
+        let mut line = format!("{}p {}x{}: new {:.0} ms, path {:.1} ms ({} steps), unreachable {:.1} ms", players, g.map.w, g.map.h, t_new, t_path, path.len(), t_worst);
+        for m in [5.0f32, 10.0] {
+            let left = m * 60.0 - g.time;
+            run(&mut g, left);
+            let t = Instant::now();
+            run(&mut g, 20.0);
+            line += &format!(", tick@{}min {:.3} ms", m, ms(t) / 400.0);
+        }
+        let t = Instant::now();
+        let mut copy = g.clone();
+        let t_clone = ms(t);
+        let t = Instant::now();
+        copy.clone_from(&g);
+        let t_clone_from = ms(t);
+        let t = Instant::now();
+        let sum = g.checksum();
+        let t_sum = ms(t);
+        let t = Instant::now();
+        let bytes = g.save();
+        let t_save = ms(t);
+        println!("{line}, clone {:.2} ms, clone_from {:.2} ms, checksum {:.2} ms ({sum:x}), save {:.1} ms {} KB, {} entities", t_clone, t_clone_from, t_sum, t_save, bytes.len() / 1024, g.ents.iter().filter(|e| e.alive).count());
+    }
+    crate::map::SIZE_OVERRIDE.with(|c| c.set(0));
+}
