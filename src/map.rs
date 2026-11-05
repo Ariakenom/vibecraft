@@ -851,7 +851,7 @@ mod dry_lakes {
     /// (the 3D view draws ground below `SHADE_BEACH` as sand). Before, maps
     /// with low water had up to 600 such tiles, in wide sandy basins.
     /// (The dry lakes players saw were mostly the water drawn wrong on a
-    /// second map: test/browser/water.mjs.)
+    /// second map of another size: see uHeightBox in render3d.js.)
     #[test]
     fn grass_far_from_water_is_not_drawn_as_sand() {
         for players in [2usize, 4] {
