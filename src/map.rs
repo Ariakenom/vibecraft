@@ -123,7 +123,7 @@ impl Map {
 // ---------------------------------------------------------------------------
 // Noise: cheap "value noise" summed at several scales (fractal Brownian motion).
 
-fn hash(x: i32, y: i32, seed: u32) -> f32 {
+pub(crate) fn hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(374_761_393) ^ (y as u32).wrapping_mul(668_265_263) ^ seed.wrapping_mul(2_246_822_519);
     h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
     h ^= h >> 16;
@@ -144,7 +144,7 @@ fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
     top + (bot - top) * v
 }
 
-fn fbm(x: f32, y: f32, seed: u32) -> f32 {
+pub(crate) fn fbm(x: f32, y: f32, seed: u32) -> f32 {
     let (mut sum, mut amp, mut freq, mut norm) = (0.0, 0.5, 1.0, 0.0);
     for o in 0..4 {
         sum += value_noise(x * freq, y * freq, seed.wrapping_add(o * 101)) * amp;
@@ -155,7 +155,7 @@ fn fbm(x: f32, y: f32, seed: u32) -> f32 {
     sum / norm
 }
 
-fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
+pub(crate) fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
@@ -167,7 +167,7 @@ fn dist_to_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
 
 /// Tile features placed during generation, before they become `Deposit`s.
 #[derive(Clone, Copy, PartialEq)]
-enum Feat {
+pub(crate) enum Feat {
     None,
     Tree,
     Fertile,
@@ -190,7 +190,7 @@ enum Feat {
 /// Two players get 180° symmetry; three or four get 90° (four-way) symmetry,
 /// so every starting position is identical, just turned.
 #[derive(Clone, Copy)]
-enum Sym {
+pub(crate) enum Sym {
     Id,
     Rot90,
     Rot180,
@@ -198,7 +198,7 @@ enum Sym {
 }
 
 impl Sym {
-    fn apply(self, x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    pub(crate) fn apply(self, x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
         match self {
             Sym::Id => (x, y),
             Sym::Rot90 => (w - 1 - y, x),
@@ -209,7 +209,7 @@ impl Sym {
 }
 
 /// The t-th point on the square ring of radius r around (0, 0) (8r points).
-fn ring_point(r: i32, t: i32) -> (i32, i32) {
+pub(crate) fn ring_point(r: i32, t: i32) -> (i32, i32) {
     let side = 2 * r;
     let (s, o) = (t / side, t % side);
     match s {

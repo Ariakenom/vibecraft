@@ -11,6 +11,7 @@ mod defs;
 mod econ;
 mod game;
 mod map;
+mod map_frontier;
 mod path;
 mod people;
 mod save;
