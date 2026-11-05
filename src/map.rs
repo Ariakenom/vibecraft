@@ -28,6 +28,12 @@ pub const HILL: u8 = 3;
 pub const CRATER: u8 = 4;
 /// Shallow water: a ford across a river. Boats sail it and people wade it.
 pub const SHALLOW: u8 = 5;
+/// Where water meets land in `Map::shade` (0..1), whatever a map's water
+/// level: the 3D view draws its waterline there (`elevOf` in render3d.js).
+pub const SHADE_WATER: f32 = 0.36;
+/// Ground lower than this in `Map::shade` is drawn as beach (the ground
+/// shader's sand line wobbles up to elevation 0.22, which is 0.445).
+pub const SHADE_BEACH: f32 = 0.45;
 
 /// One tile of a deposit: a tree of a forest, a rock of a stone outcrop, a
 /// fruit bush, grazing horses or game. Extractors are built next to them.
@@ -282,7 +288,11 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             } else {
                 GRASS
             };
-            shade[i] = (ht.clamp(0.0, 1.0) * 255.0) as u8;
+            // Height for drawing, measured from this map's own water level
+            // (the 3D view puts the waterline at 0.36). Measured from a fixed
+            // level, a map with low water drew wide stretches of its lowest
+            // grass flat at the waterline, as sand: dry lake beds.
+            shade[i] = ((ht - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
 
             // Forests from a second noise layer.
             let f = fbm(cx as f32 / wood_scale + 40.0, cy as f32 / wood_scale + 40.0, seed ^ 0xBEEF);
@@ -637,7 +647,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             (t2[i], s2[i], f2[i]) = (terrain[j], shade[j], feat[j]);
         }
     }
-    let (terrain, shade, mut feat) = (t2, s2, f2);
+    let (terrain, mut shade, mut feat) = (t2, s2, f2);
     let bases: Vec<(i32, i32)> = bases.into_iter().map(|(x, y)| (x + OPEN_SEA, y + OPEN_SEA)).collect();
     // Fishing spots out there: along each edge, half way out, and turned.
     let images = |x: i32, y: i32| syms.iter().map(move |s| s.apply(x, y, w, h));
@@ -686,6 +696,21 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             dep_at[i] = deps.len() as i32;
             blocked[i] = true;
             deps.push(Deposit { kind, tx: x, ty: y });
+        }
+    }
+
+    // Beaches only by the water: the 3D view draws ground lower than
+    // `SHADE_BEACH` as sand, so dips in the land that never reach the water
+    // looked like dried-up lakes. Land more than two tiles from any water is
+    // drawn at least that high. (Shade is for drawing only.)
+    let floor = (SHADE_BEACH * 255.0).ceil() as u8;
+    let wet = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && matches!(terrain[(y * w + x) as usize], WATER | SHALLOW);
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            if !matches!(terrain[i], WATER | SHALLOW) && !(-2..=2).any(|dy| (-2..=2).any(|dx| wet(x + dx, y + dy))) {
+                shade[i] = shade[i].max(floor);
+            }
         }
     }
 
@@ -754,5 +779,32 @@ mod tests {
         }
         println!("closest two different deposits: {worst:.1} tiles");
         assert!(worst >= 4.0, "two kinds of deposit only {worst:.1} tiles apart");
+    }
+}
+
+#[cfg(test)]
+mod dry_lakes {
+    use super::*;
+    /// No dried-up lakes: grass far from water is never drawn as beach (the
+    /// 3D view draws ground below `SHADE_BEACH` as sand). Before, maps with
+    /// low water had up to 600 such tiles, in wide sandy basins.
+    #[test]
+    fn grass_far_from_water_is_not_drawn_as_sand() {
+        for players in [2usize, 4] {
+            for seed in 1..=12u32 {
+                let (m, _, _) = generate(seed, players);
+                let mut n = 0;
+                for y in 0..m.h {
+                    for x in 0..m.w {
+                        let i = m.idx(x, y);
+                        let near_water = (-2..=2).any(|dy| (-2..=2).any(|dx| m.inside(x + dx, y + dy) && matches!(m.terrain[m.idx(x + dx, y + dy)], WATER | SHALLOW)));
+                        if matches!(m.terrain[i], GRASS | HILL) && (m.shade[i] as f32) < SHADE_BEACH * 255.0 && !near_water {
+                            n += 1;
+                        }
+                    }
+                }
+                assert_eq!(n, 0, "{players} players, seed {seed}: {n} tiles of grass far from water drawn as sand");
+            }
+        }
     }
 }
