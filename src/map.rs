@@ -13,6 +13,8 @@ const CLUSTER_GAP: f32 = 4.0;
 /// Tiles of open sea along every edge of the land (the shore shelves up to
 /// the land over the next few). Boats sail round the map on it.
 const SEA: i32 = 6;
+/// How many maps have a river crossing the whole map (`generate`).
+pub const CROSSING_RIVER_CHANCE: f32 = 0.4;
 /// More open sea all round, outside the land: the whole map is this much
 /// wider and taller on each side (about four times the sea there was).
 pub const OPEN_SEA: i32 = 18;
@@ -373,6 +375,8 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         ((w as f32 * pick(60, 0.5, 0.66), h as f32 - 3.0), -std::f32::consts::FRAC_PI_2),
         ((2.0, h as f32 * pick(61, 0.34, 0.48)), 0.0),
     ];
+    // (path, its inland steps, whether fords at roads are spaced out too)
+    let mut paths: Vec<(Vec<(f32, f32)>, i32, bool)> = Vec::new();
     for (k, &((x0, y0), heading)) in rivers.iter().enumerate() {
         let len = pick(62 + k as i32, 26.0, 38.0) as i32;
         let (mut x, mut y, mut a) = (x0, y0, heading);
@@ -395,6 +399,49 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 break;
             }
         }
+        paths.push((path, inland, false));
+    }
+    // On some maps a great river crosses the whole map, sea to sea, through
+    // the middle: from the middle of one edge to the centre, and its turned
+    // images on to the other side (on four-player maps two of them, crossing
+    // in the middle). Fords as on the others, every few tiles and wherever
+    // it meets a road, so every town can still be reached on foot.
+    if hash(66, 911, seed) < CROSSING_RIVER_CHANCE {
+        let from_top = hash(67, 911, seed) < 0.5;
+        let along = pick(68, 0.42, 0.58);
+        let (mut x, mut y) = if from_top { (w as f32 * along, 1.0) } else { (1.0, h as f32 * along) };
+        let mut a = if from_top { std::f32::consts::FRAC_PI_2 } else { 0.0 };
+        let mut path: Vec<(f32, f32)> = Vec::new();
+        let mut inland = 0;
+        for step in 0..(w + h) {
+            // Wander, pulled toward the centre, harder as it nears a town.
+            let to_centre = (centre.1 - y).atan2(centre.0 - x);
+            let mut turn = to_centre - a;
+            while turn > std::f32::consts::PI {
+                turn -= std::f32::consts::TAU;
+            }
+            while turn < -std::f32::consts::PI {
+                turn += std::f32::consts::TAU;
+            }
+            let pull = if near_base(x, y) < 20.0 { 0.5 } else { 0.12 };
+            a += (hash(step, 75, seed) - 0.5) * 0.7 + turn * pull;
+            x += a.cos();
+            y += a.sin();
+            if dist((x, y), centre) < 1.5 {
+                break;
+            }
+            let i = (y as i32 * w + x as i32) as usize;
+            if terrain[i] != WATER || inland > 0 {
+                inland += 1;
+            }
+            path.push((x, y));
+        }
+        path.push(centre);
+        inland += 1;
+        // (Near the middle every tile is near a road: unspaced, it would be one long ford.)
+        paths.push((path, inland, true));
+    }
+    for (path, inland, spaced) in paths {
         // Deep water along it...
         for &(px, py) in &path {
             for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
@@ -406,11 +453,13 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         let mut last_ford = -100i32;
         for (j, &(px, py)) in path.iter().enumerate() {
             let land = j + 1 + inland as usize > n; // (the inland part: the last `inland` steps)
-            let ford = land && ((j as i32 - last_ford >= 9 && j + 3 < n) || near_road(px, py) < 4.0 || j + 3 >= n);
+            let gap = j as i32 - last_ford;
+            let at_road = near_road(px, py) < 4.0 && (!spaced || gap >= 6);
+            let ford = land && ((gap >= 9 && j + 3 < n) || at_road || j + 3 >= n);
             if !ford {
                 continue;
             }
-            if j + 3 < n && near_road(px, py) >= 4.0 {
+            if j + 3 < n && (spaced || near_road(px, py) >= 4.0) {
                 last_ford = j as i32;
             }
             for dy in -2..=2 {
@@ -442,35 +491,46 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // no space to put a building between them): no deposit of another kind
     // within `CLUSTER_GAP` tiles of a cluster's edge. Trees don't count;
     // they are cleared around a cluster anyway.
+    // Round every image of the spot: a cluster is copied to each, and an
+    // image can land next to another cluster's image though the spot itself
+    // has room (a 4-player map put clay against sheep hills that way).
     let roomy = |feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| {
         let ri = (r + CLUSTER_GAP).ceil() as i32;
-        (-ri..=ri).all(|dy| {
-            (-ri..=ri).all(|dx| {
-                let (x, y) = (cx + dx, cy + dy);
-                let d = ((dx * dx + dy * dy) as f32).sqrt();
-                d > r + CLUSTER_GAP || !(x >= 0 && y >= 0 && x < w && y < h) || matches!(feat[(y * w + x) as usize], Feat::None | Feat::Tree) || feat[(y * w + x) as usize] == f
+        images(cx, cy).all(|(ix, iy)| {
+            (-ri..=ri).all(|dy| {
+                (-ri..=ri).all(|dx| {
+                    let (x, y) = (ix + dx, iy + dy);
+                    let d = ((dx * dx + dy * dy) as f32).sqrt();
+                    d > r + CLUSTER_GAP || !(x >= 0 && y >= 0 && x < w && y < h) || matches!(feat[(y * w + x) as usize], Feat::None | Feat::Tree) || feat[(y * w + x) as usize] == f
+                })
             })
         })
     };
-    // The nearest dry spot with room around it; failing that, the nearest
-    // dry spot; failing that, where it was meant to go.
-    let on_land = |terrain: &[u8], feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| -> (i32, i32) {
+    // The nearest dry spot with room around it (and true); failing that,
+    // the nearest dry spot; failing that, where it was meant to go.
+    let on_land = |terrain: &[u8], feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| -> ((i32, i32), bool) {
         let mut dry_only = None;
         for ring in 0..=22 {
             for k in 0..(8 * ring).max(1) {
                 let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
                 if dry(terrain, cx + dx, cy + dy, r) {
                     if roomy(feat, cx + dx, cy + dy, r, f) {
-                        return (cx + dx, cy + dy);
+                        return ((cx + dx, cy + dy), true);
                     }
                     dry_only.get_or_insert((cx + dx, cy + dy));
                 }
             }
         }
-        dry_only.unwrap_or((cx, cy))
+        (dry_only.unwrap_or((cx, cy)), false)
     };
-    let mut place = |cx: i32, cy: i32, f: Feat, r: f32| {
-        let (cx, cy) = on_land(&terrain, &feat, cx, cy, r, f);
+    // A town's own deposits always go somewhere (`needed`); one out on the
+    // map with no room for it anywhere near is left out instead, on every
+    // image alike (a crossing river can leave the middle that crowded).
+    let mut place = |cx: i32, cy: i32, f: Feat, r: f32, needed: bool| {
+        let ((cx, cy), room) = on_land(&terrain, &feat, cx, cy, r, f);
+        if !room && !needed {
+            return;
+        }
         let ri = r.ceil() as i32 + 2;
         for dy in -ri..=ri {
             for dx in -ri..=ri {
@@ -525,7 +585,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         let out = 0.9 + hash(k as i32, 23, seed) * 0.25;
         let (fx, fy) = (dx as f32 * out * SPREAD, dy as f32 * out * SPREAD);
         let (fx, fy) = (fx * turn.cos() - fy * turn.sin(), fx * turn.sin() + fy * turn.cos());
-        place(b1.0 + fx.round() as i32, b1.1 + fy.round() as i32, f, r);
+        place(b1.0 + fx.round() as i32, b1.1 + fy.round() as i32, f, r, true);
     }
     // Out on the map: the same spots, a little moved, and which deposit is
     // where shuffled.
@@ -537,7 +597,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     for (k, (&(x, y, _, _), &(f, r))) in neutral.iter().zip(&kinds).enumerate() {
         let jx = ((hash(k as i32, 41, seed) - 0.5) * 10.0).round() as i32;
         let jy = ((hash(k as i32, 43, seed) - 0.5) * 10.0).round() as i32;
-        place((x + jx).clamp(6, 74) * w / 80, (y + jy).clamp(6, 74) * h / 80, f, r);
+        place((x + jx).clamp(6, 74) * w / 80, (y + jy).clamp(6, 74) * h / 80, f, r, false);
     }
     // Clear the town sites themselves.
     for &(bx, by) in &all_bases {
@@ -804,6 +864,82 @@ mod dry_lakes {
                     }
                 }
                 assert_eq!(n, 0, "{players} players, seed {seed}: {n} tiles of grass far from water drawn as sand");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod crossing_rivers {
+    use super::*;
+
+    /// Tiles a walker can reach from (x, y), stepping to the four neighbours.
+    fn walkable_from(m: &Map, x: i32, y: i32, fords: bool) -> Vec<bool> {
+        let mut seen = vec![false; (m.w * m.h) as usize];
+        let mut todo = vec![(x, y)];
+        seen[m.idx(x, y)] = true;
+        while let Some((x, y)) = todo.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if m.inside(nx, ny) && !seen[m.idx(nx, ny)] && !(m.terrain[m.idx(nx, ny)] == WATER || (!fords && m.terrain[m.idx(nx, ny)] == SHALLOW)) {
+                    seen[m.idx(nx, ny)] = true;
+                    todo.push((nx, ny));
+                }
+            }
+        }
+        seen
+    }
+
+    /// Some maps have a river from sea to sea through the middle, and every
+    /// town can still walk to every other (over the fords).
+    #[test]
+    fn some_maps_have_a_river_across_and_every_town_is_still_reachable() {
+        let mut crossed = 0;
+        let mut maps = 0;
+        for players in [2usize, 3, 4] {
+            for seed in 1..=30u32 {
+                let (m, _, bases) = generate(seed, players);
+                maps += 1;
+                let reach = walkable_from(&m, bases[0].0, bases[0].1, true);
+                for &(bx, by) in &bases[1..] {
+                    assert!(reach[m.idx(bx, by)], "{players} players, seed {seed}: a town can't be reached on foot");
+                }
+                // Without its fords, a river across cuts the first town off
+                // from the next one round (the town on its other side).
+                if hash(66, 911, seed) < CROSSING_RIVER_CHANCE {
+                    crossed += 1;
+                    let dry = walkable_from(&m, bases[0].0, bases[0].1, false);
+                    assert!(bases[1..].iter().any(|&(bx, by)| !dry[m.idx(bx, by)]), "{players} players, seed {seed}: the river doesn't cross the map");
+                }
+            }
+        }
+        println!("{crossed} of {maps} maps have a river across");
+        assert!(crossed > maps / 5 && crossed < maps * 2 / 3, "{crossed} of {maps}: not 'sometimes'");
+    }
+}
+
+#[cfg(test)]
+mod map_pictures {
+    use super::*;
+    /// Writes terrain pictures (PPM) for a look: VC_OUT dir, seeds 1..=8.
+    #[test]
+    #[ignore]
+    fn draw_maps() {
+        let out = std::env::var("VC_OUT").unwrap_or("/tmp".into());
+        for players in [2usize, 4] {
+            for seed in 1..=8u32 {
+                let (m, deps, bases) = generate(seed, players);
+                let mut px = vec![0u8; (m.w * m.h * 3) as usize];
+                for i in 0..(m.w * m.h) as usize {
+                    let c = match m.terrain[i] { WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], _ => [90, 170, 70] };
+                    px[i * 3..i * 3 + 3].copy_from_slice(&c);
+                }
+                for d in &deps { let i = m.idx(d.tx, d.ty); px[i * 3..i * 3 + 3].copy_from_slice(&[60, 60, 60]); }
+                for &(bx, by) in &bases { for dy in -1..=1 { for dx in -1..=1 { let i = m.idx(bx + dx, by + dy); px[i * 3..i * 3 + 3].copy_from_slice(&[230, 30, 30]); } } }
+                let mut f = format!("P6 {} {} 255\n", m.w, m.h).into_bytes();
+                f.extend_from_slice(&px);
+                let cross = if hash(66, 911, seed) < CROSSING_RIVER_CHANCE { "x" } else { "" };
+                std::fs::write(format!("{out}/map-{players}p-{seed}{cross}.ppm"), f).unwrap();
             }
         }
     }
