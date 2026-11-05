@@ -2088,7 +2088,6 @@ fn foundations_appear_when_a_builder_gets_there() {
     assert!(!g.ents[f2 as usize].alive, "the plan wasn't dropped");
     g.resolve();
     assert_eq!(g.players[1].used, used, "its slots didn't come free");
-    let h = &g.ents[hut as usize];
     assert_eq!(g.map.bld_at[g.map.idx(bx, by)], hut as i32, "dropping it freed the hut's tiles");
 }
 
