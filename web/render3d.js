@@ -322,6 +322,7 @@ function roof(len, width, height) {
 // Units are drawn bigger than their real footprint so they read well from
 // a distance. This is only visual: the simulation doesn't change.
 const UNIT_SCALE = 1.5;
+const BOAT_SCALE = 2.2; // boats, on top of UNIT_SCALE
 // Aircraft fly this high above the ground (tiles).
 const AIR_ALT = 2.6;
 const SKIN = "#e0b48c", WOOD = "#7a5532", DARKWOOD = "#4e3420", STONE = "#a39a88", STONE2 = "#8a8272", IRON = "#9da3ab";
@@ -1474,12 +1475,14 @@ function worldToScreen(x, y, h) {
 // (closest to the cursor within a few pixels), which is far more forgiving
 // than a ray. Buildings and resources use a ray against their meshes.
 function pickAt(sx, sy) {
-  let best = null, bd = 20 * 20;
+  // (Distances relative to each unit's reach: 20 px, more for the big boats.)
+  let best = null, bd = 1;
   for (let i = 0; i < entCount; i++) {
     const k = E(i, F.kind); if (isBld(k)) continue;
     const o = R3.objs.get(E(i, F.id)); if (!o) continue;
     const p = worldToScreen(o.root.position.x, o.root.position.z, o.root.position.y + o.height * 0.5);
-    const d = (p.x - sx) ** 2 + (p.y - sy) ** 2;
+    const r = isNaval(k) ? 20 * BOAT_SCALE : 20;
+    const d = ((p.x - sx) ** 2 + (p.y - sy) ** 2) / (r * r);
     if (d < bd) { bd = d; best = { x: E(i, F.x), y: E(i, F.y), id: E(i, F.id), what: "unit" }; }
   }
   if (best) return best;
@@ -1598,8 +1601,11 @@ function makeObj(i) {
     pivot.add(tool);
     body.add(pivot);
     o.tool = pivot; o.toolTilt = mdl.toolTilt || 0;
-    o.height = mdl.height * (mdl.scale || UNIT_SCALE);
-    body.scale.setScalar(mdl.scale || UNIT_SCALE);
+    // Boats are drawn bigger than their footprint in the game, so they read
+    // as ships next to the people (playtest: "at least 2x").
+    const sc = (mdl.scale || UNIT_SCALE) * (isNaval(kind) ? BOAT_SCALE : 1);
+    o.height = mdl.height * sc;
+    body.scale.setScalar(sc);
   }
   R3.scene.add(root);
   R3.objs.set(id, o);
@@ -1856,7 +1862,7 @@ function render3d(alpha, now, dt) {
     const mat = (flags & 8) ? hitMat : entMat;
     o.body.material = mat;
     if (o.toolMesh) o.toolMesh.material = mat;
-    setRing(o, !!(flags & 1), W.kind_radius(kind) * 1.45);
+    setRing(o, !!(flags & 1), W.kind_radius(kind) * 1.45 * (isNaval(kind) ? BOAT_SCALE : 1));
   }
 
   // Things that vanished: badly hurt units and buildings get a short death
