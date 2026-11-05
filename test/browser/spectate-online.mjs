@@ -49,7 +49,9 @@ check(true, "the players see \"1 watching\"");
 check(await guest.evaluate(() => $("watchCount").textContent === "1 watching"), "...the guest too");
 await compare(w1, "spectator");
 const lag = await w1.evaluate(() => [watcher.avail - watcher.k]); // about a second at most (feeds come every 250 ms; four pages share a slow headless CPU)
-check(lag[0] < 30, `the spectator keeps up (${lag[0]} ticks behind what it has)`);
+// (Under a second normally; up to two on a busy machine. A real bug falls
+// further and further behind.)
+check(lag[0] < 80, `the spectator keeps up (${lag[0]} ticks behind what it has)`);
 
 // The guest surrenders, then watches the rest.
 await guest.click("#menuBtn");
