@@ -2204,6 +2204,7 @@ function inviteLink() {
 }
 
 function renderLobby() {
+  renderMapPick();
   const guest = !!guestOf;
   const list = guest ? (guestOf.host ? guestOf.host.seats : []) : seats;
   const ol = $("seats");
@@ -2263,6 +2264,44 @@ function renderLobby() {
   $("lobbyWatchLink").hidden = !link;
   if (link && $("inviteLink").value !== link) $("inviteLink").value = link;
 }
+
+// The map: a surprise (a new random one each game, unseen till it starts),
+// or one picked by its number with a preview. The host's choice; guests
+// get it with the start.
+const MAP_KEY = "vibecraft.map";
+let mapMode = "surprise", mapSeed = 1 + Math.floor(Math.random() * 999999), previewKey = "";
+try { const v = JSON.parse(localStorage.getItem(MAP_KEY) || "null"); if (v && v.mode === "pick" && v.seed >= 1) { mapMode = "pick"; mapSeed = v.seed >>> 0; } } catch { /* storage blocked */ }
+function saveMapChoice() { try { localStorage.setItem(MAP_KEY, JSON.stringify({ mode: mapMode, seed: mapSeed })); } catch { /* storage blocked */ } }
+// The seed a new game starts with.
+function chosenSeed() { return mapMode === "pick" ? mapSeed : (Math.random() * 1e9) >>> 0; }
+const PREVIEW_COL = ["#1f4f8f", "#5aa8c8", "#c9b27a", "#5f9a3c", "#86884a", "#2e5a2a", "#a8a49a", "#fff", "#3f72b0"];
+function renderMapPick() {
+  const guest = !!guestOf;
+  $("mapRow").hidden = guest;
+  if (guest) return;
+  $("mapMode").value = mapMode;
+  const pick = mapMode === "pick";
+  $("mapPickCtl").hidden = !pick;
+  $("mapPreview").hidden = !pick;
+  if (document.activeElement !== $("mapSeed")) $("mapSeed").value = mapSeed;
+  if (!pick || !W || !W.map_preview) return;
+  const players = Math.max(2, seats.filter(s => s !== "open").length);
+  const key = `${mapSeed}:${players}`;
+  if (key === previewKey) return;
+  previewKey = key;
+  const w = W.map_preview(mapSeed, players);
+  const px = new Uint8Array(W.memory.buffer, W.preview_ptr(), w * w);
+  const cv = $("mapPreview");
+  cv.width = cv.height = w;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(w, w);
+  const rgb = PREVIEW_COL.map(c => [1, 3, 5].map(k => parseInt(c.slice(k, k + 2), 16)));
+  for (let i = 0; i < w * w; i++) { const c = rgb[px[i]] || rgb[3]; img.data.set([c[0], c[1], c[2], 255], i * 4); }
+  ctx.putImageData(img, 0, 0); // (town sites in white)
+}
+$("mapMode").onchange = () => { mapMode = $("mapMode").value === "pick" ? "pick" : "surprise"; saveMapChoice(); renderMapPick(); };
+$("mapSeed").oninput = () => { const v = Math.floor(+$("mapSeed").value); if (v >= 1 && v <= 999999) { mapSeed = v; saveMapChoice(); renderMapPick(); } };
+$("mapSeed").onchange = () => { $("mapSeed").value = mapSeed; };
+$("mapAnother").onclick = () => { mapSeed = 1 + Math.floor(Math.random() * 999999); saveMapChoice(); renderMapPick(); };
 
 function setSeat(i, v) {
   const s = seats[i];
@@ -2424,7 +2463,7 @@ function beginGame() {
   if (!room || !active.some(isFriend)) {
     lastWasMultiplayer = false; lastPlayers = active.length;
     $("startScreen").hidden = true;
-    newGame(undefined, 0, active.length);
+    newGame(chosenSeed(), 0, active.length);
     running = true; Rec.real = true;
     publishLobby(); // friends who arrive now wait for the next game
     return;
@@ -2432,7 +2471,7 @@ function beginGame() {
   const slots = {}, ai = [];
   const names = { 1: myName };
   active.forEach((s, k) => { if (isFriend(s)) { slots[s.slice(2)] = k + 1; names[k + 1] = peerNames.get(s.slice(2)) || ""; } else if (s === "ai") ai.push(k + 1); });
-  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: (Math.random() * 1e9) >>> 0, n: active.length, slots, ai, diffs: slotDiffs, host: myToken };
+  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: chosenSeed(), n: active.length, slots, ai, diffs: slotDiffs, host: myToken };
   // Keep telling the guests until all of them have answered.
   const send = () => room && room.emit("start", settings);
   send();
