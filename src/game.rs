@@ -1372,6 +1372,14 @@ impl Game {
     /// with `fog: false`, because each player's computer has different fog
     /// and in multiplayer both must reach the same answer.
     pub fn pick(&self, x: f32, y: f32, fog: bool) -> Pick {
+        self.pick_for(x, y, fog, self.local)
+    }
+
+    /// `pick`, where `who`'s own plans not begun yet count too. Those are
+    /// seen by their owner alone, so the simulation passes the player giving
+    /// the order, never the local player: a right-click on your own plan must
+    /// mean the same on every computer.
+    pub fn pick_for(&self, x: f32, y: f32, fog: bool, who: u8) -> Pick {
         let mut best = None;
         let mut bd = f32::MAX;
         for e in self.ents.iter() {
@@ -1405,10 +1413,10 @@ impl Game {
                 return Pick::Ent(b as u32);
             }
         }
-        // Your own plans not begun yet hold no tiles, but you can pick them.
+        // Plans not begun yet hold no tiles, but their owner can pick them.
         if let Some(e) = self.ents.iter().find(|e| {
             let s = e.kind.stats().size;
-            e.alive && e.is_building() && e.owner == self.local && tx >= e.tx && tx < e.tx + s && ty >= e.ty && ty < e.ty + s && !self.staked(e)
+            e.alive && e.is_building() && e.owner == who && tx >= e.tx && tx < e.tx + s && ty >= e.ty && ty < e.ty + s && !self.staked(e)
         }) {
             return Pick::Ent(e.id);
         }
@@ -1434,7 +1442,7 @@ impl Game {
         // Transports with cargo, told to go to dry land: put it ashore there.
         let loaded = mine().any(|id| self.ents[id as usize].kind == Kind::Transport && self.cargo(id).next().is_some());
         let land = self.map.inside(x.floor() as i32, y.floor() as i32) && !self.map.sailable(x.floor() as i32, y.floor() as i32);
-        match self.pick(x, y, fog) {
+        match self.pick_for(x, y, fog, owner) {
             Pick::Ent(t) if Self::hostile(owner, self.ents[t as usize].owner) && Self::spotted_by(&self.ents[t as usize], owner) => Intent::Attack(t),
             Pick::Ent(t) if any_walker && self.ents[t as usize].owner == owner && self.ents[t as usize].kind == Kind::Transport && !ids.contains(&t) => Intent::Board(t),
             Pick::Ent(t) if any_worker && self.ents[t as usize].owner == owner && self.ents[t as usize].is_building() => {
