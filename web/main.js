@@ -690,33 +690,55 @@ function allKinds() {
   return ALL_KINDS;
 }
 
-// The list at the top left of everything of yours being built, the one that
-// will be done soonest first. A foundation rises only while all its builders
-// are there, so those still waiting for builders have no time yet: they come
-// last, the furthest along first.
-const BUILD_LIST_MAX = 10;
-let buildRows = new Map(), buildMore = null; // id -> { el, time, bar }
+// The list at the top left of everything of yours on the way: buildings
+// going up and troops in training, the one done soonest first. A
+// foundation rises only while all its builders are there, and a troop
+// trains only once its recruit has walked in, so those still waiting have
+// no time yet: they come last, the furthest along first. It runs down the
+// whole screen, scrolling if it must.
+let buildRows = new Map(); // key -> { el, time, bar }
+function fmtLeft(secs) { return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`; }
 function renderBuildList() {
   const box = $("buildList");
   const items = [];
   if (!observe) {
     for (let i = 0; i < entCount; i++) {
-      if (!(E(i, F.flags) & 2) || E(i, F.owner) !== ME) continue;
+      if (E(i, F.owner) !== ME) continue;
       const id = E(i, F.id), k = E(i, F.kind), prog = E(i, F.prog);
-      const need = stat(k, 9), got = W.builders_in(id);
-      const rising = got >= need;
-      items.push({ i, id, k, prog, need, got, rising, left: rising ? (1 - prog) * stat(k, 5) : Infinity });
+      if (E(i, F.flags) & 2) {
+        const need = stat(k, 9), got = W.builders_in(id);
+        const ready = got >= need;
+        items.push({ key: "b" + id, id, k, prog, ready, left: ready ? (1 - prog) * stat(k, 5) : Infinity,
+          wait: `${got}/${need} builders`,
+          tip: ready ? `${NAMES[k]}: ${Math.floor(prog * 100)}% built` : `${NAMES[k]}: waiting for builders, ${got} of ${need} here` });
+        continue;
+      }
+      if (!isBld(k)) continue;
+      const n = W.queue_len(id);
+      if (!n) continue;
+      // Recruits inside train one after another, the first in the queue first.
+      const recruits = E(i, F.residents);
+      let t = 0;
+      for (let q = 0; q < n; q++) {
+        const u = W.queue_kind(id, q);
+        if (u < 0) break;
+        const p = q === 0 ? prog : 0;
+        const ready = q < recruits;
+        t += (1 - p) * stat(u, 5);
+        items.push({ key: `t${id}:${q}`, id, k: u, prog: p, ready, left: ready ? t : Infinity,
+          wait: q === 0 ? "needs recruit" : "queued",
+          tip: ready ? `${NAMES[u]}: training at the ${NAMES[k]}` : `${NAMES[u]}: queued at the ${NAMES[k]}, waiting for a recruit to walk in` });
+      }
     }
   }
-  items.sort((a, b) => a.left - b.left || b.prog - a.prog || a.id - b.id);
+  items.sort((a, b) => a.left - b.left || b.prog - a.prog || a.id - b.id || (a.key < b.key ? -1 : 1));
   box.hidden = items.length === 0;
   if (box.hidden) { if (buildRows.size) { box.replaceChildren(); buildRows = new Map(); } return; }
-  const shown = items.slice(0, BUILD_LIST_MAX);
   const rows = new Map();
   const els = [];
-  for (const it of shown) {
-    let r = buildRows.get(it.id);
-    if (!r) {
+  for (const it of items) {
+    let r = buildRows.get(it.key);
+    if (!r || r.k !== it.k) {
       const el = document.createElement("button");
       const ic = iconEl(it.k, ME, 24);
       const name = document.createElement("span"); name.className = "bl-name"; name.textContent = NAMES[it.k];
@@ -730,22 +752,16 @@ function renderBuildList() {
         if (j != null) centerOn(E(j, F.x), E(j, F.y));
         renderSelection(true);
       });
-      r = { el, time, bar: bar.firstChild };
+      r = { el, time, bar: bar.firstChild, k: it.k };
     }
-    rows.set(it.id, r);
+    rows.set(it.key, r);
     const secs = Math.ceil(it.left);
-    r.el.classList.toggle("waiting", !it.rising);
-    r.time.textContent = it.rising ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` : `${it.got}/${it.need} builders`;
+    r.el.classList.toggle("waiting", !it.ready);
+    r.el.classList.toggle("troop", it.key[0] === "t");
+    r.time.textContent = it.ready ? fmtLeft(secs) : it.wait;
     r.bar.style.width = `${Math.round(it.prog * 100)}%`;
-    r.el.title = it.rising
-      ? `${NAMES[it.k]}: ${Math.floor(it.prog * 100)}% built, done in about ${secs} s. Click to go there.`
-      : `${NAMES[it.k]}: waiting for builders, ${it.got} of ${it.need} here. Click to go there.`;
+    r.el.title = it.tip + (it.ready ? `, done in about ${secs} s` : "") + ". Click to go there.";
     els.push(r.el);
-  }
-  if (items.length > shown.length) {
-    const more = buildMore || (buildMore = Object.assign(document.createElement("div"), { className: "bl-more" }));
-    more.textContent = `+${items.length - shown.length} more`;
-    els.push(more);
   }
   // Only touch the DOM when the order or the set changed.
   const kids = box.children;

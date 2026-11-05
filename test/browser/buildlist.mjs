@@ -44,18 +44,59 @@ console.log("rival foundations visible:", theirs);
 // A click selects it.
 const sel = await pg.evaluate(() => { $("buildList").querySelector("button").click(); readWorld(); const s = selection(); return s.length === 1 && (E(s[0], F.flags) & 2) !== 0; });
 check(sel, "clicking a row selects that foundation");
+// Finish them all: the list goes.
+await pg.waitForFunction(() => { for (let n = 0; n < 100; n++) { W.tick(); simTick++; } readWorld(); renderBuildList(); return $("buildList").hidden; }, null, { timeout: 120000, polling: 50 });
+check(true, "the list goes once everything is built");
+// Troops in training are listed too: a barracks with two spearmen queued.
+const troops = await pg.evaluate(() => {
+  readWorld();
+  applyCmd(0, [15, 1, 0, 0]); // cheat mode: nothing costs anything
+  const c = findOwn(K.Capitol), cx = E(c, F.x) | 0, cy = E(c, F.y) | 0;
+  let spot = null;
+  for (let r = 4; r < 40 && !spot; r++) for (let dy = -r; dy <= r && !spot; dy++) for (let dx = -r; dx <= r && !spot; dx++)
+    if (W.can_place(K.Barracks, cx + dx, cy + dy)) spot = [cx + dx, cy + dy];
+  const b = W.debug_spawn(K.Barracks, spot[0], spot[1]);
+  W.tick(); simTick++;
+  const fire = [W.campfire(0), W.campfire(1)];
+  // Beds and free hands at the town square, to train from.
+  for (let h = 0; h < 2; h++) {
+    let hs = null;
+    for (let r = 4; r < 40 && !hs; r++) for (let dy = -r; dy <= r && !hs; dy++) for (let dx = -r; dx <= r && !hs; dx++)
+      if (W.can_place(K.Hut, cx + dx, cy + dy)) hs = [cx + dx, cy + dy];
+    W.debug_spawn(K.Hut, hs[0], hs[1]);
+  }
+  W.tick(); simTick++;
+  for (let n = 0; n < 3; n++) W.debug_spawn(K.Worker, Math.floor(fire[0]), Math.floor(fire[1]));
+  W.tick(); simTick++;
+  const free = W.people(0);
+  const codes = [0, 1].map(() => issue({ c: 4, ids: [b], a: K.Spearman }));
+  for (let n = 0; n < 5; n++) { W.tick(); simTick++; }
+  readWorld(); renderBuildList();
+  return { free, codes, queued: W.queue_len(b), rows: [...$("buildList").querySelectorAll("button.troop")].map(el => el.querySelector(".bl-name").textContent) };
+});
+console.log(troops);
+check(troops.queued > 0 && troops.rows.length === troops.queued, "every troop in the queue has a row");
+await pg.waitForFunction(() => {
+  for (let n = 0; n < 20; n++) { W.tick(); simTick++; }
+  readWorld(); renderBuildList();
+  return [...$("buildList").querySelectorAll("button.troop")].some(el => !el.classList.contains("waiting"));
+}, null, { timeout: 60000, polling: 50 });
+const tr = await pg.evaluate(() => [...$("buildList").querySelectorAll("button.troop")].map(el => ({ waiting: el.classList.contains("waiting"), time: el.querySelector(".bl-time").textContent })));
+console.log(tr);
+check(tr.length > 0 && !tr[0].waiting, "the troop in training shows a time");
+const allRows = await pg.evaluate(() => [...$("buildList").querySelectorAll("button")].map(el => el.classList.contains("waiting") ? Infinity : el.querySelector(".bl-time").textContent));
+const ord = allRows.map(t => t === Infinity || t === null ? Infinity : secs(t));
+check(ord.every((v, n) => n === 0 || ord[n - 1] <= v), "buildings and troops sorted together");
 if (process.env.SHOT) {
-  await pg.evaluate(() => { paused = false; });
-  await sleep(1500);
+  await pg.evaluate(() => { readWorld(); const w = [...Array(entCount).keys()].find(i => E(i, F.owner) === ME && E(i, F.kind) === K.Worker); setSelection([E(w, F.id)]); });
   await pg.evaluate(() => { readWorld(); renderTopBar(); renderBuildList(); renderSelection(true); drawMinimap(); });
   const cdp = await pg.context().newCDPSession(pg);
   const { data } = await cdp.send("Page.captureScreenshot", { format: "png" });
   (await import("fs")).writeFileSync(process.env.SHOT, Buffer.from(data, "base64"));
   await pg.evaluate(() => { paused = true; });
 }
-// Finish them all: the list goes.
 await pg.waitForFunction(() => { for (let n = 0; n < 100; n++) { W.tick(); simTick++; } readWorld(); renderBuildList(); return $("buildList").hidden; }, null, { timeout: 120000, polling: 50 });
-check(true, "the list goes once everything is built");
+check(true, "the list goes once the troops are trained");
 check(pg.errors.length === 0, "no page errors");
 await b.close();
 process.exit(failed() ? 1 : 0);

@@ -144,7 +144,10 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 #cmd .tabs { display: flex; gap: 3px; }
 #cmd .tabs:empty { display: none; }
 #cmd .tabs .cbtn { height: 20px; flex: 1; font-size: 13px; }
-#cmd .tabs .cbtn kbd { display: none; }
+#cmd .tabs .cbtn { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 2px; }
+#cmd .tabs .cbtn kbd { position: static; order: -1; font-size: 10px; letter-spacing: 0; }
+#cmd .tabs .cbtn.locked::after { display: none; } /* dimmed is enough on a tab this small */
+#cmd .tabs .cbtn.locked kbd { color: var(--muted); }
 #cmd .items { display: grid; grid-template-columns: repeat(6, 42px); grid-auto-rows: 42px; gap: 4px; align-content: start; }
 #cmd .items.dense { grid-template-columns: repeat(8, 31px); grid-auto-rows: 31px; gap: 3px; }
 #cmd .items.denser { grid-template-columns: repeat(10, 24px); grid-auto-rows: 24px; gap: 3px; }
@@ -293,7 +296,10 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 #loadScreen .saves { max-height: min(30vh, 300px); }
 .danger:hover { border-color: var(--bad); color: #f2b0a2; }
 .chip.watching { color: var(--muted); font-size: 13px; }
-#buildList { position: absolute; top: 10px; left: 10px; z-index: 2; display: grid; gap: 3px; width: 230px; max-width: calc(100% - 20px); }
+#buildList { position: absolute; top: 10px; bottom: 10px; left: 10px; z-index: 2; display: flex; flex-direction: column; gap: 3px; width: 230px; max-width: calc(100% - 20px); overflow-y: auto; scrollbar-width: none; pointer-events: none; }
+#buildList::-webkit-scrollbar { display: none; }
+#buildList button { flex: none; pointer-events: auto; }
+#buildList button.troop { border-left-color: var(--ink); }
 #buildList button { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-rows: auto 3px; column-gap: 7px; row-gap: 3px; align-items: center; text-align: left; background: #1b1610e0; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 4px 7px 4px 4px; color: var(--ink); font: 500 13px var(--body); cursor: pointer; }
 #buildList button:hover { border-color: var(--bronze); }
 #buildList canvas { grid-row: 1 / 3; width: 24px; height: 24px; }
@@ -304,7 +310,6 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 #buildList button.waiting { border-left-color: var(--muted); }
 #buildList button.waiting .bl-time { color: var(--muted); font-size: 12px; }
 #buildList button.waiting .bl-bar i { background: var(--muted); }
-#buildList .bl-more { color: var(--muted); font-size: 12px; padding-left: 6px; text-shadow: 0 1px 2px #000; }
 #scoreboard { position: absolute; top: 10px; left: 10px; z-index: 2; background: #1b1610e6; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 6px 8px; max-width: calc(100% - 20px); }
 #scoreboard .sb-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
 #scoreboard .sb-head b { font: 400 14px var(--display); color: var(--bronze); letter-spacing: .04em; }
@@ -458,7 +463,7 @@ body.observing #hint { display: none; }
     <canvas id="view"></canvas>
     <canvas id="over" aria-hidden="true"></canvas>
     <div id="toasts" aria-live="polite"></div>
-    <section id="buildList" hidden aria-label="Under construction"></section>
+    <section id="buildList" hidden aria-label="Being built and trained"></section>
     <div id="hint" hidden></div>
     <div id="netWait" hidden></div>
     <div id="chat">
@@ -4393,7 +4398,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "61272a290036", "base": "1c0f3062ce"};
+const BUILD_INFO = {"sim": "61272a290036", "base": "28adbe9230"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -6024,33 +6029,55 @@ function allKinds() {
   return ALL_KINDS;
 }
 
-// The list at the top left of everything of yours being built, the one that
-// will be done soonest first. A foundation rises only while all its builders
-// are there, so those still waiting for builders have no time yet: they come
-// last, the furthest along first.
-const BUILD_LIST_MAX = 10;
-let buildRows = new Map(), buildMore = null; // id -> { el, time, bar }
+// The list at the top left of everything of yours on the way: buildings
+// going up and troops in training, the one done soonest first. A
+// foundation rises only while all its builders are there, and a troop
+// trains only once its recruit has walked in, so those still waiting have
+// no time yet: they come last, the furthest along first. It runs down the
+// whole screen, scrolling if it must.
+let buildRows = new Map(); // key -> { el, time, bar }
+function fmtLeft(secs) { return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`; }
 function renderBuildList() {
   const box = $("buildList");
   const items = [];
   if (!observe) {
     for (let i = 0; i < entCount; i++) {
-      if (!(E(i, F.flags) & 2) || E(i, F.owner) !== ME) continue;
+      if (E(i, F.owner) !== ME) continue;
       const id = E(i, F.id), k = E(i, F.kind), prog = E(i, F.prog);
-      const need = stat(k, 9), got = W.builders_in(id);
-      const rising = got >= need;
-      items.push({ i, id, k, prog, need, got, rising, left: rising ? (1 - prog) * stat(k, 5) : Infinity });
+      if (E(i, F.flags) & 2) {
+        const need = stat(k, 9), got = W.builders_in(id);
+        const ready = got >= need;
+        items.push({ key: "b" + id, id, k, prog, ready, left: ready ? (1 - prog) * stat(k, 5) : Infinity,
+          wait: `${got}/${need} builders`,
+          tip: ready ? `${NAMES[k]}: ${Math.floor(prog * 100)}% built` : `${NAMES[k]}: waiting for builders, ${got} of ${need} here` });
+        continue;
+      }
+      if (!isBld(k)) continue;
+      const n = W.queue_len(id);
+      if (!n) continue;
+      // Recruits inside train one after another, the first in the queue first.
+      const recruits = E(i, F.residents);
+      let t = 0;
+      for (let q = 0; q < n; q++) {
+        const u = W.queue_kind(id, q);
+        if (u < 0) break;
+        const p = q === 0 ? prog : 0;
+        const ready = q < recruits;
+        t += (1 - p) * stat(u, 5);
+        items.push({ key: `t${id}:${q}`, id, k: u, prog: p, ready, left: ready ? t : Infinity,
+          wait: q === 0 ? "needs recruit" : "queued",
+          tip: ready ? `${NAMES[u]}: training at the ${NAMES[k]}` : `${NAMES[u]}: queued at the ${NAMES[k]}, waiting for a recruit to walk in` });
+      }
     }
   }
-  items.sort((a, b) => a.left - b.left || b.prog - a.prog || a.id - b.id);
+  items.sort((a, b) => a.left - b.left || b.prog - a.prog || a.id - b.id || (a.key < b.key ? -1 : 1));
   box.hidden = items.length === 0;
   if (box.hidden) { if (buildRows.size) { box.replaceChildren(); buildRows = new Map(); } return; }
-  const shown = items.slice(0, BUILD_LIST_MAX);
   const rows = new Map();
   const els = [];
-  for (const it of shown) {
-    let r = buildRows.get(it.id);
-    if (!r) {
+  for (const it of items) {
+    let r = buildRows.get(it.key);
+    if (!r || r.k !== it.k) {
       const el = document.createElement("button");
       const ic = iconEl(it.k, ME, 24);
       const name = document.createElement("span"); name.className = "bl-name"; name.textContent = NAMES[it.k];
@@ -6064,22 +6091,16 @@ function renderBuildList() {
         if (j != null) centerOn(E(j, F.x), E(j, F.y));
         renderSelection(true);
       });
-      r = { el, time, bar: bar.firstChild };
+      r = { el, time, bar: bar.firstChild, k: it.k };
     }
-    rows.set(it.id, r);
+    rows.set(it.key, r);
     const secs = Math.ceil(it.left);
-    r.el.classList.toggle("waiting", !it.rising);
-    r.time.textContent = it.rising ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` : `${it.got}/${it.need} builders`;
+    r.el.classList.toggle("waiting", !it.ready);
+    r.el.classList.toggle("troop", it.key[0] === "t");
+    r.time.textContent = it.ready ? fmtLeft(secs) : it.wait;
     r.bar.style.width = `${Math.round(it.prog * 100)}%`;
-    r.el.title = it.rising
-      ? `${NAMES[it.k]}: ${Math.floor(it.prog * 100)}% built, done in about ${secs} s. Click to go there.`
-      : `${NAMES[it.k]}: waiting for builders, ${it.got} of ${it.need} here. Click to go there.`;
+    r.el.title = it.tip + (it.ready ? `, done in about ${secs} s` : "") + ". Click to go there.";
     els.push(r.el);
-  }
-  if (items.length > shown.length) {
-    const more = buildMore || (buildMore = Object.assign(document.createElement("div"), { className: "bl-more" }));
-    more.textContent = `+${items.length - shown.length} more`;
-    els.push(more);
   }
   // Only touch the DOM when the order or the set changed.
   const kids = box.children;
