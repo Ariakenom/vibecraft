@@ -689,6 +689,70 @@ function allKinds() {
   return ALL_KINDS;
 }
 
+// The list at the top left of everything of yours being built, the one that
+// will be done soonest first. A foundation rises only while all its builders
+// are there, so those still waiting for builders have no time yet: they come
+// last, the furthest along first.
+const BUILD_LIST_MAX = 10;
+let buildRows = new Map(), buildMore = null; // id -> { el, time, bar }
+function renderBuildList() {
+  const box = $("buildList");
+  const items = [];
+  if (!observe) {
+    for (let i = 0; i < entCount; i++) {
+      if (!(E(i, F.flags) & 2) || E(i, F.owner) !== ME) continue;
+      const id = E(i, F.id), k = E(i, F.kind), prog = E(i, F.prog);
+      const need = stat(k, 9), got = W.builders_in(id);
+      const rising = got >= need;
+      items.push({ i, id, k, prog, need, got, rising, left: rising ? (1 - prog) * stat(k, 5) : Infinity });
+    }
+  }
+  items.sort((a, b) => a.left - b.left || b.prog - a.prog || a.id - b.id);
+  box.hidden = items.length === 0;
+  if (box.hidden) { if (buildRows.size) { box.replaceChildren(); buildRows = new Map(); } return; }
+  const shown = items.slice(0, BUILD_LIST_MAX);
+  const rows = new Map();
+  const els = [];
+  for (const it of shown) {
+    let r = buildRows.get(it.id);
+    if (!r) {
+      const el = document.createElement("button");
+      const ic = iconEl(it.k, ME, 24);
+      const name = document.createElement("span"); name.className = "bl-name"; name.textContent = NAMES[it.k];
+      const time = document.createElement("span"); time.className = "bl-time";
+      const bar = document.createElement("span"); bar.className = "bl-bar"; bar.appendChild(document.createElement("i"));
+      el.append(ic, name, time, bar);
+      const id = it.id;
+      el.addEventListener("click", () => {
+        setSelection([id]);
+        const j = byId.get(id);
+        if (j != null) centerOn(E(j, F.x), E(j, F.y));
+        renderSelection(true);
+      });
+      r = { el, time, bar: bar.firstChild };
+    }
+    rows.set(it.id, r);
+    const secs = Math.ceil(it.left);
+    r.el.classList.toggle("waiting", !it.rising);
+    r.time.textContent = it.rising ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` : `${it.got}/${it.need} builders`;
+    r.bar.style.width = `${Math.round(it.prog * 100)}%`;
+    r.el.title = it.rising
+      ? `${NAMES[it.k]}: ${Math.floor(it.prog * 100)}% built, done in about ${secs} s. Click to go there.`
+      : `${NAMES[it.k]}: waiting for builders, ${it.got} of ${it.need} here. Click to go there.`;
+    els.push(r.el);
+  }
+  if (items.length > shown.length) {
+    const more = buildMore || (buildMore = Object.assign(document.createElement("div"), { className: "bl-more" }));
+    more.textContent = `+${items.length - shown.length} more`;
+    els.push(more);
+  }
+  // Only touch the DOM when the order or the set changed.
+  const kids = box.children;
+  const same = kids.length === els.length && els.every((el, n) => kids[n] === el);
+  if (!same) box.replaceChildren(...els);
+  buildRows = rows;
+}
+
 function renderTopBar() {
   // Every resource the player makes or holds, in table order.
   const shown = [];
@@ -1768,7 +1832,7 @@ function loop(now) {
     drawOverlay();
     updateHoverCursor(now);
     if (frame % 4 === 0) drawMinimap();
-    if (frame % 6 === 0) { renderTopBar(); renderSelection(false); renderScoreboard(false); }
+    if (frame % 6 === 0) { renderTopBar(); renderBuildList(); renderSelection(false); renderScoreboard(false); }
     if (frame % 30 === 0 && !$("menuScreen").hidden) renderGameSeats(false);
     syncObserverUi();
     if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
