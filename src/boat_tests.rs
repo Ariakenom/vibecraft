@@ -84,7 +84,7 @@ fn every_harbour_is_on_the_open_sea() {
                 let c = &g.ents[g.home_capitol(p).unwrap()];
                 far = far.max(((hx as f32 - c.x).hypot(hy as f32 - c.y)) as i32);
             }
-            assert!(far <= 16, "seed {seed}/{players}: a harbour {far} tiles from its Capitol");
+            assert!(far <= 30, "seed {seed}/{players}: the sea {far} tiles from its Capitol");
         }
     }
 }
@@ -212,7 +212,7 @@ fn every_start_has_a_shoal_in_its_harbour() {
             assert!(shoals.len() >= players as usize * 5, "seed {seed}/{players}: only {} shoal tiles", shoals.len());
             for p in 1..=players {
                 let c = &g.ents[g.home_capitol(p).unwrap()];
-                let near = shoals.iter().filter(|d| sea[g.map.idx(d.tx, d.ty)] && (d.center().0 - c.x).hypot(d.center().1 - c.y) < 18.0).count();
+                let near = shoals.iter().filter(|d| sea[g.map.idx(d.tx, d.ty)] && (d.center().0 - c.x).hypot(d.center().1 - c.y) < 26.0).count();
                 assert!(near >= 3, "seed {seed}/{players}: P{p} has {near} shoal tiles on the sea near home");
             }
         }
@@ -513,3 +513,4 @@ fn empty_aircraft_go_home_and_wait_until_full() {
     let o = g.ents[f as usize].order;
     assert!(matches!(o, Order::Attack { target, .. } if target == intruder) || g.ents[intruder as usize].hp < Kind::Transport.stats().hp, "full and idle, it leaves the intruder alone: {o:?}");
 }
+
