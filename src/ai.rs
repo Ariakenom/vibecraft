@@ -265,6 +265,14 @@ impl Game {
         if kind == Kind::Farm {
             hard = target(self.players[me as usize].era).count(kind) as usize + 3;
         }
+        // Stone for the last houses before the Gunpowder era (which brings
+        // the Stone Works) can run out with every quarry built: a house
+        // upgrade waits for it, and nothing frees any. Then a quarry or two
+        // past the target (it's a target, not a rule; benchmark: towns sat
+        // one townhouse short of the era for good).
+        if kind == Kind::Quarry && !self.unlocked(me, Kind::Stoneworks) && self.upgrade_short(me) == Some(Res::Stone) {
+            hard = MAX_SAME + 2;
+        }
         // The Kiln makes three Brickworks' worth: once it can be built, no
         // more of the old ones (they would take the stone it waits for).
         if kind == Kind::Brickworks && self.unlocked(me, Kind::Kiln) {
