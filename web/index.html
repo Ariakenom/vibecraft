@@ -275,6 +275,9 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .game-seats { display: grid; gap: 8px; margin-top: 14px; }
 .lobby select, .lobby input { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px 8px; font: 500 15px var(--body); }
 .lobby .row { gap: 10px; }
+.map-pick { display: grid; gap: 8px; justify-items: start; }
+.map-pick input { width: 7em; }
+#mapPreview { width: 216px; height: 216px; image-rendering: pixelated; border: 1px solid var(--line); border-radius: 3px; background: #1f4f8f; }
 .invite { display: grid; gap: 6px; }
 .invite label, .lobby label { color: var(--muted); }
 #inviteLink { flex: 1; min-width: 0; }
@@ -512,6 +515,20 @@ body.observing #hint { display: none; }
           <h2 id="seatsTitle">Players</h2>
         </div>
         <ol class="seats" id="seats"></ol>
+        <div class="map-pick" id="mapRow">
+          <div class="row">
+            <label for="mapMode">Map</label>
+            <select id="mapMode">
+              <option value="surprise">Surprise me</option>
+              <option value="pick">Pick one</option>
+            </select>
+            <span class="row" id="mapPickCtl" hidden>
+              <input id="mapSeed" type="number" min="1" max="999999" inputmode="numeric" aria-label="Map number">
+              <button class="ghost" id="mapAnother" title="Another map">Another</button>
+            </span>
+          </div>
+          <canvas id="mapPreview" hidden aria-label="Preview of the map"></canvas>
+        </div>
         <div class="row" id="nameRow">
           <label for="nameInput">Your name</label>
           <input id="nameInput" maxlength="16" placeholder="So the others know you" autocomplete="nickname" spellcheck="false">

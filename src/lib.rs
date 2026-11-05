@@ -1149,3 +1149,50 @@ pub extern "C" fn view_reveal() -> u32 {
 pub extern "C" fn player_units(p: u32, which: u32) -> u32 {
     game(|g| g.ents.iter().filter(|e| e.alive && e.owner as u32 == p && !e.is_building() && (which == 0 || e.kind.is_military())).count() as u32)
 }
+
+// ---------------------------------------------------------------------------
+// Map preview: the start screen shows the map a seed makes, without starting
+// a game (and before any game has started).
+
+thread_local! {
+    static PREVIEW: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Make the map of `seed` for `players` and keep a picture of it: a byte a
+/// tile, row by row (0 deep water, 1 shallows, 2 sand, 3 grass, 4 hills,
+/// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width; it's
+/// square. `preview_ptr` has the bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn map_preview(seed: u32, players: u32) -> u32 {
+    let (m, deps, bases) = map::generate(seed, players.clamp(2, 4) as usize);
+    let mut px: Vec<u8> = m.terrain.iter().map(|&t| match t {
+        map::WATER => 0,
+        map::SHALLOW => 1,
+        map::SAND => 2,
+        map::HILL => 4,
+        _ => 3,
+    }).collect();
+    for d in &deps {
+        px[m.idx(d.tx, d.ty)] = match d.kind {
+            defs::Dep::Forest => 5,
+            defs::Dep::Fish => 8,
+            _ => 6,
+        };
+    }
+    for &(bx, by) in &bases {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                if m.inside(bx + dx, by + dy) {
+                    px[m.idx(bx + dx, by + dy)] = 7;
+                }
+            }
+        }
+    }
+    let w = m.w as u32;
+    PREVIEW.with(|p| *p.borrow_mut() = px);
+    w
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn preview_ptr() -> *const u8 {
+    PREVIEW.with(|p| p.borrow().as_ptr() as usize) as *const u8
+}
