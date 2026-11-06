@@ -475,6 +475,11 @@ impl Game {
         if self.ais.get(owner as usize).is_some_and(|a| a.on && a.difficulty == 0) && self.time < EASY_ERA_AT[era as usize] {
             return;
         }
+        // Nor a barbarian camp: its richer land would take a central one to
+        // the Modern era while the players still have spears.
+        if self.is_barb(owner) && self.time < crate::barbarians::CAMP_ERA_AT[era as usize] {
+            return;
+        }
         // (houses_past_era, from the houses already listed)
         let past = houses.iter().filter(|&&i| self.ents[i].built >= 1.0 && self.ents[i].kind.house_tier().is_some_and(|t| t > era)).count() as u32;
         if past >= HOUSES_FOR_ERA {

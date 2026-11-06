@@ -17,16 +17,6 @@ not straight away (see `CLAUDE.md`).
   message at the top, the house's panel) and which version.
 - **Carriers don't attack themselves.** Remove the aircraft carrier's own
   attack: it fights only through its aircraft.
-- **Middle barbarians are too weak** (playtest, Nov 2026, large Frontier
-  map). In the replay, at minute 20 you were Industrial with 28 soldiers,
-  while the central camps (capped Modern and Atomic) were still Medieval
-  with 3 to 11 soldiers. Worse, they stay Medieval all game: at minute 65
-  you were Atomic (tanks, bombers) and the central camps, capped Atomic and
-  Modern, were Medieval with about 110 people each. So it's a stall, not
-  just a slow start; worth finding what they lack for the Gunpowder era
-  (`diag_camp` in barbarians.rs shows a camp's houses and the AI's reasons).
-  Ideas besides fixing the stall: camps start at their site's era with a
-  garrison, or grow faster the higher their cap.
 - **More garbage to cut**: about 20 MB a second is left, mostly three.js
   setting uniforms and the unit animation (`animateRig`).
 
@@ -61,3 +51,11 @@ not straight away (see `CLAUDE.md`).
 - **Placing a building no longer reshades the whole map**: only the
   corners round it (130 to 150 ms a time before), and a building seen
   again out of the fog doesn't level its ground again.
+- **Central barbarians grow up**: they stalled in the Medieval era all game
+  (room for only so many quarries round a site, so never the bricks the
+  next houses need). Now a camp's land yields 40% more per era of its site
+  (`CAMP_YIELD_PER_ERA`), sites from the Medieval era on have two more stone
+  patches, and no camp enters an era before `CAMP_ERA_AT` (Medieval at 5
+  minutes, Gunpowder 12, Industrial 20, Modern 30, Atomic 45). In a
+  computer game the Modern-capped camps reached Gunpowder at 15 minutes,
+  Industrial at 25 and Modern at 30. Wants a playtest.

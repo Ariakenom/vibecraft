@@ -324,10 +324,18 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
         if s.era >= 5 {
             kinds.push((Feat::Uranium, 1.3));
         }
+        // Stone for the bricks every house past the Medieval era is made
+        // of: with only the first two patches, the central camps ran out of
+        // room for quarries. (Last, so it never takes another's place, and
+        // left out of the spacing so the others go where they always did.)
+        let n0 = kinds.len();
+        if s.era >= 1 {
+            kinds.extend([(Feat::Stone, 1.8), (Feat::Stone, 1.8)]);
+        }
         // Each round the site, trying other directions and distances until
         // one fits (sites near a coast have less room).
         for (j, &(f, r)) in kinds.iter().enumerate() {
-            let a0 = (j as f32 / kinds.len() as f32 + hash(si as i32, 65, seed)) * std::f32::consts::TAU;
+            let a0 = (j as f32 / n0 as f32 + hash(si as i32, 65, seed)) * std::f32::consts::TAU;
             'tries: for t in 0..56 {
                 let a = a0 + t as f32 * 0.7;
                 let d = 9.0 + 2.0 * ((j + t) % 6) as f32 + if t >= 40 { 7.0 } else if t >= 24 { 4.0 } else { 0.0 };
