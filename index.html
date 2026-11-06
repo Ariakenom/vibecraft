@@ -2587,6 +2587,17 @@ function glbModel(kind, owner) {
 
 // --- Setup -------------------------------------------------------------------
 let entMat, ghostMat, hitMat, treeMat, treeDepthMat, stoneMat, goldMat;
+// The same look for skinned (animated) bodies: three.js picks a shader per
+// material, so one material shared by plain, skinned and instanced meshes
+// made it work the shader out again at every switch, 60 times a frame,
+// and that was most of the page's garbage (70 MB a second).
+let entMatSkin, hitMatSkin;
+const entMats = () => [entMat, hitMat, entMatSkin, hitMatSkin];
+// And the shadow pass: three.js draws every caster with one depth material
+// unless it has its own, so skinned and instanced meshes get theirs (one
+// for each instanced mesh: with and without instance colours differ).
+const depthMat = () => new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+let depthSkin = null;
 const modelCache = new Map();
 function cachedModel(kind, owner) {
   const key = kind * 64 + owner;
@@ -2627,6 +2638,8 @@ function initRenderer() {
   entMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), flagPatch);
   // Swapped in for a moment when something is hit: a warm glow, not a size change.
   hitMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true, emissive: "#ff7a4d", emissiveIntensity: 0.55 }), flagPatch);
+  entMatSkin = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), flagPatch);
+  hitMatSkin = withFow(new THREE.MeshLambertMaterial({ vertexColors: true, emissive: "#ff7a4d", emissiveIntensity: 0.55 }), flagPatch);
   // Trees and bushes sway. The shadow pass gets the same sway, or the
   // shadows would stand still under moving trees.
   treeMat = withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), treePatch);
@@ -2683,6 +2696,7 @@ function initRenderer() {
   const rm = new Model();
   rm.add(cyl(0.02, 0.02, 0.9, 5), DARKWOOD, 0, 0.45, 0).flag(0.32, 0.2, PCOL[1], 0.16, 0.78, 0);
   R3.rally = new THREE.Mesh(rm.build(), entMat);
+  R3.rally.receiveShadow = true; // (as bodies: see entMatSkin)
   R3.rallyFor = 1;
   R3.rally.visible = false;
   scene.add(R3.rally);
@@ -2837,8 +2851,10 @@ function buildWorld() {
   // explored so far was a bug: trees discovered later had no room and vanished.)
   const n = W.res_total() + 16;
   const mk = (g, cnt, sways, mat) => {
-    const m = new THREE.InstancedMesh(g, mat || (sways ? treeMat : entMat), cnt);
-    if (sways) m.customDepthMaterial = treeDepthMat;
+    // (Each its own material where none is given: instanced meshes with and
+    // without their own colours want different shaders; see entMatSkin.)
+    const m = new THREE.InstancedMesh(g, mat || (sways ? treeMat : withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), flagPatch)), cnt);
+    m.customDepthMaterial = sways ? treeDepthMat : depthMat();
     m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m;
   };
   R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
@@ -3028,6 +3044,7 @@ function buildWater() {
   for (let i = 0; i < pa.length; i += 9) for (let k = 0; k < 3; k++) { const t = pa[i + 3 + k]; pa[i + 3 + k] = pa[i + 6 + k]; pa[i + 6 + k] = t; }
   const sea = new THREE.Mesh(rg, mat);
   sea.renderOrder = 1;
+  sea.receiveShadow = true; // (as the water: one shader for both)
   water.add(sea);
   R3.scene.add(water);
   R3.water = water;
@@ -3277,8 +3294,8 @@ function pickAt(sx, sy) {
     return screenToGround(sx, sy);
   }
   if (hit.object.isInstancedMesh) {
-    const r = hit.object.userData.res[hit.instanceId];
-    return { x: r[0] + 0.5, y: r[1] + 0.5, what: "res" };
+    const r = hit.object.userData.res, i = hit.instanceId * 2; // tile x, y per instance
+    return { x: r[i] + 0.5, y: r[i + 1] + 0.5, what: "res" };
   }
   const o = hit.object.userData.obj;
   return { x: o.x, y: o.y, id: o.id, what: "building" };
@@ -3381,7 +3398,7 @@ function makeObj(i) {
     pivot.position.set(...mdl.pivot);
     const tool = new THREE.Mesh(mdl.tool, entMat);
     o.toolMesh = tool;
-    tool.castShadow = true;
+    tool.castShadow = tool.receiveShadow = true; // (as bodies: see entMatSkin)
     pivot.add(tool);
     body.add(pivot);
     o.tool = pivot; o.toolTilt = mdl.toolTilt || 0;
@@ -3416,7 +3433,8 @@ function makeRigged(o, mdl) {
     if (par) { const q = at(par); bones[n].position.set(p[0] - q[0], p[1] - q[1], p[2] - q[2]); bones[par].add(bones[n]); }
     else bones[n].position.set(p[0], p[1], p[2]);
   }
-  const mesh = new THREE.SkinnedMesh(mdl.body, entMat);
+  const mesh = new THREE.SkinnedMesh(mdl.body, entMatSkin);
+  mesh.customDepthMaterial = depthSkin ??= depthMat();
   mesh.castShadow = mesh.receiveShadow = true;
   mesh.add(bones.hips);
   mesh.updateMatrixWorld(true);
@@ -3429,7 +3447,7 @@ function makeRigged(o, mdl) {
   // The tool sits in its hand and turns with its arm.
   const tb = mdl.rig.toolBone, ta = mdl.rig.toolAt, tp = at(tb);
   const tool = new THREE.Mesh(mdl.tool, entMat);
-  tool.castShadow = true;
+  tool.castShadow = tool.receiveShadow = true; // (as bodies: see entMatSkin)
   tool.position.set(ta[0] - tp[0], ta[1] - tp[1], ta[2] - tp[2]);
   bones[tb].add(tool);
   o.toolMesh = tool; o.toolBone = tb;
@@ -3671,7 +3689,7 @@ function render3d(alpha, now, dt) {
     }
     if (isAir(kind)) { o.body.position.y = 0; o.body.rotation.z = 0; o.body.rotation.x = Math.sin(t * 0.9 + id) * 0.08; }
     const mat = (flags & 8) ? hitMat : entMat;
-    o.body.material = mat;
+    o.body.material = o.body.isSkinnedMesh ? ((flags & 8) ? hitMatSkin : entMatSkin) : mat;
     if (o.toolMesh) o.toolMesh.material = mat;
     setRing(o, !!(flags & 1), W.kind_radius(kind) * 1.45 * (isNaval(kind) ? BOAT_SCALE : 1));
   }
@@ -3744,11 +3762,11 @@ function updateNukes(now, alpha = 0) {
   nukeMeshes();
   const n = W.nuke_count();
   while (R3.nukeMesh.length < n) {
-    const mesh = new THREE.Mesh(R3.nukeGeo, entMat); mesh.scale.setScalar(1.6); R3.scene.add(mesh); R3.nukeMesh.push(mesh);
+    const mesh = new THREE.Mesh(R3.nukeGeo, entMat); mesh.receiveShadow = true; mesh.scale.setScalar(1.6); R3.scene.add(mesh); R3.nukeMesh.push(mesh);
     const ring = new THREE.Mesh(new THREE.RingGeometry(W.nuke_numbers(2) - 0.25, W.nuke_numbers(2), 48).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: "#ff3b2f", transparent: true, opacity: 0.7, depthWrite: false }));
     R3.scene.add(ring); R3.nukeRings.push(ring);
-    const im = new THREE.Mesh(R3.nukeGeo, entMat); im.scale.setScalar(1.0); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
+    const im = new THREE.Mesh(R3.nukeGeo, entMat); im.receiveShadow = true; im.scale.setScalar(1.0); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
   }
   for (let k = 0; k < R3.nukeMesh.length; k++) {
     const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k], im = R3.interceptors[k];
@@ -4017,8 +4035,9 @@ function updateResources() {
   for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
-  const lists = { pine: [], oak: [], bush: [], stone: [], gold: [], horse: [], deer: [], iron: [], clay: [], sheep: [], nitrate: [], coal: [], oil: [], bauxite: [], uranium: [], fish: [] };
-  for (const m of Object.values(R3.res)) m.count = 0;
+  // Each mesh keeps its instances' tiles (x, y, x, y, ...) for picking,
+  // in one array reused from change to change.
+  for (const k in R3.res) { const m = R3.res[k]; m.count = 0; (m.userData.res ??= []).length = 0; }
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
@@ -4050,11 +4069,11 @@ function updateResources() {
     m.setMatrixAt(m.count, _m4);
     const v = 0.85 + h2 * 0.3;
     m.setColorAt(m.count, _c.setRGB(v, v, v));
-    lists[mesh].push([tx, ty]);
+    m.userData.res.push(tx, ty);
     m.count++;
   }
-  for (const [k, m] of Object.entries(R3.res)) {
-    m.userData.res = lists[k];
+  for (const k in R3.res) {
+    const m = R3.res[k];
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
     m.computeBoundingSphere();
@@ -4232,7 +4251,7 @@ function applyGraphics() {
       sun.shadow.mapSize.set(GFX.shadows, GFX.shadows);
       r.shadowMap.type = GFX.shadows >= 2048 ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     }
-    for (const m of [entMat, hitMat, treeMat, stoneMat, goldMat, ghostMat]) m.needsUpdate = true;
+    for (const m of [...entMats(), treeMat, stoneMat, goldMat, ghostMat]) m.needsUpdate = true;
     R3.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   }
   applyGrass();
@@ -4618,7 +4637,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "7571cc2a607c", "base": "bf4ee9ad2f"};
+const BUILD_INFO = {"sim": "7571cc2a607c", "base": "97744f90e3"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
