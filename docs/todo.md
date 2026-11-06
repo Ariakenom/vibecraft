@@ -19,6 +19,15 @@ not straight away (see `CLAUDE.md`).
   attack: it fights only through its aircraft.
 - **More garbage to cut**: about 20 MB a second is left, mostly three.js
   setting uniforms and the unit animation (`animateRig`).
+- **Barbarians without the extra yield.** Camps' land yields 40% more per
+  era of their site (`CAMP_YIELD_PER_ERA`, PR #41): that's the AI cheating.
+  Find other ways for the central camps to reach their eras. What held them
+  back was room: a camp builds only round its site, so it ran out of
+  places for quarries and brickworks. Ideas: bigger or richer deposits at
+  central sites, a wider building range there, an AI that builds more
+  compactly or picks better producers (a Kiln as soon as it can), camps
+  that start at their site's era. `diag_camp` with `VC_CENTRAL=1` shows a
+  central camp's buildings and what the AI is waiting for.
 
 ## Done
 
