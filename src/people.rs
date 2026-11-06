@@ -184,8 +184,9 @@ impl Game {
     /// 3. Use: every building, foundation, unit and queued unit.
     /// 4. Converters take their inputs, in id order, if they're free.
     /// 5. Units over a shortage are unsupplied (`supply_units`).
-    /// 6. Houses take one slot of each good they can use from what's left,
-    ///    shared out evenly, nearest the Capitol first (`house_goods`).
+    /// 6. Houses take one slot of each good they can use from what's left:
+    ///    the era's tier and better first, then each tier below, shared out
+    ///    evenly within each, nearest the Capitol first (`house_goods`).
     /// 7. If there are more people than beds, some leave.
     pub(crate) fn resolve(&mut self) {
         self.resolve_with(true);
@@ -511,24 +512,37 @@ impl Game {
             // a shortage takes the furthest houses' last goods first. At
             // each level a house keeps a good it already had before it takes
             // a new one, so supply that doesn't change shuffles nothing.
-            let top = houses.iter().filter_map(|&i| self.ents[i].kind.house_tier()).map(house_max_goods).max().unwrap_or(0) as u32;
-            for level in 1..=top {
-                for keep in [true, false] {
-                    for (h, &i) in houses.iter().enumerate() {
-                        let e = &self.ents[i];
-                        let Some(tier) = e.kind.house_tier().filter(|_| e.built >= 1.0) else { continue };
-                        let most = level.min(house_max_goods(tier) as u32);
-                        // New goods: the latest era's first, leaving older
-                        // goods to houses that can't use the new ones.
-                        let order: [Res; N_RES] = if keep { Res::ALL } else { std::array::from_fn(|k| Res::ALL[N_RES - 1 - k]) };
-                        for r in order {
-                            if goods[h].count_ones() >= most {
-                                break;
-                            }
-                            let had = e.goods & (1 << r.idx()) != 0;
-                            if had == keep && goods[h] & (1 << r.idx()) == 0 && wanted(r, tier) && left[r.idx()] > 0 {
-                                goods[h] |= 1 << r.idx();
-                                left[r.idx()] -= 1;
+            //
+            // Better houses first: the houses an upgrade into the next era
+            // can come from (the era's own tier) and any better ones share
+            // first; each tier below gets only what they leave. So more huts
+            // never take goods from the houses an era is waiting for. (Not
+            // strictly best first: houses already past the era would then
+            // take everything, and the last upgrade the era needs could
+            // never fill up.)
+            let era = self.players[owner as usize].era;
+            let band_of = |t: u8| t.min(era);
+            let bands: std::collections::BTreeSet<u8> = houses.iter().filter_map(|&i| self.ents[i].kind.house_tier()).map(band_of).collect();
+            for &band in bands.iter().rev() {
+                let top = houses.iter().filter_map(|&i| self.ents[i].kind.house_tier()).filter(|&t| band_of(t) == band).map(house_max_goods).max().unwrap_or(0) as u32;
+                for level in 1..=top {
+                    for keep in [true, false] {
+                        for (h, &i) in houses.iter().enumerate() {
+                            let e = &self.ents[i];
+                            let Some(tier) = e.kind.house_tier().filter(|&t| band_of(t) == band && e.built >= 1.0) else { continue };
+                            let most = level.min(house_max_goods(tier) as u32);
+                            // New goods: the latest era's first, leaving older
+                            // goods to houses that can't use the new ones.
+                            let order: [Res; N_RES] = if keep { Res::ALL } else { std::array::from_fn(|k| Res::ALL[N_RES - 1 - k]) };
+                            for r in order {
+                                if goods[h].count_ones() >= most {
+                                    break;
+                                }
+                                let had = e.goods & (1 << r.idx()) != 0;
+                                if had == keep && goods[h] & (1 << r.idx()) == 0 && wanted(r, tier) && left[r.idx()] > 0 {
+                                    goods[h] |= 1 << r.idx();
+                                    left[r.idx()] -= 1;
+                                }
                             }
                         }
                     }
