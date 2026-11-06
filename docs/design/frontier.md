@@ -1,9 +1,9 @@
 # Frontier: a game mode of exploring and barbarians
 
-Status: November 2026. The simulation is built and tested natively
-(branch `frontier`). The page side is written but has not run: the session
-that built it couldn't build the wasm, so `dist/` is not rebuilt yet and
-drawing at this size is unmeasured. See "Not done yet".
+Status: November 2026. Built and tested on branch `frontier`: natively,
+in wasm (`node test/wasm.mjs`) and in headless Chromium
+(`test/browser/frontier.mjs`). Not yet played by a person, and not timed on
+a real GPU (the tests use software WebGL).
 
 ## The idea
 
@@ -107,18 +107,31 @@ before and after):
 
 Saves are 2.4–3.4 MB before gzip.
 
+## In the browser
+
+`test/browser/frontier.mjs` checks the Mode choice and preview, starting a
+game, barbarians in black, a save that loads back as the same game, and no
+page errors. In wasm (`test/wasm.mjs`, `FRONTIER_MINUTES=25`): two copies
+stay identical, a tick costs 1.7 ms at minute 5 and 9.7 ms at minute 25, a
+copy 0.65 ms.
+
+The ground texture is one canvas of 32 px per tile, which at 416 tiles was
+13,312 px square (about 700 MB), past the 8192 px most GPUs take. Maps over
+256 tiles now get fewer px per tile (19 for two players, 16 for four), so
+it stays within 8192; Skirmish is unchanged. Building it takes 1.9 s in the
+test browser (Skirmish 0.6 s).
+
 ## Not done yet
 
-- **Run the page.** Build the wasm, start a Frontier game, and check: the
-  mode choice and map preview, barbarians drawn in black (owners past the
-  seats; `setOwnerColors` in main.js), the minimap, saving and loading,
-  replays, an online game with a guest.
-- **Drawing at this size.** About 200,000 land tiles of terrain, water, fog
-  and minimap: the most likely real limit. Measure frame times in a browser.
-- **Multiplayer cost.** A correction re-runs several ticks; at 7 ms a tick
-  natively that may show as a hitch online. Measure with the trace (F8).
-- **Snapshot size.** Spectators and late joiners get a save of up to 3.4 MB
-  (before gzip) through the relay's 16 KB messages. The map can be rebuilt
-  from its seed; saving only what changes would shrink it.
+- **Play it.** A person playing a whole game: whether it's fun, how it
+  feels to explore, whether camps are too slow or too hard.
+- **Frame times on a real GPU.** Software WebGL takes 1.5 s a frame even in
+  Skirmish, so the tests can't tell. The page's own work is 4 ms a frame.
+- **Multiplayer cost.** A correction re-runs several ticks; at about 10 ms
+  a tick in wasm late in a game, that may show online. Measure with the
+  trace (F8).
+- **Snapshot size.** Spectators and late joiners get a save of 226 KB and
+  more through the relay. The map can be rebuilt from its seed; saving only
+  what changes would shrink it.
 - **Balance.** How fast camps grow, how often they come, how hard they hit,
   and whether the Capitol's trickle carries a town to its first stone.

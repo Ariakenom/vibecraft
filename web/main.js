@@ -480,8 +480,15 @@ function bakeTerrain() {
   }
   sc.putImageData(img, 0, 0);
 
-  // The 3D texture: a mid-resolution colour pass (8 px per tile), scaled up.
-  const MID = 8;
+  // The 3D texture is one canvas of TILE px per tile, which the GPU takes as
+  // one texture: on Frontier's big maps that would be 13,000 px and more
+  // (700 MB+), past what GPUs take (often 8192) and more memory than many
+  // machines have. So big maps get fewer px per tile, keeping it in 8192.
+  const most = Math.min(8192, (R3.renderer && R3.renderer.capabilities.maxTextureSize) || 8192);
+  const T = Math.max(4, Math.min(TILE, Math.floor(most / Math.max(MW, MH))));
+  // A mid-resolution colour pass (8 px per tile; fewer on a big map, where
+  // it was most of the time to start), scaled up.
+  const MID = Math.max(4, Math.min(8, Math.floor(2600 / Math.max(MW, MH))));
   const mid = document.createElement("canvas"); mid.width = MW * MID; mid.height = MH * MID;
   const mc = mid.getContext("2d"), mi = mc.createImageData(mid.width, mid.height);
   for (let py = 0; py < mid.height; py++) for (let px = 0; px < mid.width; px++) {
@@ -490,10 +497,10 @@ function bakeTerrain() {
   }
   mc.putImageData(mi, 0, 0);
   terrainCanvas = document.createElement("canvas");
-  terrainCanvas.width = MW * TILE; terrainCanvas.height = MH * TILE;
+  terrainCanvas.width = MW * T; terrainCanvas.height = MH * T;
   const tc = terrainCanvas.getContext("2d");
   tc.imageSmoothingEnabled = true; tc.imageSmoothingQuality = "high";
-  tc.drawImage(mid, 0, 0, MW * TILE, MH * TILE);
+  tc.drawImage(mid, 0, 0, MW * T, MH * T);
 
   // Detail on top: only pebbles on rocky slopes. Grass gets its detail from
   // 3D clumps instead (render3d.js), and sand from the ground shader.
@@ -501,9 +508,9 @@ function bakeTerrain() {
     if (slopeAt(tx + 0.5, ty + 0.5) <= 0.35) continue;
     for (let k = 0; k < 4; k++) {
       const hx = hash2(tx * 7 + k, ty * 13 - k), hy = hash2(ty * 11 + k, tx * 5 + k);
-      const x = (tx + hx) * TILE, y = (ty + hy) * TILE;
+      const x = (tx + hx) * T, y = (ty + hy) * T, s = T / TILE;
       tc.fillStyle = k % 2 ? "rgba(70,62,50,.35)" : "rgba(200,192,176,.3)";
-      tc.beginPath(); tc.ellipse(x, y, 1.5 + hx * 2.5, 1 + hy * 1.5, hx * 3, 0, 7); tc.fill();
+      tc.beginPath(); tc.ellipse(x, y, (1.5 + hx * 2.5) * s, (1 + hy * 1.5) * s, hx * 3, 0, 7); tc.fill();
     }
   }
 
