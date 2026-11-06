@@ -244,6 +244,13 @@ fn house_goods(era: u8) -> Vec<Res> {
     Res::ALL.into_iter().filter(|r| r.is_house_good() && r.era() <= era && (*r == Res::Fish || producer_of(*r).is_some_and(|k| k.era() <= era))).collect()
 }
 
+/// `Game::tally`: one player's things by kind (indexed by `Kind as usize`).
+pub(crate) struct Tally {
+    pub count: [u32; 256],
+    pub built: [u32; 256],
+    pub houses: usize,
+}
+
 // A second `impl Game` block, in a different file. Rust lets you split a
 // type's methods across modules, which keeps the AI code out of game.rs.
 impl Game {
@@ -253,6 +260,29 @@ impl Game {
     /// goods, what `target` has, plus one; huts and farms a few past the
     /// next era's needs. The soldiers' buildings have their plan and reserve.
     fn ai_max(&self, me: u8, kind: Kind) -> usize {
+        self.ai_max_t(me, kind, &self.tally(me))
+    }
+
+    /// `owner`'s things counted by kind in one pass, for the questions the
+    /// AI asks about many kinds at once (count_of, has_built, unlocked,
+    /// ai_max): a pass over every entity for each was most of its time.
+    pub(crate) fn tally(&self, owner: u8) -> Tally {
+        let mut t = Tally { count: [0; 256], built: [0; 256], houses: 0 };
+        for e in self.own(owner) {
+            t.count[e.kind as usize] += 1;
+            t.built[e.kind as usize] += (e.built >= 1.0) as u32;
+            t.houses += e.kind.house_tier().is_some() as usize;
+        }
+        t
+    }
+
+    /// `unlocked`, from a tally of `owner`'s.
+    fn unlocked_t(&self, owner: u8, kind: Kind, t: &Tally) -> bool {
+        self.cheat(owner) || kind.era() <= self.players[owner as usize].era && kind.requires().iter().all(|&k| t.built[k as usize] > 0)
+    }
+
+    /// `ai_max`, from a tally of `me`'s.
+    fn ai_max_t(&self, me: u8, kind: Kind, t: &Tally) -> usize {
         // Barbarians stay on their land: no boats, aircraft, nukes or
         // second towns.
         if self.is_barb(me) && matches!(kind, Kind::Dock | Kind::Airfield | Kind::MissileSilo | Kind::Capitol) {
@@ -262,7 +292,7 @@ impl Game {
         // A dozen houses are all the next era asks for; more huts only hold
         // the wood the upgrades are waiting for.
         if kind == Kind::Hut {
-            let houses = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.house_tier().is_some()).count();
+            let houses = t.houses;
             return if houses < HOUSES_FOR_ERA as usize + 2 { usize::MAX } else { 0 };
         }
         // Fields are unlimited for a player; the computer keeps to what the
@@ -275,12 +305,12 @@ impl Game {
         // upgrade waits for it, and nothing frees any. Then a quarry or two
         // past the target (it's a target, not a rule; benchmark: towns sat
         // one townhouse short of the era for good).
-        if kind == Kind::Quarry && !self.unlocked(me, Kind::Stoneworks) && self.upgrade_short(me) == Some(Res::Stone) {
+        if kind == Kind::Quarry && !self.unlocked_t(me, Kind::Stoneworks, t) && self.upgrade_short(me) == Some(Res::Stone) {
             hard = MAX_SAME + 2;
         }
         // The Kiln makes three Brickworks' worth: once it can be built, no
         // more of the old ones (they would take the stone it waits for).
-        if kind == Kind::Brickworks && self.unlocked(me, Kind::Kiln) {
+        if kind == Kind::Brickworks && self.unlocked_t(me, Kind::Kiln, t) {
             return 2;
         }
         // Materials (wood, stone, brick, iron, coal, steel ...) pay for
@@ -290,7 +320,7 @@ impl Game {
         let material = kind.stats().produces.first().filter(|&&(r, _)| !r.is_house_good() && kind.house_tier().is_none() && kind != Kind::Capitol);
         if let Some(&(res, out)) = material {
             let pl = &self.players[me as usize];
-            let built = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == kind && e.built >= 1.0).count() as i32;
+            let built = t.built[kind as usize] as i32;
             let others = pl.supply[res.idx()] as i32 - built * out as i32;
             // (Building materials well ahead; the rest, horses, iron ...
             // only just: idle pastures held the wood a quarry needed.)
@@ -318,8 +348,13 @@ impl Game {
 
     /// `ai_producer`, leaving out the kinds in `skip`.
     fn ai_producer_ex(&self, me: u8, r: Res, skip: &[Kind]) -> Option<Kind> {
+        self.ai_producer_t(me, r, skip, &self.tally(me))
+    }
+
+    /// `ai_producer_ex`, from a tally of `me`'s.
+    fn ai_producer_t(&self, me: u8, r: Res, skip: &[Kind], t: &Tally) -> Option<Kind> {
         let makes = |k: Kind| k.stats().produces.iter().find(|&&(q, _)| q == r).map_or(0, |&(_, n)| n);
-        let ok = |k: Kind| makes(k) > 0 && k != Kind::Capitol && !skip.contains(&k) && self.unlocked(me, k) && self.count_of(me, k) < self.ai_max(me, k);
+        let ok = |k: Kind| makes(k) > 0 && k != Kind::Capitol && !skip.contains(&k) && self.unlocked_t(me, k, t) && (t.count[k as usize] as usize) < self.ai_max_t(me, k, t);
         let best = |pool: &mut dyn Iterator<Item = Kind>| pool.max_by_key(|&k| (makes(k), k as u32));
         best(&mut Kind::BUILDABLE.into_iter().filter(|&k| ok(k) && self.ai_short_of(me, k).is_none()))
             .or_else(|| best(&mut Kind::BUILDABLE.into_iter().filter(|&k| ok(k))))
@@ -335,8 +370,8 @@ impl Game {
         // Cancel foundations nobody can reach (`census` left them out), and
         // tear down a dock the town has walled off from its people (its
         // recruits could never get there: another goes up where they can).
-        let mut cut_off: Vec<u32> = self.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0 && !c.unfinished.contains(&e.id)).map(|e| e.id).collect();
-        cut_off.extend(self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::Dock && e.built >= 1.0 && !touches(&self.map, &c.reach, e.tx, e.ty, e.kind.stats().size)).map(|e| e.id));
+        let mut cut_off: Vec<u32> = self.own(me).filter(|e| e.is_building() && e.built < 1.0 && !c.unfinished.contains(&e.id)).map(|e| e.id).collect();
+        cut_off.extend(self.own(me).filter(|e| e.kind == Kind::Dock && e.built >= 1.0 && !touches(&self.map, &c.reach, e.tx, e.ty, e.kind.stats().size)).map(|e| e.id));
         if !cut_off.is_empty() {
             let _ = self.apply(me, Command::Demolish { ids: cut_off });
         }
@@ -425,7 +460,7 @@ impl Game {
         let (fx, fy) = self.campfire(me).unwrap_or(home);
         c.reach = self.reachable_from(fx, fy);
         let scout = self.ais[me as usize].scout;
-        for e in self.ents.iter().filter(|e| e.alive && e.owner == me) {
+        for e in self.own(me) {
             if e.is_building() {
                 c.have[e.kind as usize] += 1;
                 if e.built < 1.0 {
@@ -584,7 +619,7 @@ impl Game {
             e.alive && e.owner == c.me && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| (e.goods.count_ones() as usize) < (house_max_goods(t) as usize).min(goods.len()))
         });
         // Short of houses for the next era: more huts come first anyway.
-        let houses = self.ents.iter().filter(|e| e.alive && e.owner == c.me && e.kind.house_tier().is_some()).count() as u32;
+        let houses = self.own(c.me).filter(|e| e.kind.house_tier().is_some()).count() as u32;
         let few = p.era < LAST_ERA && houses < HOUSES_FOR_ERA + 1;
         let hut_first = (!lacking || few) && goods.iter().any(|&r| p.spare(r) > 0);
         ailog!("grow: goods {goods:?} lacking {lacking} houses {houses} hut_first {hut_first} spare {:?}", goods.iter().map(|&r| (r, p.spare(r))).collect::<Vec<_>>());
@@ -661,7 +696,7 @@ impl Game {
         if self.ents[dock].built < 1.0 {
             return Step::Waiting;
         }
-        let boats = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind == Kind::FishingBoat).count() + self.ents[dock].queue.iter().filter(|&&k| k == Kind::FishingBoat).count();
+        let boats = self.own(me).filter(|e| e.kind == Kind::FishingBoat).count() + self.ents[dock].queue.iter().filter(|&&k| k == Kind::FishingBoat).count();
         // As many as the town's plan has (one over), and only while no fish
         // is spare: each is a person, and holds wood.
         let pl = &self.players[me as usize];
@@ -679,7 +714,7 @@ impl Game {
     /// The material a house that's ready to grow a tier is waiting for.
     pub(crate) fn upgrade_short(&self, me: u8) -> Option<Res> {
         let p = &self.players[me as usize];
-        self.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0).find_map(|e| {
+        self.own(me).filter(|e| e.built >= 1.0).find_map(|e| {
             let (tier, next) = (e.kind.house_tier()?, e.kind.upgrade()?);
             if next.house_tier()? > p.era + 1 || e.residents < e.beds() || e.goods.count_ones() < house_max_goods(tier) as u32 {
                 return None;
@@ -800,7 +835,9 @@ impl Game {
     /// which may use the last of them.
     fn ai_project(&mut self, kind: Kind, c: &mut Census, for_beds: bool) -> Step {
         let me = c.me;
-        if !c.relax && self.count_of(me, kind) >= self.ai_max(me, kind) {
+        // (Nothing changes until it frees up or places something, below.)
+        let t = self.tally(me);
+        if !c.relax && t.count[kind as usize] as usize >= self.ai_max_t(me, kind, &t) {
             ailog!("  project {kind:?}: has {} of max {}", self.count_of(me, kind), self.ai_max(me, kind));
             return Step::Blocked; // the town has all of these it needs
         }
@@ -813,8 +850,8 @@ impl Game {
             // then a lesser one (a quarry, for wood) rather than none.
             let mut skip: Vec<Kind> = Vec::new();
             let p = loop {
-                let Some(p) = self.ai_producer_ex(me, short, &skip) else { break None };
-                if self.count_of(me, p) >= self.ai_max(me, p) || seen.contains(&p) || !self.unlocked(me, p) {
+                let Some(p) = self.ai_producer_t(me, short, &skip, &t) else { break None };
+                if t.count[p as usize] as usize >= self.ai_max_t(me, p, &t) || seen.contains(&p) || !self.unlocked_t(me, p, &t) {
                     skip.push(p);
                     continue;
                 }
@@ -829,7 +866,7 @@ impl Game {
             seen.push(p);
             what = p;
         }
-        if self.ai_needs(me, what).is_some() || !self.unlocked(me, what) {
+        if self.ai_needs(me, what).is_some() || !self.unlocked_t(me, what, &t) {
             ailog!("  project {kind:?}: {what:?} short of {:?} (unlocked {})", self.ai_needs(me, what), self.unlocked(me, what));
             return Step::Blocked; // short of something nothing makes yet
         }
@@ -997,7 +1034,7 @@ impl Game {
             .filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind != Kind::Capitol && e.kind != Kind::Dock && !e.kind.trains().is_empty() && e.queue.len() < style.queue)
             .map(|e| e.id)
             .collect();
-        let queued: usize = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind != Kind::Capitol && e.kind != Kind::Dock).map(|e| e.queue.len()).sum();
+        let queued: usize = self.own(me).filter(|e| e.kind != Kind::Capitol && e.kind != Kind::Dock).map(|e| e.queue.len()).sum();
         let mut army = c.army.len() + queued;
         let cap = self.army_cap(me);
         for b in producers {
@@ -1127,7 +1164,7 @@ impl Game {
 
     /// `me`'s warships.
     fn navy(&self, me: u8) -> Vec<u32> {
-        self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind.class() == Class::Naval).map(|e| e.id).collect()
+        self.own(me).filter(|e| e.kind.class() == Class::Naval).map(|e| e.id).collect()
     }
 
     /// The first soldier goes round the map once, so we learn where the
@@ -1302,7 +1339,7 @@ impl Game {
         if let Some(p) = self.enemy_unit_near(me, bx, by, 16.0) {
             return Some(p);
         }
-        let ours: Vec<(f32, f32)> = self.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building()).map(|e| (e.x, e.y)).collect();
+        let ours: Vec<(f32, f32)> = self.own(me).filter(|e| e.is_building()).map(|e| (e.x, e.y)).collect();
         self.ents
             .iter()
             .filter(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_military() && !e.kind.is_air() && !e.kind.is_naval())

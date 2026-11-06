@@ -2129,3 +2129,38 @@ fn diag_same_game() {
         println!("CHECK {seed} {players}: {:x} {}", g.checksum(), g.ents.len());
     }
 }
+
+/// Time the parts of a saved game's ticks: `VC_SAVE=path` (a save, as the
+/// page's `save_game` writes), `VC_TICKS` ticks (200).
+#[test]
+#[ignore]
+fn diag_save_time() {
+    let path = std::env::var("VC_SAVE").expect("VC_SAVE");
+    let ticks: usize = std::env::var("VC_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let mut g = Game::load(&std::fs::read(path).unwrap()).expect("a save");
+    println!("{} players, {} entities alive of {}", g.players.len() - 1, g.ents.iter().filter(|e| e.alive).count(), g.ents.len());
+    // (A first tick untimed: the AI works out its plans once, on first use.)
+    g.tick();
+    g.events.clear();
+    crate::prof::set(true);
+    crate::prof::reset();
+    // (On its own, for valgrind: --toggle-collect='*timed_ticks*'.)
+    #[inline(never)]
+    fn timed_ticks(g: &mut Game, ticks: usize) {
+        for _ in 0..ticks {
+            g.tick();
+            g.events.clear();
+        }
+    }
+    let t0 = std::time::Instant::now();
+    timed_ticks(&mut g, ticks);
+    println!("{:.2} ms a tick, checksum {:x}", t0.elapsed().as_secs_f64() * 1000.0 / ticks as f64, g.checksum());
+    let mut out = Vec::new();
+    crate::prof::flat(&mut out);
+    let mut parts: Vec<(f64, &str)> = (0..crate::prof::N).map(|i| (out[i] / ticks as f64, crate::prof::NAMES[i])).collect();
+    parts.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (ms, n) in parts.iter().take(12) {
+        println!("  {ms:6.3}  {n}");
+    }
+    crate::prof::set(false);
+}
