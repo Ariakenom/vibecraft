@@ -297,8 +297,13 @@ impl Game {
         }
         // Fields are unlimited for a player; the computer keeps to what the
         // target needs (and a few spare), or its farms hold all the wood.
+        // A barbarian has no docks, so no fish: its houses' other goods have
+        // to make up for it, with a few more of their producers than the
+        // target (which counts on fishing boats). Without, the central
+        // camps sat one house short of the Gunpowder era.
+        let no_fish = if self.is_barb(me) && kind.stats().produces.iter().any(|&(r, _)| r.is_house_good()) { 3 } else { 0 };
         if kind == Kind::Farm {
-            hard = target(self.players[me as usize].era).count(kind) as usize + 3;
+            hard = target(self.players[me as usize].era).count(kind) as usize + 3 + no_fish;
         }
         // Stone for the last houses before the Gunpowder era (which brings
         // the Stone Works) can run out with every quarry built: a house
@@ -335,7 +340,7 @@ impl Game {
             return hard;
         }
         let want = target(self.players[me as usize].era).count(kind) as usize;
-        hard.min(if want > 0 { want + 1 } else { 0 })
+        hard.min(if want > 0 { want + 1 + no_fish } else { 0 })
     }
 
     /// The producer to build for more of `r`: of those `me` may build now

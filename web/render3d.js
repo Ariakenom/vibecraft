@@ -1795,92 +1795,106 @@ function makeRigged(o, mdl) {
   o.toolMesh = tool; o.toolBone = tb;
   o.height = mdl.height * UNIT_SCALE;
   mesh.scale.setScalar(UNIT_SCALE);
-  Object.assign(o, { seed: (o.id * 0.6180339) % 1 * 100, lean: 0, leanV: 0, flinch: 0, flinchV: 0, wasHit: false, speed: 0, prevX: o.x, prevY: o.y });
+  o.rs = new RigState((o.id * 0.6180339) % 1 * 100, o.x, o.y);
 }
 
 // One frame of a rigged unit. anim: 0 idle, 1 walking, 2 working, 3 attacking.
+// A rigged unit's springs and pace, in an object of their own (one shape
+// for all, numbers from the start: writing them makes no garbage).
+class RigState {
+  constructor(seed, x, y) {
+    this.seed = seed; this.prevX = x + 0.5 - 0.5; this.prevY = y + 0.5 - 0.5;
+    this.speed = 0.5; this.lean = 0.5; this.leanV = 0.5; this.flinch = 0.5; this.flinchV = 0.5;
+    this.speed = this.lean = this.leanV = this.flinch = this.flinchV = 0;
+    this.wasHit = false;
+  }
+}
 function animateRig(o, kind, anim, t, dt, hit) {
   const B = o.bones;
-  for (const n of RIG_BONES) B[n].rotation.set(0, 0, 0);
+  // The bones' angles, worked out in plain numbers and set once at the end:
+  // each change to a bone's rotation makes three.js work out its quaternion
+  // again, a dozen times a bone a frame (and garbage each time).
+  const R = o.rot ??= Object.fromEntries(RIG_BONES.map(n => [n, { x: 0.5, y: 0.5, z: 0.5 }]));
+  for (let k = 0; k < RIG_BONES.length; k++) { const r = R[RIG_BONES[k]]; r.x = 0; r.y = 0; r.z = 0; }
   B.body.scale.set(1, 1, 1);
   B.hips.position.y = o.hipsY;
   dt = Math.min(dt, 0.05);
   // How fast it's really moving, smoothed (tiles per second).
-  const v = Math.hypot(o.x - o.prevX, o.y - o.prevY) / Math.max(dt, 1e-3);
-  o.prevX = o.x; o.prevY = o.y;
-  o.speed += (Math.min(v, 6) - o.speed) * Math.min(1, dt * 10);
-  const walking = anim === 1 || o.speed > 0.4;
+  const v = Math.hypot(o.x - o.rs.prevX, o.y - o.rs.prevY) / Math.max(dt, 1e-3);
+  o.rs.prevX = o.x; o.rs.prevY = o.y;
+  o.rs.speed += (Math.min(v, 6) - o.rs.speed) * Math.min(1, dt * 10);
+  const walking = anim === 1 || o.rs.speed > 0.4;
   // The body leans into the walk on a springy joint, so it wobbles when
   // starting and stopping.
   const leanTo = walking ? -0.2 : anim === 3 ? -0.12 : 0;
-  o.leanV += ((leanTo - o.lean) * 70 - o.leanV * 8) * dt; o.lean += o.leanV * dt;
+  o.rs.leanV += ((leanTo - o.rs.lean) * 70 - o.rs.leanV * 8) * dt; o.rs.lean += o.rs.leanV * dt;
   // A flinch when hit: a kick backwards on another spring.
-  if (hit && !o.wasHit) o.flinchV += 9;
-  o.wasHit = hit;
-  o.flinchV += (-o.flinch * 140 - o.flinchV * 11) * dt; o.flinch += o.flinchV * dt;
-  const f = o.flinch;
-  const T = t + o.seed;
+  if (hit && !o.rs.wasHit) o.rs.flinchV += 9;
+  o.rs.wasHit = hit;
+  o.rs.flinchV += (-o.rs.flinch * 140 - o.rs.flinchV * 11) * dt; o.rs.flinch += o.rs.flinchV * dt;
+  const f = o.rs.flinch;
+  const T = t + o.rs.seed;
   const horse = isMounted(kind);
   if (horse) {
     const ph = T * (walking ? 13 : 0);
     if (walking) {
-      B.legFL.rotation.z = Math.sin(ph) * 0.75; B.legFR.rotation.z = Math.sin(ph + 0.7) * 0.75;
-      B.legBL.rotation.z = Math.sin(ph + Math.PI) * 0.75; B.legBR.rotation.z = Math.sin(ph + Math.PI + 0.7) * 0.75;
+      R.legFL.z = Math.sin(ph) * 0.75; R.legFR.z = Math.sin(ph + 0.7) * 0.75;
+      R.legBL.z = Math.sin(ph + Math.PI) * 0.75; R.legBR.z = Math.sin(ph + Math.PI + 0.7) * 0.75;
       B.hips.position.y = o.hipsY + Math.abs(Math.sin(ph)) * 0.05;
-      B.hips.rotation.z = Math.sin(ph) * 0.07;
-      B.neck.rotation.z = Math.sin(ph + 0.5) * 0.15;
-      B.body.rotation.z = -Math.sin(ph + 0.8) * 0.12 + o.lean * 0.6;
-      B.head.rotation.z = Math.sin(ph + 1.4) * 0.12;
+      R.hips.z = Math.sin(ph) * 0.07;
+      R.neck.z = Math.sin(ph + 0.5) * 0.15;
+      R.body.z = -Math.sin(ph + 0.8) * 0.12 + o.rs.lean * 0.6;
+      R.head.z = Math.sin(ph + 1.4) * 0.12;
     } else {
-      B.neck.rotation.z = Math.sin(T * 0.8) * 0.06 - 0.05;   // idle: head bobs, grazes now and then
-      B.body.rotation.z = o.lean * 0.6;
+      R.neck.z = Math.sin(T * 0.8) * 0.06 - 0.05;   // idle: head bobs, grazes now and then
+      R.body.z = o.rs.lean * 0.6;
     }
-    B.tail.rotation.z = Math.sin(T * (walking ? 9 : 2.5)) * (walking ? 0.35 : 0.2);
-    B.tail.rotation.x = Math.sin(T * 1.7) * 0.25;
-    B.armL.rotation.z = 0.5; B.armL.rotation.x = 0.2;           // holding the reins
+    R.tail.z = Math.sin(T * (walking ? 9 : 2.5)) * (walking ? 0.35 : 0.2);
+    R.tail.x = Math.sin(T * 1.7) * 0.25;
+    R.armL.z = 0.5; R.armL.x = 0.2;           // holding the reins
     let arm = 0.9, jab = 0;
     if (kind === K.Dragoon) {
       // A carbine: held level while fighting, a kick at each real shot.
       const kick = recoil(sinceShot(o));
       if (anim === 3) arm = 1.3 + kick * 0.35;
-      B.body.rotation.z += kick * 0.2;
+      R.body.z += kick * 0.2;
       jab = -kick * 1.5;
-    } else if (anim === 3) { jab = Math.max(0, Math.sin(T * 7)); arm = 1.0 + jab * 0.5; B.body.rotation.z -= jab * 0.25; }
-    B.armR.rotation.z = arm;
-    o.toolMesh.rotation.z = -arm - B.body.rotation.z + 0.12 - jab * 0.15;  // the lance stays couched, pointing forward
+    } else if (anim === 3) { jab = Math.max(0, Math.sin(T * 7)); arm = 1.0 + jab * 0.5; R.body.z -= jab * 0.25; }
+    R.armR.z = arm;
+    o.toolMesh.rotation.z = -arm - R.body.z + 0.12 - jab * 0.15;  // the lance stays couched, pointing forward
   } else {
     const ph = T * 10;
     const s = Math.sin(ph);
     if (walking) {
-      B.legL.rotation.z = s * 0.8; B.legR.rotation.z = -s * 0.8;
-      B.armL.rotation.z = -s * 0.65; B.armR.rotation.z = s * 0.65;
+      R.legL.z = s * 0.8; R.legR.z = -s * 0.8;
+      R.armL.z = -s * 0.65; R.armR.z = s * 0.65;
       B.hips.position.y = o.hipsY + Math.abs(Math.cos(ph)) * 0.035;
-      B.hips.rotation.x = s * 0.13;                              // the waddle
-      B.head.rotation.x = -s * 0.1;
+      R.hips.x = s * 0.13;                              // the waddle
+      R.head.x = -s * 0.1;
     } else {
       B.body.scale.y = 1 + Math.sin(T * 2.2) * 0.025;            // breathing
-      B.head.rotation.y = Math.sin(T * 0.7) * 0.35 * Math.max(0, Math.sin(T * 0.23));  // looks around now and then
+      R.head.y = Math.sin(T * 0.7) * 0.35 * Math.max(0, Math.sin(T * 0.23));  // looks around now and then
     }
-    B.armL.rotation.x += 0.12; B.armR.rotation.x -= 0.12;      // arms a little out from the body
-    B.body.rotation.z = o.lean;
-    B.head.rotation.z = -o.lean * 0.4;
-    const tb = B[o.toolBone];
+    R.armL.x += 0.12; R.armR.x -= 0.12;      // arms a little out from the body
+    R.body.z = o.rs.lean;
+    R.head.z = -o.rs.lean * 0.4;
+    const tb = R[o.toolBone];
     let toolWorld = null; // the tool's angle in the unit's frame, or null to follow the arm
     if (anim === 2 || (anim === 3 && kind === K.Worker)) {
       // A big overhead chop: wind up, strike, recover.
       const c = (T * 1.5) % 1;
       const a = c < 0.55 ? 0.3 + (c / 0.55) * 2.4 : c < 0.68 ? 2.7 - ((c - 0.55) / 0.13) * 2.6 : 0.1 + ((c - 0.68) / 0.32) * 0.2;
-      B.armR.rotation.z = a;
-      B.body.rotation.z += c > 0.55 && c < 0.75 ? -0.3 : 0.08;
-      if (!walking) { B.legL.rotation.z = 0.25; B.legR.rotation.z = -0.15; }
+      R.armR.z = a;
+      R.body.z += c > 0.55 && c < 0.75 ? -0.3 : 0.08;
+      if (!walking) { R.legL.z = 0.25; R.legR.z = -0.15; }
       o.toolMesh.rotation.z = -Math.PI / 2;                     // the head points out of the fist
     } else if (anim === 3 && (kind === K.Spearman || kind === K.Swordsman)) {
       // Jab with the spear, leaning in, shield up.
       const jab = Math.max(0, Math.sin(T * 8));
-      B.armR.rotation.z = 1.2 + jab * 0.4;
-      B.body.rotation.z += -jab * 0.3;
-      B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
-      if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
+      R.armR.z = 1.2 + jab * 0.4;
+      R.body.z += -jab * 0.3;
+      R.armL.z = 0.9; R.armL.x = 0.4;
+      if (!walking) { R.legL.z = 0.35; R.legR.z = -0.3; }
       toolWorld = -1.45 - jab * 0.1;
     } else if ((anim === 3 || (!walking && sinceShot(o) < 1.5)) && (kind === K.Crossbowman || kind === K.Musketeer || kind === K.Rifleman || kind === K.MachineGunner || kind === K.Infantry)) {
       // The weapon levelled at the target in both hands. Each real shot
@@ -1889,30 +1903,38 @@ function animateRig(o, kind, anim, t, dt, hit) {
       const s = sinceShot(o), cd = stat(kind, 8);
       const kick = recoil(s) * (kind === K.MachineGunner ? 0.55 : 1);
       const down = cd >= 2 ? Math.min(smooth((s - 0.35) / 0.3), 1 - smooth((s - (cd - 0.7)) / 0.4)) : 0;
-      B.armR.rotation.z = 1.3 + kick * 0.3 - down * 0.7; B.armL.rotation.z = 1.25 + kick * 0.2 - down * 0.35; B.armL.rotation.x = -0.35;
-      B.body.rotation.z += kick * 0.22 + down * 0.08;
-      B.head.rotation.z -= kick * 0.15;
+      R.armR.z = 1.3 + kick * 0.3 - down * 0.7; R.armL.z = 1.25 + kick * 0.2 - down * 0.35; R.armL.x = -0.35;
+      R.body.z += kick * 0.22 + down * 0.08;
+      R.head.z -= kick * 0.15;
       toolWorld = kick * 0.35 + down * 1.1;
     } else if (anim === 3 && kind === K.Archer) {
       // Bow arm out front; the string hand looses at each real shot and
       // draws back to the chest again for the next.
       const s = sinceShot(o), cd = stat(kind, 8);
       const draw = s > cd ? 1 : smooth((s - 0.2) / Math.max(0.3, cd * 0.6));
-      B.armL.rotation.z = 1.45; B.armL.rotation.x = 0.25;
-      B.armR.rotation.z = 1.2 + (1 - draw) * 0.3; B.armR.rotation.x = 0.55 * draw;
-      B.body.rotation.y = 0.35;
+      R.armL.z = 1.45; R.armL.x = 0.25;
+      R.armR.z = 1.2 + (1 - draw) * 0.3; R.armR.x = 0.55 * draw;
+      R.body.y = 0.35;
       toolWorld = 0;
     } else {
       toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Musketeer || kind === K.Rifleman ? 1.25 : kind === K.MachineGunner || kind === K.Infantry ? 0 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
       if (kind === K.Worker) o.toolMesh.rotation.z = -0.4;
     }
-    if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.rotation.z - (o.toolBone === "armR" || o.toolBone === "armL" ? B.body.rotation.z : 0);
+    if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.z - (o.toolBone === "armR" || o.toolBone === "armL" ? R.body.z : 0);
   }
   // The flinch: knocked back and squashed for a moment.
-  B.body.rotation.z += f * 0.6;
-  B.head.rotation.z += f * 0.5;
+  R.body.z += f * 0.6;
+  R.head.z += f * 0.5;
   B.body.scale.y *= 1 - f * 0.12;
   B.body.scale.x *= 1 + f * 0.06; B.body.scale.z *= 1 + f * 0.06;
+  // (Into the Euler's own fields, then one quaternion update: passing three
+  // numbers to rotation.set boxes each one, 40 KB a frame for an army.)
+  for (let k = 0; k < RIG_BONES.length; k++) {
+    const b = B[RIG_BONES[k]], r = R[RIG_BONES[k]], e = b.rotation;
+    if (e._x === r.x && e._y === r.y && e._z === r.z) continue;
+    e._x = r.x; e._y = r.y; e._z = r.z;
+    b.quaternion.setFromEuler(e, false);
+  }
 }
 
 // A rigged unit's death: it topples over sideways with a bounce, its limbs
@@ -1944,10 +1966,13 @@ function setRing(o, on, size) {
   if (o.ring) o.ring.visible = on;
 }
 
+const _frustum = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sph = new THREE.Sphere();
 function render3d(alpha, now, dt) {
   const t = now / 1000;
   timeUniform.value = t;
   placeCamera();
+  // What the camera sees, for skipping the walk cycles of units out of it.
+  _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(R3.camera.projectionMatrix, R3.camera.matrixWorldInverse));
   const mark = ++R3.mark; // objects still in the world this frame get this mark
   let pt = performance.now(); // (timing for the trace: `Prof`, net.js)
 
@@ -1998,7 +2023,13 @@ function render3d(alpha, now, dt) {
     o.root.rotation.y = o.face;
     const anim = E(i, F.anim);
     const ph = t + id * 0.37;
-    if (o.bones) animateRig(o, kind, anim, t, dt, !!(flags & 8));
+    if (o.bones) {
+      // Out of sight (with room for a shadow falling into it): no walk
+      // cycle, which was the most garbage the page made after three.js.
+      _sph.center.copy(o.root.position); _sph.radius = 3;
+      if (_frustum.intersectsSphere(_sph)) animateRig(o, kind, anim, t, dt, !!(flags & 8));
+      else { o.rs.prevX = o.x; o.rs.prevY = o.y; }
+    }
     else if (isNaval(kind)) {
       // Boats ride the swell: a slow bob and roll, a little pitch when under way.
       o.body.position.y = Math.sin(ph * 1.7) * 0.025 - 0.02;
@@ -2374,12 +2405,19 @@ function updateResources() {
   if (!R3.res) return;
   // A number that changes when resources do (was a string: garbage every frame).
   let key = resCount;
-  for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + (resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0)) | 0;
+  // (How much is left only shows on stone and gold, which shrink: on the
+  // rest it would remake every resource each time a tree was cut into.)
+  for (let i = 0; i < resCount; i++) {
+    const kind = resBuf[i * 5 + 2], left = kind === 2 || kind === 5 ? resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0 : 0;
+    key = (key * 31 + kind * 7 + left) | 0;
+  }
   if (key === R3.resKey) return;
   R3.resKey = key;
   // Each mesh keeps its instances' tiles (x, y, x, y, ...) for picking,
   // in one array reused from change to change.
-  for (const k in R3.res) { const m = R3.res[k]; m.count = 0; (m.userData.res ??= []).length = 0; }
+  // (Written over in place, then cut to length: emptying an array lets
+  // the browser drop its storage, to be made again straight after.)
+  for (const k in R3.res) { const m = R3.res[k]; m.count = 0; m.userData.res ??= []; }
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
@@ -2404,18 +2442,23 @@ function updateResources() {
     const m = R3.res[mesh];
     if (m.count >= m.instanceMatrix.count) continue;
     const x = tx + 0.5 + (h - 0.5) * 0.25, y = ty + 0.5 + (h2 - 0.5) * 0.25;
-    _p.set(x, groundAt(x, y) - 0.02, y);
-    _q.setFromAxisAngle(_up, h * 6.28);
-    _s.setScalar(scale);
-    _m4.compose(_p, _q, _s);
-    m.setMatrixAt(m.count, _m4);
+    // Turned round the vertical by h and scaled, written straight into the
+    // instance arrays (passing numbers to three.js's setters boxes each).
+    const c = Math.cos(h * 6.28) * scale, sn = Math.sin(h * 6.28) * scale, a = m.instanceMatrix.array, o = m.count * 16;
+    a[o] = c; a[o + 1] = 0; a[o + 2] = -sn; a[o + 3] = 0;
+    a[o + 4] = 0; a[o + 5] = scale; a[o + 6] = 0; a[o + 7] = 0;
+    a[o + 8] = sn; a[o + 9] = 0; a[o + 10] = c; a[o + 11] = 0;
+    a[o + 12] = x; a[o + 13] = groundAt(x, y) - 0.02; a[o + 14] = y; a[o + 15] = 1;
     const v = 0.85 + h2 * 0.3;
-    m.setColorAt(m.count, _c.setRGB(v, v, v));
-    m.userData.res.push(tx, ty);
+    if (!m.instanceColor) m.setColorAt(m.count, _c.setRGB(v, v, v)); // (makes the colour array, once)
+    const ca = m.instanceColor.array, co = m.count * 3;
+    ca[co] = v; ca[co + 1] = v; ca[co + 2] = v;
+    m.userData.res[m.count * 2] = tx; m.userData.res[m.count * 2 + 1] = ty;
     m.count++;
   }
   for (const k in R3.res) {
     const m = R3.res[k];
+    if (m.userData.res.length > m.count * 2) m.userData.res.length = m.count * 2;
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
     m.computeBoundingSphere();

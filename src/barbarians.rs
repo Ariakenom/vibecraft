@@ -22,8 +22,6 @@ const UNSEEN: f32 = 32.0;
 /// A camp's town: what it builds on and knows about, and how far it raids.
 pub const BARB_RANGE: f32 = 36.0;
 pub const RAID_RANGE: f32 = 70.0;
-/// Extra yield (percent of a seat's) a camp's land gives per era of its site.
-pub const CAMP_YIELD_PER_ERA: u16 = 40;
 /// The earliest time (seconds of game) a camp enters each era (Medieval,
 /// Gunpowder, Industrial, Modern, Atomic): a little behind a quick player.
 pub const CAMP_ERA_AT: [f32; 5] = [300.0, 720.0, 1200.0, 1800.0, 2700.0];
@@ -157,11 +155,7 @@ impl Game {
         f.settled += 1;
         // A fresh town: nothing carried over from the last camp in this slot.
         let (diff, phase) = (self.ais[owner as usize].difficulty, owner as f32 * 0.13);
-        // Camps further in are richer: their land yields more, by the
-        // site's era (a camp's town has only the room round its site, and
-        // with no more than a seat's yield the central ones never got out
-        // of the Medieval era).
-        self.players[owner as usize] = Player::new(handicap(diff) + CAMP_YIELD_PER_ERA * site.era as u16);
+        self.players[owner as usize] = Player::new(handicap(diff));
         self.ais[owner as usize] = Ai::new(diff, true, phase);
         let cap = self.spawn_building(Kind::Capitol, owner, site.x - 1, site.y - 1, 1.0);
         // Like a start's: it holds no slots.
@@ -333,16 +327,27 @@ mod why {
         for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.built >= 1.0 && e.kind.house_tier().is_some()) {
             println!("  {:?} residents {}/{} goods {:#b}", e.kind, e.residents, e.beds(), e.goods);
         }
+        for e in g.ents.iter().filter(|e| e.alive && e.owner == me && e.is_building() && e.built < 1.0) {
+            let coming = g.ents.iter().filter(|w| w.alive && matches!(w.order, crate::game::Order::Build(b) if b == e.id)).count();
+            println!("  foundation {:?} built {:.2} builders at it {} on the way {coming} staked {}", e.kind, e.built, e.builders_in, g.staked(e));
+        }
         let free: Vec<String> = (0..crate::defs::N_RES).filter(|&r| p.supply[r] > 0).map(|r| format!("{:?} {}/{}", crate::defs::Res::ALL[r], p.used[r], p.supply[r])).collect();
         println!("slots used/supply: {}", free.join(", "));
         crate::ai::ai_log_start();
-        for _ in 0..40 {
+        for _ in 0..env("VC_LOG_TICKS", 40) {
             g.tick();
             g.events.clear();
         }
         let log = crate::ai::ai_log_take();
-        for l in log.iter().take(60) {
-            println!("{l}");
+        // (Only this camp's thinking: each think starts "economy: P<owner> ".)
+        let mut mine = false;
+        for l in log.iter() {
+            if l.starts_with("economy: P") {
+                mine = l.starts_with(&format!("economy: P{me} "));
+            }
+            if mine {
+                println!("{l}");
+            }
         }
     }
 }
