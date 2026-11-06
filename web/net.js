@@ -185,6 +185,14 @@ const Net = {
 // A recording of what multiplayer is doing, for finding out why a game feels
 // slow: one sample a second plus notable events. F8 shows it during a game,
 // and "Copy trace" puts the whole recording on the clipboard as JSON.
+// Where a frame's time goes on the page, part by part, for the trace:
+// `t = Prof.add("name", t)` adds the time since `t` to that part.
+const Prof = {
+  ms: {},
+  add(name, t0) { const t = performance.now(); this.ms[name] = (this.ms[name] || 0) + (t - t0); return t; },
+  take() { const m = this.ms; this.ms = {}; return m; },
+};
+
 const Trace = {
   t0: 0, samples: [], events: [], issued: [], cur: null, curAt: 0, info: {},
   inBytes: 0, // size of the message being handled (0 where the transport can't tell)

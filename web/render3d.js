@@ -1827,6 +1827,7 @@ function render3d(alpha, now, dt) {
   timeUniform.value = t;
   placeCamera();
   const mark = ++R3.mark; // objects still in the world this frame get this mark
+  let pt = performance.now(); // (timing for the trace: `Prof`, net.js)
 
   for (let i = 0; i < entCount; i++) {
     const id = E(i, F.id), kind = E(i, F.kind);
@@ -1933,8 +1934,10 @@ function render3d(alpha, now, dt) {
     R3.dying[keep++] = d;
   }
   R3.dying.length = keep;
+  pt = Prof.add("draw: units and buildings", pt);
 
   updateResources();
+  pt = Prof.add("draw: resources", pt);
   updateArrows(alpha);
   updateRally();
   updateGhost();
@@ -1945,11 +1948,13 @@ function render3d(alpha, now, dt) {
   updateFlashes(performance.now());
   updateNukes(performance.now(), alpha);
   updateAimRings();
+  Prof.add("draw: effects", pt);
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
   const g = performance.now();
   renderScene();
   R3.gpuMs = performance.now() - g;
+  Prof.add("graphics card", g);
 }
 
 // --- The nuke ------------------------------------------------------------------

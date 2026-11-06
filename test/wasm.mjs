@@ -7,7 +7,7 @@
 import fs from "fs";
 import { fileURLToPath } from "url";
 const here = fileURLToPath(new URL("..", import.meta.url));
-const { instance } = await WebAssembly.instantiate(fs.readFileSync(here + "target/wasm32-unknown-unknown/release/rts.wasm"));
+const { instance } = await WebAssembly.instantiate(fs.readFileSync(here + "target/wasm32-unknown-unknown/release/rts.wasm"), { env: { now_ms: () => performance.now() } });
 const w = instance.exports;
 let failed = 0;
 const check = (ok, what) => { console.log((ok ? "ok   " : "FAIL ") + what); if (!ok) failed++; };

@@ -327,8 +327,11 @@ impl Game {
     }
 
     pub fn ai_think(&mut self, me: u8) {
+        use crate::prof::{span, Part};
         let Some(cap) = self.home_capitol(me) else { return };
+        let census = span(Part::AiCensus);
         let mut c = self.census(me, (self.ents[cap].x, self.ents[cap].y));
+        drop(census);
         // Cancel foundations nobody can reach (`census` left them out), and
         // tear down a dock the town has walled off from its people (its
         // recruits could never get there: another goes up where they can).
@@ -338,15 +341,32 @@ impl Game {
             let _ = self.apply(me, Command::Demolish { ids: cut_off });
         }
         let style = &STYLES[self.ais[me as usize].difficulty.min(2) as usize];
-        let next = self.ai_economy(&mut c);
-        self.ai_army(style, next, &mut c);
+        let next = {
+            let _s = span(Part::AiEconomy);
+            self.ai_economy(&mut c)
+        };
+        {
+            let _s = span(Part::AiArmy);
+            self.ai_army(style, next, &mut c);
+        }
         if self.is_barb(me) {
+            let _s = span(Part::AiFight);
             self.ai_fight(&c);
             return;
         }
-        self.ai_navy(next, &mut c);
-        self.ai_scout(&mut c);
-        self.ai_fight(&c);
+        {
+            let _s = span(Part::AiNavy);
+            self.ai_navy(next, &mut c);
+        }
+        {
+            let _s = span(Part::AiScout);
+            self.ai_scout(&mut c);
+        }
+        {
+            let _s = span(Part::AiFight);
+            self.ai_fight(&c);
+        }
+        let _s = span(Part::AiAir);
         self.ai_air(me);
         self.ai_nuke(me, c.home);
     }

@@ -308,7 +308,8 @@ CURSORS[8] = svgCursor(`<path d="M16 3v16M9 13l7 7 7-7" fill="none" stroke="${DK
 let W, mem;
 async function loadWasm() {
   const bin = Uint8Array.from(atob(WASM_B64), c => c.charCodeAt(0));
-  const { instance } = await WebAssembly.instantiate(bin, {});
+  // (The game's clock for timing its parts in the trace: never for the game itself.)
+  const { instance } = await WebAssembly.instantiate(bin, { env: { now_ms: () => performance.now() } });
   W = instance.exports;
   mem = W.memory;
 }
@@ -1862,7 +1863,7 @@ function loop(now) {
       while (acc >= SIM_MS && steps < most) { W.tick(); simTick++; acc -= SIM_MS; steps++; }
       if (Trace.cur) Trace.cur.ticks += steps;
       if (steps === most) acc = 0;
-      if (steps) handleEvents();
+      if (steps) { const h = performance.now(); handleEvents(); Prof.add("events (sounds, effects)", h); }
       if (!Rec.done) Rec.ticks = simTick;
       // Handing a seat to a spectator: right after a tick, before any new command.
       if (pendingSeat && steps) {
@@ -1871,20 +1872,30 @@ function loop(now) {
       }
     }
     const f1 = performance.now();
+    let t = f1;
     readWorld();
-    if (frame % 3 === 0) updateFog();
+    t = Prof.add("read the world", t);
+    if (frame % 3 === 0) { updateFog(); t = Prof.add("fog", t); }
     // How far between the last tick and the next one we are. In multiplayer,
     // count the time since the clock last moved, so motion stays smooth.
     const along = mp ? mp.alpha() * SIM_MS : acc;
     const f2 = performance.now();
     render3d(paused && !mp ? 1 : Math.min(1, along / SIM_MS), now, dt);
     const f3 = performance.now();
+    t = f3;
     drawOverlay();
     updateHoverCursor(now);
-    if (frame % 4 === 0) drawMinimap();
-    if (frame % 6 === 0) { renderTopBar(); renderBuildList(); renderSelection(false); renderScoreboard(false); }
+    t = Prof.add("HUD: overlay", t);
+    if (frame % 4 === 0) { drawMinimap(); t = Prof.add("HUD: minimap", t); }
+    if (frame % 6 === 0) {
+      renderTopBar(); t = Prof.add("HUD: top bar", t);
+      renderBuildList(); t = Prof.add("HUD: build list", t);
+      renderSelection(false); t = Prof.add("HUD: selection", t);
+      renderScoreboard(false); t = Prof.add("HUD: scoreboard", t);
+    }
     if (frame % 30 === 0 && !$("menuScreen").hidden) renderGameSeats(false);
     syncObserverUi();
+    Prof.add("HUD: other", t);
     frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
     // (Multiplayer rolls the trace in pumpMultiplayer, with the lockstep's numbers.)
     if (!mp && Trace.roll(performance.now(), perfSnapshot())) renderTrace();
@@ -1947,7 +1958,7 @@ function stepMultiplayer(now) {
     Trace.event("resume", { ms });
     stalledSince = 0;
   }
-  if (Trace.roll(now, mp.snapshot())) renderTrace();
+  if (Trace.roll(now, Object.assign(mp.snapshot(), partsSnapshot()))) renderTrace();
   if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
@@ -1997,6 +2008,22 @@ function frameTrace(now, sim, world, draw, gpu, hud) {
   }
   lastWork = work; lastFrameNow = now; lastHeap = heap; lastPrograms = programs;
 }
+// The game's parts (prof.rs) and the page's (Prof) since the last second,
+// in ms, biggest first; and the path searches.
+let profNames = null;
+function partsSnapshot() {
+  const r1 = x => Math.round(x * 10) / 10;
+  const out = { page: {}, game: {} };
+  for (const [k, v] of Object.entries(Prof.take()).sort((a, b) => b[1] - a[1])) out.page[k] = r1(v);
+  if (!W.prof_take) return out;
+  if (!profNames) profNames = new TextDecoder().decode(new Uint8Array(W.memory.buffer, W.prof_names_ptr(), W.prof_names_len())).split("\n");
+  const n = W.prof_parts(), a = new Float64Array(W.memory.buffer, W.prof_take(), 2 * n + 1);
+  const parts = profNames.map((name, i) => [name, a[i], a[n + i]]).filter(p => p[2] > 0).sort((x, y) => y[1] - x[1]);
+  for (const [name, ms, count] of parts) out.game[name] = { ms: r1(ms), n: count };
+  out.pathTiles = a[2 * n];
+  return out;
+}
+
 // What the game and the drawing look like this second, for the trace.
 function perfSnapshot() {
   const r = R3.drawn, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
@@ -2005,6 +2032,7 @@ function perfSnapshot() {
     ents: entCount, drawCalls: r.calls, triangles: r.triangles,
     heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
     view: [R3.renderer.domElement.width, R3.renderer.domElement.height],
+    ...partsSnapshot(),
   };
 }
 // Chrome and Edge report tasks that block the page for over 50 ms.
@@ -2018,6 +2046,17 @@ function frameLines(s) {
   const ms = n => n == null ? "?" : `${n} ms`, w = s.avgWork || {};
   const lines = [`Frames ${s.fps}/s · between frames: median ${ms(s.p50)}, 95% within ${ms(s.p95)}, longest ${ms(s.maxFrameGap)}`];
   lines.push(`Work per frame on average: game ${w.sim} ms, world ${w.world} ms, drawing ${w.draw} ms, graphics card ${w.gpu} ms, HUD ${w.hud} ms (most ${ms(s.maxWork)})`);
+  // The biggest parts, game and page.
+  const top = (o, k) => Object.entries(o || {}).slice(0, k);
+  const g = s.game || {}, tick = g.tick;
+  if (tick) {
+    const parts = top(g, 9).filter(([k]) => k !== "tick" && !k.startsWith("AI: ")).slice(0, 6).map(([k, v]) => `${k} ${v.ms}`);
+    const ai = ["AI: towns", "AI: barbarians"].filter(k => g[k]).map(k => `${k.slice(4)} ${g[k].ms}`);
+    lines.push(`Game: ${tick.ms} ms/s for ${tick.n} ticks (${Math.round(tick.ms / Math.max(1, tick.n) * 10) / 10} ms each) · biggest: ${parts.join(", ")}`);
+    if (ai.length || g.paths) lines.push(`Computer players: ${ai.join(", ") || "none"} ms/s · paths ${g.paths ? `${g.paths.ms} ms/s, ${g.paths.n} searches, ${Math.round(s.pathTiles / 1000)}k tiles` : "none"}`);
+  }
+  const page = top(s.page, 6).map(([k, v]) => `${k} ${v}`);
+  if (page.length) lines.push(`Page (ms/s): ${page.join(", ")}`);
   if (s.ents != null) lines.push(`Map ${MW}×${MH} · ${s.ents} things in sight · ${s.drawCalls} draw calls, ${Math.round(s.triangles / 1000)}k triangles · view ${s.view[0]}×${s.view[1]}${s.heapMB ? ` · memory ${s.heapMB} MB` : ""}`);
   return lines;
 }
@@ -2101,6 +2140,8 @@ function enterWorld(local = 0) {
   resizeView();
   R3.ghostKind = -1;
   // The trace, from the start (multiplayer starts its own after this).
+  if (W.prof_enable) W.prof_enable(1);
+  Prof.take(); if (W.prof_take) W.prof_take();
   Trace.start({ role: "single player", mode: W.game_mode() ? "frontier" : "skirmish", players: W.n_players(), map: [MW, MH], startMs: Math.round(performance.now() - b0) });
   $("netBtn").hidden = false;
   const i = findOwn(K.Capitol);

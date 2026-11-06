@@ -12,6 +12,7 @@ mod econ;
 mod game;
 mod map;
 mod map_frontier;
+mod prof;
 mod barbarians;
 mod path;
 mod people;
@@ -80,6 +81,42 @@ pub extern "C" fn init_frontier(seed: u32, difficulty: u32, players: u32, size: 
     let world = World { game: Game::new_frontier(seed, difficulty, players.clamp(2, 4) as u8, map_frontier::Size::from_u32(size)), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
     WORLD.with(|w| *w.borrow_mut() = Some(world));
 }
+
+/// Timing the parts of a tick, for the trace (`prof.rs`): on or off.
+#[unsafe(no_mangle)]
+pub extern "C" fn prof_enable(on: u32) {
+    prof::set(on != 0);
+}
+
+/// How many parts are timed.
+#[unsafe(no_mangle)]
+pub extern "C" fn prof_parts() -> u32 {
+    prof::N as u32
+}
+
+/// The parts' names, one per line (UTF-8), at `prof_names_ptr()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn prof_names_ptr() -> *const u8 {
+    PROF_NAMES.as_ptr()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn prof_names_len() -> u32 {
+    PROF_NAMES.len() as u32
+}
+static PROF_NAMES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| prof::NAMES.join("\n"));
+
+/// The timings since the last call, then reset: `prof_parts()` times in ms,
+/// as many counts, and the path tiles searched. Returns a pointer to f64s.
+#[unsafe(no_mangle)]
+pub extern "C" fn prof_take() -> *const f64 {
+    PROF_OUT.with(|o| {
+        let mut o = o.borrow_mut();
+        prof::flat(&mut o);
+        prof::reset();
+        o.as_ptr()
+    })
+}
+thread_local! { static PROF_OUT: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) }; }
 
 /// The game being played: 0 Skirmish, 1 Frontier.
 #[unsafe(no_mangle)]

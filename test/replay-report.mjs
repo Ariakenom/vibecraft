@@ -25,7 +25,7 @@ const KN = Object.fromEntries(Object.entries(K).map(([n, v]) => [v, n]));
 const ERA = ["Ancient", "Medieval", "Gunpowder", "Industrial", "Modern", "Atomic"];
 const COLOUR = ["Nature", "Blue", "Red", "Green", "Gold"];
 
-const { instance } = await WebAssembly.instantiate(Buffer.from(wasmB64, "base64"), {});
+const { instance } = await WebAssembly.instantiate(Buffer.from(wasmB64, "base64"), { env: { now_ms: () => performance.now() } });
 const W = instance.exports;
 const r = JSON.parse(fs.readFileSync(replayPath, "utf8"));
 if (r.kind !== "replay" || typeof r.data !== "string" || !Array.isArray(r.log)) throw new Error("not a VibeCraft replay");
