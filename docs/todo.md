@@ -27,11 +27,10 @@ not straight away (see `CLAUDE.md`).
   (`diag_camp` in barbarians.rs shows a camp's houses and the AI's reasons).
   Ideas besides fixing the stall: camps start at their site's era with a
   garrison, or grow faster the higher their cap.
-- **The page makes 65 to 110 MB of garbage a second** (Chrome traces, Nov
-  2026), with up to 12 memory clean-ups a second; the ~60 ms frames that
-  remain are those. Find what allocates every frame (Chrome's memory
-  profiler on a running game). Also: placing a building recomputes the
-  shading of the whole terrain (`flattenUnder` in render3d.js).
+- **Placing a building reshades the whole terrain** (`flattenUnder` in
+  render3d.js recomputes every normal). Also left from the garbage work:
+  about 20 MB a second still, mostly three.js setting uniforms and the
+  unit animation (`animateRig`).
 
 ## Done
 
@@ -49,3 +48,8 @@ not straight away (see `CLAUDE.md`).
   and `.github/workflows/pages.yml`. After merging, turn Pages on in the
   repo's settings (source: the `gh-pages` branch), then run the Pages
   workflow by hand with "older" set to add past versions.
+- **Less garbage**: 65 to 110 MB a second down to about 20. Most of it was
+  three.js rebuilding shader settings because one material was drawn on
+  both plain and skinned/instanced meshes, or with and without shadows.
+  Now each kind has its own material (`entMats` in render3d.js), and
+  `test/browser/garbage.mjs` profiles what a frame allocates.
