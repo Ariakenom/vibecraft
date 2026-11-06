@@ -363,6 +363,17 @@ let aimSilo = null;
 let groups = {};
 let lastClick = { t: 0, x: 0, y: 0 };
 let lastAlert = null;
+// Where warnings came from (attacks, silos, nukes): Space goes to the last,
+// and the minimap rings each one while it's fresh.
+const ALERT_MS = 15000;
+let alertMarks = [];
+function alertAt(x, y) {
+  const t = performance.now();
+  lastAlert = { x, y, t };
+  // One ring per place: a fresh alert near an old ring restarts it.
+  alertMarks = alertMarks.filter(m => t - m.t < ALERT_MS && Math.hypot(m.x - x, m.y - y) > 6);
+  alertMarks.push({ x, y, t });
+}
 let keys = new Set();
 let selKey = "";
 let hoverTip = null;
@@ -656,6 +667,21 @@ function drawMinimap() {
     mctx.fillStyle = (E(i, F.flags) & 1) ? "#fff" : PLIGHT[o];
     if (isBld(k)) { const z = stat(k, 6) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
     else mctx.fillRect(E(i, F.x) * s - 1.5, E(i, F.y) * s - 1.5, 3, 3);
+  }
+  // Warnings: a red ring that pulses for the first seconds, then fades.
+  const now = performance.now();
+  alertMarks = alertMarks.filter(m => now - m.t < ALERT_MS);
+  for (const m of alertMarks) {
+    const age = now - m.t, x = m.x * s, y = m.y * s;
+    const fade = 1 - age / ALERT_MS;
+    mctx.strokeStyle = `rgba(255,70,50,${(0.5 + 0.5 * fade).toFixed(2)})`;
+    mctx.lineWidth = 2;
+    mctx.beginPath(); mctx.arc(x, y, 5, 0, 7); mctx.stroke();
+    if (age < 4000) { // the pulse
+      const p = (age % 1000) / 1000;
+      mctx.strokeStyle = `rgba(255,70,50,${(1 - p).toFixed(2)})`;
+      mctx.beginPath(); mctx.arc(x, y, 5 + p * 10, 0, 7); mctx.stroke();
+    }
   }
   // What the camera sees is a trapezoid on the ground.
   const q = viewQuad();
@@ -1751,7 +1777,7 @@ function handleEvents() {
     switch (type) {
       case EV.Alert:
         toast(isBld(d) ? `Your ${NAMES[d]} is under attack. Space to view.` : "Your people are under attack. Space to view.", "bad");
-        lastAlert = { x, y, t: performance.now() };
+        alertAt(x, y);
         Sfx.ui("horn");
         break;
       case EV.Trained: Sfx.ui("trained"); break;
@@ -1787,14 +1813,14 @@ function handleEvents() {
       case EV.Cheats: if (!mp) cheatsToast(d); break; // (online: when the host's command is confirmed)
       // Silos and nukes: everyone is told about everyone's.
       case EV.SiloBuilt:
-        if (d !== ME) { toast(`Warning: ${pnc(d)} has built a missile silo.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
+        if (d !== ME) { toast(`Warning: ${pnc(d)} has built a missile silo.`, "bad"); Sfx.ui("horn"); alertAt(x, y); }
         break;
       case EV.NukeArming:
-        if (d !== ME) { toast(`Warning: ${pnc(d)} has started arming a nuke. It takes ${W.nuke_numbers(0) / 60} minutes. An Air Defense shoots one down.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
+        if (d !== ME) { toast(`Warning: ${pnc(d)} has started arming a nuke. It takes ${W.nuke_numbers(0) / 60} minutes. An Air Defense shoots one down.`, "bad"); Sfx.ui("horn"); alertAt(x, y); }
         break;
       case EV.NukeArmed:
         if (d === ME) { toast("A nuke is armed. Select it and press C to launch.", "good"); Sfx.ui("trained"); }
-        else { toast(`Warning: ${pnc(d)} has a nuke ready to launch.`, "bad"); Sfx.ui("siren"); lastAlert = { x, y, t: performance.now() }; }
+        else { toast(`Warning: ${pnc(d)} has a nuke ready to launch.`, "bad"); Sfx.ui("siren"); alertAt(x, y); }
         break;
       case EV.NukeIntercepted:
         toast(d === ME ? "Your nuke was shot down by an air defense." : `An air defense shot down ${pnc(d)}'s nuke.`, d === ME ? "bad" : "good");
@@ -1804,7 +1830,7 @@ function handleEvents() {
         // Everyone is told, and shown where it will fall.
         toast(d === ME ? "Nuke launched. It lands in 20 seconds." : `${pnc(d)} has launched a nuke! It lands in 20 seconds: get out of the marked area.`, d === ME ? "good" : "bad");
         Sfx.ui("siren");
-        lastAlert = { x, y, t: performance.now() };
+        alertAt(x, y);
         break;
       case EV.NukeDetonated:
         Sfx.ui("nuke");
@@ -2130,6 +2156,7 @@ function enterWorld(local = 0) {
   ME = W.local_player();
   setOwnerColors();
   simTick = 0; stalledSince = 0; outShown = false; surrendered = false;
+  alertMarks = []; lastAlert = null;
   stopObserving();
   $("outScreen").hidden = true;
   const b0 = performance.now();
