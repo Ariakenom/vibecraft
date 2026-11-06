@@ -1454,8 +1454,19 @@ function doTrain(k) {
   if (code) { toast(explain(code), "bad"); Sfx.ui("error"); } else Sfx.ui("queued");
   selKey = "";
 }
+// Why `k` is locked: the era not reached yet (the next era's page shows once
+// its first house stands), else the first building it needs. (When only
+// the era was missing, this said "Not enough undefined": no building
+// was missing, and 2000 + -1 read as a resource.)
+function lockedText(k) {
+  const era = W.kind_era(k);
+  if (era > W.era() + 1) return explain(30 + era);
+  if (era > W.era()) return `${explain(30 + era)}: it takes ${W.era_progress(1)} ${HOUSE_NAMES[era].toLowerCase()}s, you have ${W.era_progress(0)}`;
+  let n = 0, q; while ((q = W.requires(k, n++)) >= 0) if (!W.has_built(q)) return explain(2000 + q);
+  return "Can't build that yet";
+}
 function startPlacing(k) {
-  if (isBld(k) && !W.unlocked(k)) { let n = 0, q; while ((q = W.requires(k, n++)) >= 0) if (!W.has_built(q)) break; toast(explain(2000 + q), "bad"); Sfx.ui("error"); return; }
+  if (isBld(k) && !W.unlocked(k)) { toast(lockedText(k), "bad"); Sfx.ui("error"); return; }
   if (!canAfford(k)) { toast(explain(shortCode(k)), "bad"); Sfx.ui("error"); return; }
   placing = k; amode = false; updateCursor();
 }

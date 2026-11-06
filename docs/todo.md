@@ -8,12 +8,7 @@ not straight away (see `CLAUDE.md`).
 
 ## Waiting
 
-- **"Not enough undefined" when upgrading a hut.** Reported Nov 2026. Not
-  reproduced yet: in a 16-minute computer-played game every upgrade message
-  came out right (wood, stone, brick, steel, the era and goods messages).
-  Needs: the exact text, where it showed (the Upgrade button's tip, a
-  message at the top, the house's panel) and which version. (Since Nov 6
-  an unknown code reads "Can't do that" instead.)
+(Nothing right now.)
 
 ## Done
 
@@ -74,3 +69,8 @@ not straight away (see `CLAUDE.md`).
   straight into the instance arrays. About 17 MB a second in the
   test (with many ticks a frame, so more than a real game); what's left is
   mostly three.js's own drawing code.
+- **"Not enough undefined"**: clicking a building of the next era (its page
+  shows once the era's first house stands) when only the era was missing,
+  not a building: the lookup for the missing building ran off the end
+  (2000 + -1, read as a resource). It now says "Not until the Gunpowder
+  era: it takes 10 townhouses, you have 4" (`lockedText` in main.js).
