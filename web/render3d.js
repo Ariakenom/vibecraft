@@ -2405,12 +2405,9 @@ function updateResources() {
   if (!R3.res) return;
   // A number that changes when resources do (was a string: garbage every frame).
   let key = resCount;
-  // (How much is left only shows on stone and gold, which shrink: on the
-  // rest it would remake every resource each time a tree was cut into.)
-  for (let i = 0; i < resCount; i++) {
-    const kind = resBuf[i * 5 + 2], left = kind === 2 || kind === 5 ? resBuf[i * 5 + 3] / resBuf[i * 5 + 4] * 8 | 0 : 0;
-    key = (key * 31 + kind * 7 + left) | 0;
-  }
+  // (Deposits never run out, so which ones are known is all that changes:
+  // more come into view as the map is explored.)
+  for (let i = 0; i < resCount; i++) key = (key * 31 + resBuf[i * 5 + 2] * 7 + resBuf[i * 5] * 3 + resBuf[i * 5 + 1]) | 0;
   if (key === R3.resKey) return;
   R3.resKey = key;
   // Each mesh keeps its instances' tiles (x, y, x, y, ...) for picking,

@@ -70,7 +70,7 @@ not straight away (see `CLAUDE.md`).
   `loaded_frontier_games_have_the_same_checksum` checks 30 save points.
 - **Less garbage again**: walk cycles only for units in view; each bone's
   rotation set once a frame, straight into three.js's fields; resources
-  remade only when stone or gold shrinks, not every cut into a tree, and
-  written straight into the instance arrays. About 17 MB a second in the
+  (remade when more are explored, or a building levels the ground) written
+  straight into the instance arrays. About 17 MB a second in the
   test (with many ticks a frame, so more than a real game); what's left is
   mostly three.js's own drawing code.
