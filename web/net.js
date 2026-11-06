@@ -218,6 +218,8 @@ const Trace = {
     this.cur.inMsgs++; this.cur.inBytes += bytes;
   },
   msgOut(bytes) { if (this.cur) { this.cur.outMsgs++; this.cur.outBytes += typeof bytes === "number" ? bytes : 0; } },
+  // Is a second up? (So the caller makes its snapshot only then.)
+  due(now) { return !!this.cur && now - this.curAt >= 1000; },
   // Once a second: close this second's numbers, with a snapshot of the lockstep.
   roll(now, snapshot) {
     if (!this.cur || now - this.curAt < 1000) return false;

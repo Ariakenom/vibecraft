@@ -1055,6 +1055,7 @@ function computeHeights() {
     h[i] = l === 0 ? (sh > 0 ? -0.4 + sh * 0.16 : Math.min(h[i], -0.4)) : l === 1 ? Math.max(h[i], 0.02) : WATER_Y + (l - 0.5) * 0.3;
   }
   R3.heights = h;
+  R3.hTop = null;
   R3.wet = wet;
 }
 
@@ -1428,6 +1429,7 @@ function flattenUnder(cx, cy, s) {
   for (let y = y0; y < y0 + s; y++) for (let x = x0; x < x0 + s; x++) R3.flattened.add(y * MW + x);
   pos.needsUpdate = true;
   R3.terrain.geometry.computeVertexNormals();
+  groundChanged();
   R3.resKey = "";
   placeTufts();
   return base;
@@ -1476,11 +1478,48 @@ function placeCamera() {
 const _ndc = new THREE.Vector2();
 function ndc(sx, sy) { return _ndc.set((sx / view._w) * 2 - 1, -(sy / view._h) * 2 + 1); }
 
+// Where a ray first meets the ground: walked over the height grid (`hAt`)
+// in small steps, then narrowed down between the last two. Testing the
+// terrain mesh itself meant every triangle of the map (346,000 on a large
+// Frontier map, 27 ms), on every mouse move while placing a building; this
+// costs the same on any map. Returns the distance along the ray, or -1.
+function groundHit(ray) {
+  const o = ray.origin, d = ray.direction, h = R3.heights;
+  if (!h) return -1;
+  if (R3.hTop == null) { let top = -Infinity; for (let i = 0; i < h.length; i++) if (h[i] > top) top = h[i]; R3.hTop = top; }
+  // Only where the ray is over the map and below the highest ground.
+  let t0 = 0, t1 = R3.camera.far;
+  for (const [p, v, lo, hi] of [[o.x, d.x, 0, MW], [o.z, d.z, 0, MH]]) {
+    if (Math.abs(v) < 1e-9) { if (p < lo || p > hi) return -1; continue; }
+    let a = (lo - p) / v, b = (hi - p) / v;
+    if (a > b) [a, b] = [b, a];
+    t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+  }
+  if (d.y < 0) t0 = Math.max(t0, (R3.hTop - o.y) / d.y); // (above the highest ground: nothing to hit)
+  if (t0 > t1) return -1;
+  const above = t => o.y + d.y * t - hAt(o.x + d.x * t, o.z + d.z * t);
+  const step = 0.25 / Math.max(0.05, Math.hypot(d.x, d.z)); // a quarter tile across the ground
+  let prev = t0, fa = above(t0);
+  if (fa <= 0) return t0;
+  for (let t = t0 + step; ; t += step) {
+    const tt = Math.min(t, t1), f = above(tt);
+    if (f <= 0) {
+      let a = prev, b = tt;
+      for (let k = 0; k < 12; k++) { const m = (a + b) / 2; if (above(m) > 0) a = m; else b = m; }
+      return b;
+    }
+    if (tt >= t1) return -1;
+    prev = tt;
+  }
+}
+// (When the ground changes: placing a building flattens it.)
+function groundChanged() { R3.hTop = null; }
+
 // Screen pixel -> map position on the ground (or null if off the map).
 function screenToGround(sx, sy) {
   R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
-  const hit = R3.terrain && R3.raycaster.intersectObject(R3.terrain, false)[0];
-  if (hit) return { x: hit.point.x, y: hit.point.z };
+  const ray = R3.raycaster.ray, t = R3.terrain ? groundHit(ray) : -1;
+  if (t >= 0) return { x: ray.origin.x + ray.direction.x * t, y: ray.origin.z + ray.direction.z * t };
   const p = new THREE.Vector3();
   if (R3.raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), p)) return { x: p.x, y: p.z };
   return null;
@@ -1509,13 +1548,18 @@ function pickAt(sx, sy) {
   }
   if (best) return best;
   R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
-  const targets = [];
+  const targets = _pickTargets;
+  targets.length = 0;
   for (const o of R3.objs.values()) if (isBld(o.kind)) targets.push(o.body);
-  if (R3.res) targets.push(...Object.values(R3.res));
-  if (R3.terrain) targets.push(R3.terrain);
+  if (R3.res) for (const m of Object.values(R3.res)) targets.push(m);
+  // The ground: walked over the height grid (`groundHit`), not tested
+  // against the terrain mesh; a building or resource in front of it wins.
+  const ray = R3.raycaster.ray, tg = R3.terrain ? groundHit(ray) : -1;
   const hit = R3.raycaster.intersectObjects(targets, false)[0];
-  if (!hit) return screenToGround(sx, sy);
-  if (hit.object === R3.terrain) return { x: hit.point.x, y: hit.point.z, what: "ground" };
+  if (!hit || (tg >= 0 && tg < hit.distance)) {
+    if (tg >= 0) return { x: ray.origin.x + ray.direction.x * tg, y: ray.origin.z + ray.direction.z * tg, what: "ground" };
+    return screenToGround(sx, sy);
+  }
   if (hit.object.isInstancedMesh) {
     const r = hit.object.userData.res[hit.instanceId];
     return { x: r[0] + 0.5, y: r[1] + 0.5, what: "res" };
@@ -1523,6 +1567,8 @@ function pickAt(sx, sy) {
   const o = hit.object.userData.obj;
   return { x: o.x, y: o.y, id: o.id, what: "building" };
 }
+
+const _pickTargets = [];
 
 // The ground area the camera sees, as 4 map points (for the minimap).
 const _quad = { p: new THREE.Vector3(), plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.3), pts: [[0, 0], [0, 0], [0, 0], [0, 0]], out: [] };

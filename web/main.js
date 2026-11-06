@@ -1927,7 +1927,8 @@ function loop(now) {
     Prof.add("HUD: other", t);
     frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
     // (Multiplayer rolls the trace in pumpMultiplayer, with the lockstep's numbers.)
-    if (!mp && Trace.roll(performance.now(), perfSnapshot())) renderTrace();
+    // (The snapshot only when the second is up: it takes the parts' times.)
+    if (!mp && Trace.due(performance.now()) && Trace.roll(performance.now(), perfSnapshot())) renderTrace();
     // Is the game over? For a player, from their own point of view; for
     // someone only watching, once anyone has won.
     // (Multiplayer decides in pumpMultiplayer, on the confirmed copy.)
@@ -1987,7 +1988,7 @@ function stepMultiplayer(now) {
     Trace.event("resume", { ms });
     stalledSince = 0;
   }
-  if (Trace.roll(now, Object.assign(mp.snapshot(), partsSnapshot()))) renderTrace();
+  if (Trace.due(now) && Trace.roll(now, Object.assign(mp.snapshot(), partsSnapshot()))) renderTrace();
   if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
