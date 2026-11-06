@@ -1092,6 +1092,7 @@ function buildWorld() {
   if (R3.res) for (const m of Object.values(R3.res)) scene.remove(m);
   R3.resKey = "";
   R3.flattened = new Set();
+  R3.flatBase = new Map(); // ground height under each levelled site, by "x0,y0,size"
 
   const h = R3.heights, cw = MW + 1;
   const geo = new THREE.PlaneGeometry(MW, MH, MW, MH);
@@ -1400,10 +1401,15 @@ function buildTufts() {
   R3.scene.add(R3.tufts, R3.flowers, R3.pebbles);
 }
 // (Re)position all tufts: called after the ground under a building is levelled.
-function placeTufts() {
+// With a region (corners ax..bx, ay..by), only the tufts in it.
+function placeTufts(ax = -1e9, ay = -1e9, bx = 1e9, by = 1e9) {
   const blocked = t => { const b = R3.flattened; return b && b.has(t); };
+  const all = ax === -1e9;
   const put = (mesh, spots) => {
+    let lo = Infinity, hi = -1;
     spots.forEach((s, i) => {
+      if (s[0] < ax || s[0] > bx || s[1] < ay || s[1] > by) return;
+      lo = Math.min(lo, i); hi = i;
       // no grass on the beach (the ground shader turns low ground to sand)
       const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0]))) || hAt(s[0], s[1]) < 0.24;
       _p.set(s[0], hAt(s[0], s[1]) - 0.01, s[1]);
@@ -1412,8 +1418,17 @@ function placeTufts() {
       _m4.compose(_p, _q, _s);
       mesh.setMatrixAt(i, _m4);
     });
+    if (hi < 0) return;
+    const r = mesh.instanceMatrix.updateRange;
+    if (all) r.count = -1;
+    else { // (just the instances changed, joined with any not sent yet)
+      const from = lo * 16, end = (hi + 1) * 16;
+      if (r.count === -1) { r.offset = from; r.count = end - from; }
+      else { const e = Math.max(r.offset + r.count, end); r.offset = Math.min(r.offset, from); r.count = e - r.offset; }
+    }
     mesh.instanceMatrix.needsUpdate = true;
-    mesh.computeBoundingSphere();
+    // (A few tufts moving a little doesn't change the map-wide bounds.)
+    if (all) mesh.computeBoundingSphere();
   };
   put(R3.tufts, R3.tuftSpots);
   put(R3.flowers, R3.flowerSpots);
@@ -1426,6 +1441,11 @@ function placeTufts() {
 function flattenUnder(cx, cy, s) {
   const h = R3.heights, cw = MW + 1;
   const x0 = Math.round(cx - s / 2), y0 = Math.round(cy - s / 2);
+  // Already levelled (the building was there before and is back out of the
+  // fog): nothing to do, and blending its ring again would sink it further.
+  const site = x0 + "," + y0 + "," + s;
+  const had = R3.flatBase.get(site);
+  if (had !== undefined) return had;
   // Corners at the water's edge stay where they are: a fishing hut by a
   // pond mustn't fill it in.
   const wet = R3.wet;
@@ -1444,12 +1464,50 @@ function flattenUnder(cx, cy, s) {
     set(x, y, ring ? (h[y * cw + x] + base) / 2 : base);
   }
   for (let y = y0; y < y0 + s; y++) for (let x = x0; x < x0 + s; x++) R3.flattened.add(y * MW + x);
-  pos.needsUpdate = true;
-  R3.terrain.geometry.computeVertexNormals();
+  // Shade again and send to the graphics card only the rows changed, not
+  // the whole map (that was 130 to 150 ms each time).
+  terrainNormals(x0 - 2, y0 - 2, x0 + s + 2, y0 + s + 2);
   groundChanged();
   R3.resKey = "";
-  placeTufts();
+  placeTufts(x0 - 2, y0 - 2, x0 + s + 2, y0 + s + 2);
+  R3.flatBase.set(site, base);
   return base;
+}
+
+// Recompute the terrain's normals for the corners from (ax, ay) to (bx, by),
+// the same way computeVertexNormals does for the whole mesh (each corner's
+// triangles' unnormalised normals, summed), and upload just those rows.
+const _na = new THREE.Vector3(), _nb = new THREE.Vector3(), _nc = new THREE.Vector3(), _cb = new THREE.Vector3(), _ab = new THREE.Vector3();
+function terrainNormals(ax, ay, bx, by) {
+  const geo = R3.terrain.geometry, cw = MW + 1;
+  const pos = geo.attributes.position, nor = geo.attributes.normal, idx = geo.index.array;
+  ax = Math.max(0, ax); ay = Math.max(0, ay); bx = Math.min(MW, bx); by = Math.min(MH, by);
+  const inside = v => { const x = v % cw, y = (v - x) / cw; return x >= ax && x <= bx && y >= ay && y <= by; };
+  for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) nor.setXYZ(y * cw + x, 0, 0, 0);
+  // The cells touching those corners; PlaneGeometry has 2 triangles (6
+  // indices) per cell, row by row.
+  for (let cy = Math.max(0, ay - 1); cy <= Math.min(MH - 1, by); cy++) for (let cx = Math.max(0, ax - 1); cx <= Math.min(MW - 1, bx); cx++) {
+    for (let t = 0; t < 2; t++) {
+      const k = (cy * MW + cx) * 6 + t * 3, va = idx[k], vb = idx[k + 1], vc = idx[k + 2];
+      _na.fromBufferAttribute(pos, va); _nb.fromBufferAttribute(pos, vb); _nc.fromBufferAttribute(pos, vc);
+      _cb.subVectors(_nc, _nb); _ab.subVectors(_na, _nb); _cb.cross(_ab);
+      for (const v of [va, vb, vc]) if (inside(v)) nor.setXYZ(v, nor.getX(v) + _cb.x, nor.getY(v) + _cb.y, nor.getZ(v) + _cb.z);
+    }
+  }
+  for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) {
+    const v = y * cw + x;
+    _na.fromBufferAttribute(nor, v).normalize();
+    nor.setXYZ(v, _na.x, _na.y, _na.z);
+  }
+  // One range per attribute (three r158; it goes back to -1, "all", once
+  // sent): the rows from ay to by, joined with any not sent yet.
+  const from = ay * cw * 3, count = (by - ay + 1) * cw * 3;
+  for (const a of [pos, nor]) {
+    const r = a.updateRange;
+    if (r.count === -1) { r.offset = from; r.count = count; }
+    else { const end = Math.max(r.offset + r.count, from + count); r.offset = Math.min(r.offset, from); r.count = end - r.offset; }
+    a.needsUpdate = true;
+  }
 }
 
 function updateFowTexture() {

@@ -478,6 +478,13 @@ pub struct Game {
     pub map: Map,
     pub deps: Vec<Deposit>,
     pub ents: Vec<Entity>,
+    /// Every building's id, alive or not, in id order (`ents` only ever
+    /// grows, and a building stays one): for passes over the buildings
+    /// alone. Not saved: worked out again on loading.
+    pub(crate) blds: Vec<u32>,
+    /// Every id each player has had, alive or not, in id order (an
+    /// entity's owner never changes): see `own`. Not saved either.
+    pub(crate) owned: Vec<Vec<u32>>,
     /// Index 0 is unused (gaia); players are 1..=n_players.
     pub players: Vec<Player>,
     pub n_players: u8,
@@ -558,11 +565,18 @@ impl Game {
     pub(crate) fn from_parts(seed: u32, map: Map, deps: Vec<Deposit>, ents: Vec<Entity>, players: Vec<Player>, n_players: u8, proj: Vec<Projectile>, fog: Vec<u8>, ais: Vec<Ai>, local: u8) -> Game {
         let n = (map.w * map.h) as usize;
         let cells = ((map.w / CELL + 1) * (map.h / CELL + 1)) as usize;
+        let blds = ents.iter().filter(|e| e.is_building()).map(|e| e.id).collect();
+        let mut owned: Vec<Vec<u32>> = Vec::new();
+        for e in &ents {
+            Self::add_owned(&mut owned, e);
+        }
         let mut g = Game {
             seed,
             map,
             deps,
             ents,
+            blds,
+            owned,
             players,
             n_players,
             proj,
@@ -658,6 +672,10 @@ impl Game {
     pub fn spawn_unit(&mut self, kind: Kind, owner: u8, x: f32, y: f32) -> u32 {
         let id = self.ents.len() as u32;
         self.ents.push(Entity::new(id, kind, owner, x, y));
+        Self::add_owned(&mut self.owned, &self.ents[id as usize]);
+        if kind.is_building() {
+            self.blds.push(id);
+        }
         id
     }
 
@@ -674,6 +692,8 @@ impl Game {
         }
         e.seen = owner == self.local;
         self.ents.push(e);
+        Self::add_owned(&mut self.owned, &self.ents[id as usize]);
+        self.blds.push(id);
         self.stamp(id);
         id
     }
@@ -691,7 +711,23 @@ impl Game {
         e.hp = kind.stats().hp * 0.1;
         e.seen = owner == self.local;
         self.ents.push(e);
+        Self::add_owned(&mut self.owned, &self.ents[id as usize]);
+        self.blds.push(id);
         id
+    }
+
+    fn add_owned(owned: &mut Vec<Vec<u32>>, e: &Entity) {
+        let o = e.owner as usize;
+        if owned.len() <= o {
+            owned.resize(o + 1, Vec::new());
+        }
+        owned[o].push(e.id);
+    }
+
+    /// `owner`'s living things, in id order: as filtering every entity by
+    /// owner, without the pass over everyone else's.
+    pub(crate) fn own(&self, owner: u8) -> impl Iterator<Item = &Entity> + '_ {
+        self.owned.get(owner as usize).into_iter().flatten().map(move |&i| &self.ents[i as usize]).filter(|e| e.alive)
     }
 
     /// A building takes its tiles: they're its, and blocked if it blocks.
@@ -818,7 +854,7 @@ impl Game {
 
     /// Does `owner` have at least one *finished* building of this kind?
     pub fn has_built(&self, owner: u8, kind: Kind) -> bool {
-        self.ents.iter().any(|e| e.alive && e.owner == owner && e.kind == kind && e.built >= 1.0)
+        self.own(owner).any(|e| e.kind == kind && e.built >= 1.0)
     }
 
     /// Has `owner` reached `kind`'s era, with every building it requires in place?
@@ -830,7 +866,7 @@ impl Game {
     /// `HOUSES_FOR_ERA` of them take the player into the next era.
     pub fn houses_past_era(&self, owner: u8) -> u32 {
         let era = self.players[owner as usize].era;
-        self.ents.iter().filter(|e| e.alive && e.owner == owner && e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| t > era)).count() as u32
+        self.own(owner).filter(|e| e.built >= 1.0 && e.kind.house_tier().is_some_and(|t| t > era)).count() as u32
     }
 
     /// Is `owner` in cheat mode?
@@ -898,7 +934,7 @@ impl Game {
 
     /// How many of `kind` `owner` has, foundations included.
     pub fn count_of(&self, owner: u8, kind: Kind) -> usize {
-        self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == kind).count()
+        self.own(owner).filter(|e| e.kind == kind).count()
     }
 
     /// The most of `kind` the computer builds: the balance target
@@ -993,8 +1029,9 @@ impl Game {
         if bk.0 == 0 {
             return best;
         }
-        for e in self.ents.iter() {
-            if e.alive && e.is_building() && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && self.staked(e) {
+        for &b in &self.blds {
+            let e = &self.ents[b as usize];
+            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && self.staked(e) {
                 let k = key(e);
                 if better(k, bk) {
                     bk = k;
@@ -1726,7 +1763,7 @@ impl Game {
                 h = h.wrapping_mul(0x0100_0193);
             }
         };
-        for e in self.ents.iter().filter(|e| e.alive && e.owner == owner) {
+        for e in self.own(owner) {
             mix(e.id);
             mix(e.x.to_bits());
             mix(e.y.to_bits());
@@ -2571,7 +2608,10 @@ impl Game {
         let w = self.map.w;
         let me = self.local;
         let map = &self.map;
-        for e in self.ents.iter().filter(|e| e.alive && e.owner == me && Self::staked_on(map, e)) {
+        // (Split borrows: the fog is written while the entities are read.)
+        let (ents, owned) = (&self.ents, &self.owned);
+        let mine = owned.get(me as usize).into_iter().flatten().map(|&i| &ents[i as usize]).filter(|e| e.alive);
+        for e in mine.filter(|e| Self::staked_on(map, e)) {
             let st = e.kind.stats();
             let r = st.sight + st.size as f32 / 2.0;
             let ri = r.ceil() as i32;

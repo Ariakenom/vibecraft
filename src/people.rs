@@ -59,10 +59,7 @@ impl Game {
 
     /// `owner`'s finished Capitols, oldest first.
     pub fn capitols(&self, owner: u8) -> impl Iterator<Item = usize> + '_ {
-        (0..self.ents.len()).filter(move |&i| {
-            let e = &self.ents[i];
-            e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0
-        })
+        self.own(owner).filter(|e| e.kind == Kind::Capitol && e.built >= 1.0).map(|e| e.id as usize)
     }
 
     /// Every campfire of `owner`'s, oldest Capitol first.
@@ -350,16 +347,23 @@ impl Game {
         }
         // 5.
         self.supply_units(settle);
-        // 6–7, player by player, then house tiers and eras.
+        // 6–7, player by player, then house tiers and eras. Everyone's
+        // houses and Capitols sorted by owner in one pass first: with dozens
+        // of barbarian camps, passes over every entity for each player were
+        // most of a tick. (Nothing below makes or removes a house or a
+        // Capitol, so the lists hold all the way through.)
+        let (houses_of, caps_of) = self.houses_and_capitols();
         for owner in self.player_ids() {
-            self.house_goods(owner, settle);
+            let houses = self.by_distance(&houses_of[owner as usize], &caps_of[owner as usize]);
+            let caps = caps_of[owner as usize].len() as u32;
+            self.house_goods(owner, settle, &houses, caps);
             if settle {
                 self.leave(owner);
             }
-            self.fill_houses(owner);
+            self.fill_houses(&houses);
             if settle {
-                self.raise_era(owner);
-                self.house_tiers(owner);
+                self.raise_era(owner, &houses);
+                self.house_tiers(owner, &houses);
             }
         }
     }
@@ -425,11 +429,11 @@ impl Game {
     /// one house a tick, nearest the Capitol first. Houses never shrink: a
     /// house that loses goods keeps its kind (and its materials), it just
     /// has fewer beds until the goods come back.
-    fn house_tiers(&mut self, owner: u8) {
+    fn house_tiers(&mut self, owner: u8, houses: &[usize]) {
         if !self.ais.get(owner as usize).is_some_and(|a| a.on) {
             return;
         }
-        for i in self.houses_by_distance(owner) {
+        for &i in houses {
             if let Ok(next) = self.house_upgrade(i) {
                 self.change_house(i, next);
                 return;
@@ -462,7 +466,7 @@ impl Game {
 
     /// A player enters the next era when `HOUSES_FOR_ERA` of their houses
     /// have reached its tier. Eras are never lost.
-    fn raise_era(&mut self, owner: u8) {
+    fn raise_era(&mut self, owner: u8, houses: &[usize]) {
         let era = self.players[owner as usize].era;
         if era >= LAST_ERA.min(self.era_cap(owner)) {
             return;
@@ -471,7 +475,9 @@ impl Game {
         if self.ais.get(owner as usize).is_some_and(|a| a.on && a.difficulty == 0) && self.time < EASY_ERA_AT[era as usize] {
             return;
         }
-        if self.houses_past_era(owner) >= HOUSES_FOR_ERA {
+        // (houses_past_era, from the houses already listed)
+        let past = houses.iter().filter(|&&i| self.ents[i].built >= 1.0 && self.ents[i].kind.house_tier().is_some_and(|t| t > era)).count() as u32;
+        if past >= HOUSES_FOR_ERA {
             self.players[owner as usize].era = era + 1;
             if self.is_barb(owner) {
                 return;
@@ -484,23 +490,41 @@ impl Game {
     /// distance in whole tiles to the nearest finished one, so it's exact on
     /// every computer.
     pub(crate) fn houses_by_distance(&self, owner: u8) -> Vec<usize> {
-        let caps: Vec<(i32, i32)> = self.capitols(owner).map(|c| (self.ents[c].tx, self.ents[c].ty)).collect();
+        let houses: Vec<usize> = (0..self.ents.len()).filter(|&i| self.ents[i].alive && self.ents[i].owner == owner && self.ents[i].kind.house_tier().is_some()).collect();
+        let caps: Vec<usize> = self.capitols(owner).collect();
+        self.by_distance(&houses, &caps)
+    }
+
+    /// `houses` (in id order), nearest one of `caps` first, as
+    /// `houses_by_distance`.
+    fn by_distance(&self, houses: &[usize], caps: &[usize]) -> Vec<usize> {
+        let caps: Vec<(i32, i32)> = caps.iter().map(|&c| (self.ents[c].tx, self.ents[c].ty)).collect();
         let near = |e: &Entity| caps.iter().map(|&(cx, cy)| (e.tx - cx).pow(2) + (e.ty - cy).pow(2)).min().unwrap_or(0);
-        let mut hs: Vec<(i32, usize)> = self
-            .ents
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.alive && e.owner == owner && e.kind.house_tier().is_some())
-            .map(|(i, e)| (near(e), i))
-            .collect();
+        let mut hs: Vec<(i32, usize)> = houses.iter().map(|&i| (near(&self.ents[i]), i)).collect();
         hs.sort();
         hs.into_iter().map(|(_, i)| i).collect()
     }
 
+    /// Every player's houses, and finished Capitols, in id order.
+    fn houses_and_capitols(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        let n = self.players.len();
+        let (mut houses, mut caps) = (vec![Vec::new(); n], vec![Vec::new(); n]);
+        for (i, e) in self.ents.iter().enumerate() {
+            if !e.alive || e.owner as usize >= n {
+                continue;
+            }
+            if e.kind.house_tier().is_some() {
+                houses[e.owner as usize].push(i);
+            } else if e.kind == Kind::Capitol && e.built >= 1.0 {
+                caps[e.owner as usize].push(i);
+            }
+        }
+        (houses, caps)
+    }
+
     /// Step 6 for one player: the goods each house gets, and so its beds.
     /// With `settle` false, only count what the houses hold now.
-    fn house_goods(&mut self, owner: u8, settle: bool) {
-        let houses = self.houses_by_distance(owner);
+    fn house_goods(&mut self, owner: u8, settle: bool, houses: &[usize], capitols: u32) {
         if settle {
             let p = &self.players[owner as usize];
             // What's left for houses after buildings and units.
@@ -553,11 +577,10 @@ impl Game {
             }
         }
         // Every finished Capitol has a few beds of its own.
-        let capitols = self.ents.iter().filter(|e| e.alive && e.owner == owner && e.kind == Kind::Capitol && e.built >= 1.0).count() as u32;
         let p = &mut self.players[owner as usize];
         p.housed = [0; N_RES];
         p.beds = capitols * CAPITOL_BEDS;
-        for &i in &houses {
+        for &i in houses {
             let e = &self.ents[i];
             for (r, slot) in p.housed.iter_mut().enumerate() {
                 *slot += (e.goods >> r & 1) as u16;
@@ -609,9 +632,10 @@ impl Game {
     /// full and ready to; among the same tier, nearest the Capitol first.
     /// Nothing depends on it but the drawing and the house tiers (a house
     /// is full when every bed is taken).
-    fn fill_houses(&mut self, owner: u8) {
-        let mut left = self.players[owner as usize].people;
-        let mut order = self.houses_by_distance(owner);
+    fn fill_houses(&mut self, houses: &[usize]) {
+        let Some(&first) = houses.first() else { return };
+        let mut left = self.players[self.ents[first].owner as usize].people;
+        let mut order = houses.to_vec();
         order.sort_by_key(|&i| self.ents[i].kind.house_tier()); // stable: keeps the distance order within a tier
         for i in order {
             let e = &mut self.ents[i];
@@ -894,8 +918,8 @@ impl Game {
     /// Free workers of `owner` not yet spoken for by a training queue.
     pub fn unclaimed_workers(&self, owner: u8) -> u32 {
         let free = self.ents.iter().filter(|e| e.owner == owner && self.is_free_worker(e)).count() as u32;
-        let coming = self.ents.iter().filter(|e| e.alive && e.owner == owner && matches!(e.order, Order::Enlist(_))).count() as u32;
-        let waiting: u32 = self.ents.iter().filter(|e| e.alive && e.owner == owner).map(|b| (b.queue.len() as u32).saturating_sub(b.recruits as u32)).sum();
+        let coming = self.own(owner).filter(|e| matches!(e.order, Order::Enlist(_))).count() as u32;
+        let waiting: u32 = self.own(owner).map(|b| (b.queue.len() as u32).saturating_sub(b.recruits as u32)).sum();
         free.saturating_sub(waiting.saturating_sub(coming))
     }
 

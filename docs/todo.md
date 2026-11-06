@@ -27,10 +27,8 @@ not straight away (see `CLAUDE.md`).
   (`diag_camp` in barbarians.rs shows a camp's houses and the AI's reasons).
   Ideas besides fixing the stall: camps start at their site's era with a
   garrison, or grow faster the higher their cap.
-- **Placing a building reshades the whole terrain** (`flattenUnder` in
-  render3d.js recomputes every normal). Also left from the garbage work:
-  about 20 MB a second still, mostly three.js setting uniforms and the
-  unit animation (`animateRig`).
+- **More garbage to cut**: about 20 MB a second is left, mostly three.js
+  setting uniforms and the unit animation (`animateRig`).
 
 ## Done
 
@@ -53,3 +51,13 @@ not straight away (see `CLAUDE.md`).
   both plain and skinned/instanced meshes, or with and without shadows.
   Now each kind has its own material (`entMats` in render3d.js), and
   `test/browser/garbage.mjs` profiles what a frame allocates.
+- **Faster ticks in big games** (3-player Frontier playtest, Nov 2026: the
+  others left over the lag). At minute 33 a tick took 12.4 ms, now 4.0
+  (natively; the same game, checksum for checksum). Passes over every
+  entity for each of the dozens of barbarian camps were most of it: each
+  player's things are now listed by owner (`Game::own`), the buildings
+  apart (`Game::blds`), and the AI counts a town's buildings once per
+  question (`Game::tally`). `diag_save_time` times a save's ticks by part.
+- **Placing a building no longer reshades the whole map**: only the
+  corners round it (130 to 150 ms a time before), and a building seen
+  again out of the fog doesn't level its ground again.
