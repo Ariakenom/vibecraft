@@ -440,13 +440,13 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
             deps.push(Deposit { kind, tx: x, ty: y });
         }
     }
-    // Beaches only by the water (as in `generate`).
+    // Beaches one tile wide, only by the water (as in `generate`).
     let floor = (SHADE_BEACH * 255.0).ceil() as u8;
     let wet = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && terrain[(y * w + x) as usize] == WATER;
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) as usize;
-            if terrain[i] != WATER && !(-2..=2).any(|dy| (-2..=2).any(|dx| wet(x + dx, y + dy))) {
+            if terrain[i] != WATER && !(-1..=1).any(|dy| (-1..=1).any(|dx| wet(x + dx, y + dy))) {
                 shade[i] = shade[i].max(floor);
             }
         }

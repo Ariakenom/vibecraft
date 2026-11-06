@@ -767,16 +767,18 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
 
-    // Beaches only by the water: the 3D view draws ground lower than
-    // `SHADE_BEACH` as sand, so dips in the land that never reach the water
-    // looked like dried-up lakes. Land more than two tiles from any water is
-    // drawn at least that high. (Shade is for drawing only.)
+    // Beaches one tile wide, only by the water: the 3D view draws ground
+    // lower than `SHADE_BEACH` as sand. Low land along rivers and lakes was
+    // drawn as sand two or three tiles deep, a fifth of all the land on some
+    // maps, and looked like dried-up lakes. Land not touching water (not
+    // even at a corner) is drawn at least that high, whatever its type.
+    // (Shade is for drawing only.)
     let floor = (SHADE_BEACH * 255.0).ceil() as u8;
     let wet = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && matches!(terrain[(y * w + x) as usize], WATER | SHALLOW);
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) as usize;
-            if !matches!(terrain[i], WATER | SHALLOW) && !(-2..=2).any(|dy| (-2..=2).any(|dx| wet(x + dx, y + dy))) {
+            if !matches!(terrain[i], WATER | SHALLOW) && !(-1..=1).any(|dy| (-1..=1).any(|dx| wet(x + dx, y + dy))) {
                 shade[i] = shade[i].max(floor);
             }
         }
@@ -853,9 +855,11 @@ mod tests {
 #[cfg(test)]
 mod dry_lakes {
     use super::*;
-    /// No dried-up lakes: grass far from water is never drawn as beach (the
-    /// 3D view draws ground below `SHADE_BEACH` as sand). Before, maps with
-    /// low water had up to 600 such tiles, in wide sandy basins.
+    /// No dried-up lakes: land not touching water is never drawn as beach
+    /// (the 3D view draws ground below `SHADE_BEACH` as sand). Before, maps
+    /// with low water had up to 600 such tiles, in wide sandy basins.
+    /// (The dry lakes players saw were mostly the water drawn wrong on a
+    /// second map of another size: see uHeightBox in render3d.js.)
     #[test]
     fn grass_far_from_water_is_not_drawn_as_sand() {
         for players in [2usize, 4] {
@@ -865,13 +869,13 @@ mod dry_lakes {
                 for y in 0..m.h {
                     for x in 0..m.w {
                         let i = m.idx(x, y);
-                        let near_water = (-2..=2).any(|dy| (-2..=2).any(|dx| m.inside(x + dx, y + dy) && matches!(m.terrain[m.idx(x + dx, y + dy)], WATER | SHALLOW)));
-                        if matches!(m.terrain[i], GRASS | HILL) && (m.shade[i] as f32) < SHADE_BEACH * 255.0 && !near_water {
+                        let near_water = (-1..=1).any(|dy| (-1..=1).any(|dx| m.inside(x + dx, y + dy) && matches!(m.terrain[m.idx(x + dx, y + dy)], WATER | SHALLOW)));
+                        if !matches!(m.terrain[i], WATER | SHALLOW) && (m.shade[i] as f32) < SHADE_BEACH * 255.0 && !near_water {
                             n += 1;
                         }
                     }
                 }
-                assert_eq!(n, 0, "{players} players, seed {seed}: {n} tiles of grass far from water drawn as sand");
+                assert_eq!(n, 0, "{players} players, seed {seed}: {n} tiles of land not touching water drawn as sand");
             }
         }
     }

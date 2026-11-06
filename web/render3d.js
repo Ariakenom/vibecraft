@@ -952,6 +952,15 @@ function initRenderer() {
   R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
   scene.add(R3.puffMesh);
   R3.puffs = [];
+  // Bullets: thin bright tracers, too fast to be anything else.
+  R3.tracers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.016, 0.016), new THREE.MeshBasicMaterial({ color: "#ffe9a6", transparent: true, opacity: 0.85, depthWrite: false }), 128);
+  R3.tracers.frustumCulled = false; R3.tracers.count = 0;
+  scene.add(R3.tracers);
+  // Muzzle flashes: a glowing burst at the end of the gun for a few frames.
+  R3.flashMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ color: "#ffc860", transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }), 48);
+  R3.flashMesh.frustumCulled = false; R3.flashMesh.count = 0;
+  scene.add(R3.flashMesh);
+  R3.flashes = [];
 
   // Rally flag
   const rm = new Model();
@@ -1015,13 +1024,19 @@ function computeHeights() {
     shallowShare[cy * cw + cx] = n > land ? shallow / (n - land) : 0;
   }
   // Two blur passes turn the blocky per-tile steps into rolling hills.
+  // Land is smoothed with land and water with water: blurred together, a
+  // river bed pulled the land beside it down below the sand line, and every
+  // river ran through a wide strip of sand like a dried-up lake. (Corners on
+  // the shore are set below anyway.)
+  const kind = i => landShare[i] === 1 ? 1 : landShare[i] === 0 ? 0 : 2;
   for (let pass = 0; pass < 2; pass++) {
     const o = new Float32Array(h.length);
     for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+      const me = kind(cy * cw + cx);
       let sum = 0, n = 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const x = cx + dx, y = cy + dy;
-        if (x < 0 || y < 0 || x >= cw || y >= ch) continue;
+        if (x < 0 || y < 0 || x >= cw || y >= ch || (me !== 2 && kind(y * cw + x) !== me)) continue;
         const wgt = dx || dy ? 1 : 2;
         sum += h[y * cw + x] * wgt; n += wgt;
       }
@@ -1197,12 +1212,18 @@ function buildWater() {
   withFow(mat, sh => {
     sh.uniforms.uTime = timeUniform;
     sh.uniforms.uHeight = { value: htex };
+    // The height map's corner and size, as a uniform and never written into
+    // the shader's text: three.js reuses a compiled shader whose source looks
+    // the same (withFow), so a new map of another size got the last map's
+    // numbers, read the heights at the wrong scale, and drew lakes as dry
+    // sand and dry land as deep water.
+    sh.uniforms.uHeightBox = { value: new THREE.Vector4(pad, pad, MW + pad * 2, MH + pad * 2) };
     sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
       vDepth = aDepth;
       vWPos = position.xz;
       // A slow swell, calm in the shallows.
       transformed.y += (sin(position.x * 0.9 + uTime * 0.9) + cos(position.z * 0.7 + uTime * 0.65) + sin((position.x + position.z) * 1.6 + uTime * 1.4) * 0.5) * 0.018 * clamp(aDepth * 3.0, 0.0, 1.0);`);
-    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + `
+    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nuniform vec4 uHeightBox;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + `
       // The water's surface: waves running different ways, and noise to
       // break them up. Returns its slope (d height / dx, dz), for the normal.
       vec2 waterSlope(vec2 p, float t) {
@@ -1220,7 +1241,7 @@ function buildWater() {
       }
     ` + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
-        float ground = texture2D(uHeight, (vWPos + ${pad}.0) / vec2(${MW + pad * 2}.0, ${MH + pad * 2}.0)).r;
+        float ground = texture2D(uHeight, (vWPos + uHeightBox.xy) / uHeightBox.zw).r;
         float dRaw = ${WATER_Y.toFixed(3)} - ground;
         if (dRaw < -0.01) discard;
         float d = clamp(dRaw, 0.0, 2.0);
@@ -1695,7 +1716,13 @@ function animateRig(o, kind, anim, t, dt, hit) {
     B.tail.rotation.x = Math.sin(T * 1.7) * 0.25;
     B.armL.rotation.z = 0.5; B.armL.rotation.x = 0.2;           // holding the reins
     let arm = 0.9, jab = 0;
-    if (anim === 3) { jab = Math.max(0, Math.sin(T * 7)); arm = 1.0 + jab * 0.5; B.body.rotation.z -= jab * 0.25; }
+    if (kind === K.Dragoon) {
+      // A carbine: held level while fighting, a kick at each real shot.
+      const kick = recoil(sinceShot(o));
+      if (anim === 3) arm = 1.3 + kick * 0.35;
+      B.body.rotation.z += kick * 0.2;
+      jab = -kick * 1.5;
+    } else if (anim === 3) { jab = Math.max(0, Math.sin(T * 7)); arm = 1.0 + jab * 0.5; B.body.rotation.z -= jab * 0.25; }
     B.armR.rotation.z = arm;
     o.toolMesh.rotation.z = -arm - B.body.rotation.z + 0.12 - jab * 0.15;  // the lance stays couched, pointing forward
   } else {
@@ -1732,15 +1759,22 @@ function animateRig(o, kind, anim, t, dt, hit) {
       B.armL.rotation.z = 0.9; B.armL.rotation.x = 0.4;
       if (!walking) { B.legL.rotation.z = 0.35; B.legR.rotation.z = -0.3; }
       toolWorld = -1.45 - jab * 0.1;
-    } else if (anim === 3 && (kind === K.Crossbowman || kind === K.Musketeer || kind === K.Rifleman || kind === K.MachineGunner || kind === K.Infantry)) {
-      // Crossbow levelled at the target in both hands; a kick when it looses.
-      const kick = Math.max(0, Math.sin(T * 2.4) - 0.9) * 4;
-      B.armR.rotation.z = 1.3 + kick * 0.15; B.armL.rotation.z = 1.25; B.armL.rotation.x = -0.35;
-      B.body.rotation.z += -kick * 0.08;
-      toolWorld = 0;
+    } else if ((anim === 3 || (!walking && sinceShot(o) < 1.5)) && (kind === K.Crossbowman || kind === K.Musketeer || kind === K.Rifleman || kind === K.MachineGunner || kind === K.Infantry)) {
+      // The weapon levelled at the target in both hands. Each real shot
+      // kicks it up and the shooter back; slow weapons are lowered to
+      // reload between shots, then brought up to aim again.
+      const s = sinceShot(o), cd = stat(kind, 8);
+      const kick = recoil(s) * (kind === K.MachineGunner ? 0.55 : 1);
+      const down = cd >= 2 ? Math.min(smooth((s - 0.35) / 0.3), 1 - smooth((s - (cd - 0.7)) / 0.4)) : 0;
+      B.armR.rotation.z = 1.3 + kick * 0.3 - down * 0.7; B.armL.rotation.z = 1.25 + kick * 0.2 - down * 0.35; B.armL.rotation.x = -0.35;
+      B.body.rotation.z += kick * 0.22 + down * 0.08;
+      B.head.rotation.z -= kick * 0.15;
+      toolWorld = kick * 0.35 + down * 1.1;
     } else if (anim === 3 && kind === K.Archer) {
-      // Bow arm out front, string hand drawn back to the chest, then loose.
-      const draw = Math.min(1, ((T * 0.6) % 1) * 1.6);
+      // Bow arm out front; the string hand looses at each real shot and
+      // draws back to the chest again for the next.
+      const s = sinceShot(o), cd = stat(kind, 8);
+      const draw = s > cd ? 1 : smooth((s - 0.2) / Math.max(0.3, cd * 0.6));
       B.armL.rotation.z = 1.45; B.armL.rotation.x = 0.25;
       B.armR.rotation.z = 1.2 + (1 - draw) * 0.3; B.armR.rotation.x = 0.55 * draw;
       B.body.rotation.y = 0.35;
@@ -1849,12 +1883,25 @@ function render3d(alpha, now, dt) {
     } else {
       o.body.position.y = anim === 1 ? Math.abs(Math.sin(ph * 11)) * 0.035 : 0;
       o.body.rotation.z = anim === 1 ? -0.06 : 0;
+      o.body.position.x = 0;
     }
+    const gun = kind === K.Cannon || kind === K.FieldGun || kind === K.Tank || kind === K.RocketArtillery;
     if (o.tool && isNaval(kind)) o.tool.rotation.z = 0;
     else if (o.tool) {
       let swing = 0;
-      if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
-      else if (anim === 3) swing = kind === K.Archer ? 0.35 : kind === K.Cannon || kind === K.FieldGun || kind === K.Tank || kind === K.RocketArtillery ? -Math.max(0, Math.sin(ph * 2.5) - 0.85) * 0.6 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
+      if (kind === K.Trebuchet) {
+        swing = trebuchetArm(sinceShot(o), stat(kind, 8));
+        // The whole engine rocks as the counterweight drops.
+        const s = sinceShot(o);
+        if (s < 1) o.body.rotation.z += Math.sin(s * 14) * 0.05 * (1 - s);
+      } else if (gun) {
+        // Each real shot: the barrel kicks up and the piece rolls back.
+        const k = recoil(sinceShot(o));
+        swing = -k * (kind === K.RocketArtillery ? 0.12 : 0.3);
+        o.body.position.x = -k * (kind === K.RocketArtillery ? 0.02 : 0.09);
+      }
+      else if (anim === 2) swing = Math.max(0, Math.sin(ph * 7)) * 1.6 - 0.4;
+      else if (anim === 3) swing = kind === K.Archer ? 0.35 : Math.max(0, Math.sin(ph * 9)) * 1.4 - 0.2;
       o.tool.rotation.z = -swing - o.toolTilt;
       if (isAir(kind)) { o.tool.rotation.z = 0; o.tool.rotation.x = t * 40; } // the propeller
     }
@@ -1894,6 +1941,7 @@ function render3d(alpha, now, dt) {
   updateSmoke();
   updateCampfires(performance.now());
   updatePuffs(performance.now());
+  updateFlashes(performance.now());
   updateNukes(performance.now(), alpha);
   updateAimRings();
   // Timed for the trace: handing the frame to the graphics card (and
@@ -2079,13 +2127,66 @@ function gunSmoke(x, y, kind) {
 // Where the shot leaves the gun: the end of the shooter's gun (or, for
 // cannon and the like, of the whole piece) furthest along the way it faces.
 const _box = new THREE.Box3(), _mz = new THREE.Vector3(), _best = new THREE.Vector3();
-function muzzle(x, y, kind) {
+// The drawn unit of this kind nearest (x, y): who fired a shot from there.
+function shooterAt(x, y, kind) {
   let o = null, bd = 0.6;
   for (const c of R3.objs.values()) {
     if (c.kind !== kind || c.x === undefined) continue;
     const d = Math.hypot(c.x - x, c.y - y);
     if (d < bd) { bd = d; o = c; }
   }
+  return o;
+}
+// A shot was fired (Ev::Shoot): the shooter's recoil, a trebuchet's throw
+// and an archer's loose are timed from this, so they only move when a shot
+// really leaves. Guns also flash at the muzzle.
+function shotFired(x, y, kind) {
+  const o = shooterAt(x, y, kind);
+  if (!o) return;
+  o.shotAt = performance.now();
+  if (isGun(kind) && !isAir(kind) && kind !== K.AirDefense && kind !== K.RocketArtillery && R3.flashes) {
+    const m = muzzle(x, y, kind, o);
+    if (m && R3.flashes.length < 48) R3.flashes.push({ x: m.x, y: m.y, z: m.z, t0: o.shotAt, big: isBigGun(kind), seed: Math.random() * 6.28 });
+  }
+}
+function updateFlashes(now) {
+  const m = R3.flashMesh;
+  if (!m) return;
+  let n = 0, keep = 0;
+  for (const f of R3.flashes) {
+    const life = f.big ? 140 : 90, age = (now - f.t0) / life;
+    if (age >= 1) continue;
+    R3.flashes[keep++] = f;
+    _p.set(f.x, f.y, f.z);
+    _q.setFromAxisAngle(_up, f.seed + age);
+    _s.setScalar((f.big ? 0.22 : 0.075) * (age < 0.25 ? 0.6 + age * 1.6 : 1 - (age - 0.25) / 0.75 * 0.9));
+    _m4.compose(_p, _q, _s);
+    m.setMatrixAt(n++, _m4);
+  }
+  R3.flashes.length = keep;
+  m.count = n;
+  m.instanceMatrix.needsUpdate = true;
+}
+// Seconds since this unit last fired (a long time if never).
+function sinceShot(o) { return o.shotAt ? (performance.now() - o.shotAt) / 1000 : 1e9; }
+// A recoil: a sharp kick that dies away in a few tenths of a second.
+function recoil(s) { return s > 0.5 ? 0 : s < 0.03 ? s / 0.03 : Math.exp(-(s - 0.03) * 12); }
+const smooth = p => p <= 0 ? 0 : p >= 1 ? 1 : p * p * (3 - 2 * p);
+// The trebuchet's arm, s seconds after a throw, with cd seconds to reload
+// (radians it has swung forward). It rests cocked; the counterweight drops
+// and whips the sling over the top in a fifth of a second (the stone leaves
+// on the shot's tick), bounces, hangs, then is winched slowly back.
+const TREB_SWING = 1.9;
+function trebuchetArm(s, cd) {
+  if (s >= cd) return 0;
+  if (s < 0.2) { const p = s / 0.2; return TREB_SWING * p * p; }
+  if (s < 0.7) { const p = (s - 0.2) / 0.5; return TREB_SWING + Math.sin(p * Math.PI * 2) * 0.18 * (1 - p); }
+  const back0 = 1.1, back1 = Math.max(back0 + 0.5, cd - 0.4);
+  return TREB_SWING * (1 - smooth((s - back0) / (back1 - back0)));
+}
+
+function muzzle(x, y, kind, o) {
+  o = o || shooterAt(x, y, kind);
   if (!o) return null;
   const mesh = (!isBigGun(kind) && o.toolMesh) || o.body;
   if (!mesh || !mesh.geometry) return null;
@@ -2198,8 +2299,8 @@ function updateResources() {
 // are worked out here from how far along the way they are.
 const _e = new THREE.Euler();
 function updateArrows(alpha) {
-  const a = R3.arrows, st = R3.stones, ms = R3.missiles, rk = R3.rockets, S = PROJ_STRIDE;
-  let na = 0, ns = 0, nm = 0, nr = 0;
+  const a = R3.arrows, st = R3.stones, ms = R3.missiles, rk = R3.rockets, tr = R3.tracers, S = PROJ_STRIDE;
+  let na = 0, ns = 0, nm = 0, nr = 0, nt = 0;
   for (let i = 0; i < Math.min(projCount, 256); i++) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
@@ -2214,7 +2315,22 @@ function updateArrows(alpha) {
     // A torpedo runs along the water, drawn like a rocket without the smoke.
     const torpedo = shooter === K.Submarine;
     const rocket = shooter === K.RocketArtillery || torpedo;
-    if (shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet) continue; // bullets are too small to see
+    const bullet = shooter === K.Musketeer || shooter === K.Dragoon || shooter === K.Rifleman || shooter === K.MachineGunner || shooter === K.Infantry || shooter === K.Fighter || shooter === K.Jet;
+    if (bullet) {
+      // A tracer: a short bright streak, straight from the gun to the target.
+      if (nt >= 128) continue;
+      const air = isAir(shooter);
+      const ox = sx + dx * 0.3, oy = sy + dy * 0.3;
+      const flown = Math.hypot(ix - ox, iy - oy), total = Math.max(0.3, flown + Math.hypot(tx - ix, ty - iy));
+      const t = Math.min(1, flown / total);
+      const h0 = groundAt(ox, oy) + (air ? AIR_ALT : shooter === K.Dragoon ? 0.72 : 0.5), h1 = groundAt(tx, ty) + (atBuilding ? 0.8 : 0.45);
+      _p.set(ix, h0 + (h1 - h0) * t, iy);
+      _q.setFromEuler(_e.set(0, -Math.atan2(dy, dx), Math.atan2(h1 - h0, total), "YZX"));
+      _s.set(1, 1, 1);
+      _m4.compose(_p, _q, _s);
+      tr.setMatrixAt(nt++, _m4);
+      continue;
+    }
     const missile = shooter === K.AirDefense;
     const fromH = torpedo ? 0.02 : missile ? 0.7 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
@@ -2243,7 +2359,8 @@ function updateArrows(alpha) {
     } else if (stone) { if (ns < 64) st.setMatrixAt(ns++, _m4); }
     else a.setMatrixAt(na++, _m4);
   }
-  a.count = na; st.count = ns; ms.count = nm; rk.count = nr;
+  a.count = na; st.count = ns; ms.count = nm; rk.count = nr; tr.count = nt;
+  tr.instanceMatrix.needsUpdate = true;
   ms.instanceMatrix.needsUpdate = true;
   rk.instanceMatrix.needsUpdate = true;
   a.instanceMatrix.needsUpdate = true;

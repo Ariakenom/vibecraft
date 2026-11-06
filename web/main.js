@@ -240,21 +240,21 @@ const RES_ICON = [
   '<svg viewBox="0 0 16 16"><path d="M8 4.2c2.6-1.6 6 .2 6 4 0 3.4-2.7 6.6-6 6.6S2 11.6 2 8.2c0-3.8 3.4-5.6 6-4z" fill="#c9473a"/><path d="M8 4.5C8 2.8 9 1.6 10.6 1.2" stroke="#6fa046" stroke-width="1.5" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M4 14l.6-5.5C3.5 7 3.6 4.6 5.5 3.3L7 1.5l.6 2c2.6.3 5.1 2.4 6 5.4l-1.7.8-2.2-1.4-.2 5.7z" fill="#8a5a33"/><path d="M7 1.5l.6 2-1.2 2.6-1.5-1.3z" fill="#3b2618"/><circle cx="9.6" cy="5.6" r=".7" fill="#1d1208"/></svg>',
   // wool, iron, brick, bread, clothes, beer
-  '<svg viewBox="0 0 16 16"><g fill="#ece6d6"><circle cx="5" cy="9" r="3.2"/><circle cx="9" cy="7" r="3.4"/><circle cx="11" cy="10.5" r="3"/><circle cx="7" cy="11.5" r="2.8"/></g><path d="M6 9.5c1.5-1 3-1 4.5 0" stroke="#c9bfa8" fill="none"/></svg>',
-  '<svg viewBox="0 0 16 16"><path d="M2 11l3-5h9l-3 5z" fill="#6f7680"/><path d="M2 11h9v2.5H2z" fill="#4c525a"/><path d="M11 11l3-5v2.5l-3 5z" fill="#5b6169"/><path d="M5.5 7h6" stroke="#a7aeb7" stroke-width=".8"/></svg>',
+  '<svg viewBox="0 0 16 16"><g fill="#ece6d6" stroke="#9d937c" stroke-width=".6"><circle cx="5" cy="9" r="3.2"/><circle cx="9" cy="7" r="3.4"/><circle cx="11" cy="10.5" r="3"/><circle cx="7" cy="11.5" r="2.8"/></g><path d="M6 9.5c1.5-1 3-1 4.5 0" stroke="#c9bfa8" fill="none"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M1 4.5h12.5V7h-3l-1 2.2h-3L5.5 7C3.6 7 2 6.2 1 4.5z" fill="#5d636b"/><path d="M1 4.5h12.5" stroke="#a3aab3" stroke-width=".9"/><path d="M6.5 9.2h3v2h-3z" fill="#474c53"/><path d="M4 11.2h8l1.2 2.8H2.8z" fill="#3d4148"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M1.5 6.5h13v6h-13z" fill="#a8452e"/><path d="M1.5 6.5l2-2.5h13l-2 2.5z" fill="#c8664a"/><path d="M14.5 6.5l2-2.5v6l-2 2.5z" fill="#86331f"/><path d="M1.5 9.5h13M6 6.5v3M10 9.5v3" stroke="#e2b7a2" stroke-width=".6"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M2 10c0-3.6 2.7-6 6-6s6 2.4 6 6v1.5H2z" fill="#d9a25a"/><path d="M5 6.5l1 1.5M8 5.5v2M11 6.5l-1 1.5" stroke="#9c6a2e" stroke-width="1" stroke-linecap="round"/><path d="M2 11.5h12v1.5H2z" fill="#b07c3c"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M5 2l3 1.5L11 2l3.5 3-2 2.2-1-.7V14h-7V6.5l-1 .7-2-2.2z" fill="#4f7aa8"/><path d="M6 2.5c.5 1.3 1.2 2 2 2s1.5-.7 2-2" stroke="#2f5379" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M3.5 4h8v10h-8z" fill="#d79b2a"/><path d="M3 3c0-1.4 1.5-2 4.5-2S12 1.6 12 3v1.5H3z" fill="#f4ecd8"/><path d="M11.5 6h1.8c.9 0 1.2.6 1.2 1.3v3.4c0 .7-.4 1.3-1.2 1.3h-1.8" stroke="#b07a1d" stroke-width="1.2" fill="none"/></svg>',
   // nitrate, gunpowder, furniture, books, circus shows
-  '<svg viewBox="0 0 16 16"><path d="M1.5 13l2.5-5 3 2 2.5-5 3 4 2 4z" fill="#e8e4d6"/><path d="M4 8l3 2 2.5-5" stroke="#b9b2a0" fill="none"/><circle cx="11" cy="11" r="1" fill="#cfc8b6"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M1.5 13l2.5-5 3 2 2.5-5 3 4 2 4z" fill="#e8e4d6" stroke="#8f8876" stroke-width=".6" stroke-linejoin="round"/><path d="M4 8l3 2 2.5-5" stroke="#b9b2a0" fill="none"/><circle cx="11" cy="11" r="1" fill="#cfc8b6"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M4 3h8l1 2v8.5c0 .8-.7 1.5-1.5 1.5h-7C3.7 15 3 14.3 3 13.5V5z" fill="#3b3a37"/><path d="M5 1.5h6V3H5z" fill="#6b5a44"/><path d="M5.5 8h5v4h-5z" fill="#d8c8a4"/><path d="M7 9.5h2" stroke="#3b3a37"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M3 3h10v6H3z" fill="#9a6a3c"/><path d="M2 9h12v2.5H2z" fill="#7d5631"/><path d="M3 11.5h1.5V15H3zM11.5 11.5H13V15h-1.5z" fill="#5e3f22"/><path d="M4.5 4.5h7v3h-7z" fill="#b9854e"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M2 3.5c2-1 4-1 6 .5v10c-2-1.5-4-1.5-6-.5z" fill="#8a3a2a"/><path d="M14 3.5c-2-1-4-1-6 .5v10c2-1.5 4-1.5 6-.5z" fill="#a8452e"/><path d="M3 5c1.5-.6 3-.6 4.2.4M3 7c1.5-.6 3-.6 4.2.4" stroke="#e9d9b8" stroke-width=".6" fill="none"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M8 1l6.5 6H1.5z" fill="#c8453a"/><path d="M8 1l3 6H5z" fill="#efe6d1"/><path d="M2.5 7h11v7h-11z" fill="#e8d9b0"/><path d="M6.5 14v-4c0-1 .7-1.5 1.5-1.5s1.5.5 1.5 1.5v4z" fill="#3a2c20"/><path d="M8 1V0" stroke="#d2a33a"/></svg>',
   // coal, steel, explosives, canned food, heating, newspapers
-  '<svg viewBox="0 0 16 16"><path d="M2 12l2-5 4-2 3 2 3 4-2 3H4z" fill="#26262a"/><path d="M4 7l4-2 3 2-3 1.5z" fill="#4a4a52"/><path d="M9 10l2-1" stroke="#5c5c66"/></svg>',
-  '<svg viewBox="0 0 16 16"><path d="M1.5 10h13v3.5h-13z" fill="#5b6470"/><path d="M1.5 10l2-3h13l-2 3z" fill="#9aa4b2"/><path d="M14.5 10l2-3v3.5l-2 3z" fill="#47505b"/><path d="M4 8.5h8" stroke="#d3dae2" stroke-width=".7"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M2 12l2-5 4-2 3 2 3 4-2 3H4z" fill="#26262a" stroke="#6a6a75" stroke-width=".6" stroke-linejoin="round"/><path d="M4 7l4-2 3 2-3 1.5z" fill="#55555f"/><path d="M8 8.5l3-1.5 3 4" stroke="#7a7a86" stroke-width=".6" fill="none"/></svg>',
+  '<svg viewBox="0 0 16 16"><path d="M5.5 1.5h9v2.3h-3.4v6.4h3.4v2.3h-9v-2.3h3.4V3.8H5.5z" fill="#4d6178"/><path d="M1.5 3.5h9l4-2h-9z" fill="#c5d3e0"/><path d="M1.5 3.5h9v2.3H7.1v6.4h3.4v2.3h-9v-2.3h3.4V5.8H1.5z" fill="#8aa2bb"/><path d="M10.5 3.5l4-2v2.3l-4 2zM10.5 12.2l4-2v2.3l-4 2z" fill="#3e5066"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M5 4h6v10.5H5z" fill="#c8453a"/><path d="M5 6.5h6M5 12h6" stroke="#f0e2b8" stroke-width=".8"/><path d="M8 4V2.5c0-.8 1-1.4 2-1" stroke="#7a6a50" fill="none"/><path d="M10.5 1.2l1 .5-.6.8z" fill="#f4c542"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M3.5 4.5h9v9.5h-9z" fill="#b9c2cc"/><ellipse cx="8" cy="4.5" rx="4.5" ry="1.4" fill="#dfe5eb"/><path d="M3.5 7.5h9v4h-9z" fill="#c8453a"/><path d="M6 9.5h4" stroke="#f0e2b8"/></svg>',
   '<svg viewBox="0 0 16 16"><path d="M8 14.5c-3 0-4.5-2-4.5-4.3 0-2.6 2.2-3.7 2.6-6.7 1.4 1 2 2.4 1.9 3.6.9-.6 1.4-1.6 1.4-2.8 2 1.6 3.1 3.6 3.1 5.9 0 2.3-1.5 4.3-4.5 4.3z" fill="#e8742c"/><path d="M8 14.5c-1.4 0-2.2-1-2.2-2.2 0-1.4 1.2-2.2 1.5-3.6.8.7 1 1.5 1 2.1.6-.3.9-.9 1-1.6 1 .9 1.1 1.9 1.1 3.1 0 1.2-.8 2.2-2.4 2.2z" fill="#f6c84a"/></svg>',
@@ -1772,6 +1772,7 @@ function handleEvents() {
         else Sfx.at("melee", x, y, 45, d);
         break;
       case EV.Shoot:
+        shotFired(x, y, d); // recoil, the trebuchet's throw, muzzle flash (render3d.js)
         if (isGun(d)) { Sfx.at(isBigGun(d) ? "cannon" : d === K.MachineGunner || d === K.Infantry || d === K.Fighter ? "mg" : "musket", x, y, 40); if (!isAir(d)) gunSmoke(x, y, d); }
         else if (d === K.Submarine) Sfx.at("cannon", x, y, 25); // a muffled thump under the water
         else Sfx.at("bow", x, y, 60, isBld(d));

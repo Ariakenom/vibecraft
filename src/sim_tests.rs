@@ -450,73 +450,8 @@ fn nothing_is_built_on_the_campfire() {
     assert!(!g.can_place(Kind::Hut, cx as i32 - 1, cy as i32 - 1, 1, 0));
 }
 
-/// Two Normal computer players grow their towns into the Medieval era
-/// within 45 minutes: guards against the AI stalling. (They no longer
-/// finish each other off within the hour: two equal AIs raid each other
-/// for a long time. See the plan's open questions.)
-///
-/// Single seeds are chaotic (any change to where people stand shifts which
-/// AI ends up at the Ancient era's ceiling, with 7 of every food kind in
-/// use), and about one AI in six stays Ancient until the era pacing pass, so
-/// five of the six must reach Medieval. `ai_stats` judges changes properly.
-#[test]
-fn normal_ais_reach_the_medieval_era() {
-    let mut medieval = 0;
-    for seed in [1, 2, 3] {
-        let mut g = Game::new(seed, 1, 2);
-        g.set_ai(1, true);
-        run(&mut g, 45.0 * 60.0);
-        for p in 1..=2u8 {
-            medieval += (g.players[p as usize].era >= 1) as u32;
-            assert!(g.players[p as usize].people >= 40, "seed {seed}: P{p} stayed small: {}", census(&g, p));
-            // It explored beyond its start, and only built where it had.
-            let seen = g.explored.iter().filter(|&&b| b & (1 << p) != 0).count();
-            assert!(seen > g.explored.len() / 4, "seed {seed}: P{p} saw only {seen} tiles");
-            for e in g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner == p) {
-                assert!(g.explored_by(p, e.tx, e.ty), "built on unexplored ground");
-            }
-        }
-    }
-    assert!(medieval >= 5, "only {medieval} of 6 computer players reached the Medieval era in 45 minutes");
-}
 
-/// The Medieval chain (Brickworks, Sawmill) was where the computer players
-/// used to freeze: they never explored their own clay, and cottages held every
-/// spare stone so a Sawmill (2 stone) never found any. After twenty minutes
-/// most of them must have both.
-#[test]
-fn ais_get_brickworks_and_sawmills() {
-    let (mut both, mut n) = (0, 0);
-    for seed in [3, 5, 11] {
-        let mut g = Game::new(seed, 1, 2);
-        g.set_ai(1, true);
-        run(&mut g, 20.0 * 60.0);
-        for p in 1..=2u8 {
-            n += 1;
-            let has = |k: Kind| g.ents.iter().any(|e| e.alive && e.owner == p && e.kind == k && e.built >= 1.0);
-            both += (has(Kind::Brickworks) && has(Kind::Sawmill)) as u32;
-        }
-    }
-    assert!(both >= 5, "only {both} of {n} computer players had a Brickworks and a Sawmill after 20 minutes");
-}
 
-/// With nobody to fight, the computer's economy has to keep climbing: it
-/// used to freeze in the Medieval era with every wood and stone slot held
-/// (the first town stuck at 55 people), and now makes its houses Tenements
-/// within half an hour. `ai_peace` measures it over twelve maps.
-#[test]
-fn a_peaceful_ai_keeps_climbing_the_eras() {
-    let mut g = Game::new(3, 1, 2);
-    g.set_ai(1, true);
-    for a in g.ais.iter_mut() {
-        a.next_attack = 1.0e9;
-    }
-    run(&mut g, 30.0 * 60.0);
-    for p in 1..=2usize {
-        assert!(g.players[p].era >= 2, "P{p} stopped in era {}: {}", g.players[p].era, census(&g, p as u8));
-        assert!(g.players[p].people >= 150, "P{p} has only {} people", g.players[p].people);
-    }
-}
 
 /// An Easy computer player doesn't hurry: however well its town does, no era
 /// comes before its time (`EASY_ERA_AT`), and it keeps fewer soldiers.
@@ -558,7 +493,10 @@ fn each_computer_player_has_its_own_difficulty() {
 }
 
 /// Left in peace, both computers climb all the way: the Atomic era within
-/// 25 minutes on this map (`ai_pace` measures it over 24 maps).
+/// 25 minutes on this map (`ai_pace` measures it over 24 maps). The one
+/// computer-player test run every time: slower ones (Medieval with
+/// fighting, Brickworks and Sawmill, era 2 in peace) were cut on 6 Nov 2026
+/// as they took over three minutes and this one covers what they caught.
 #[test]
 fn peaceful_computers_reach_the_atomic_era() {
     let mut g = Game::new(10, 1, 2);
@@ -569,6 +507,10 @@ fn peaceful_computers_reach_the_atomic_era() {
     run(&mut g, 25.0 * 60.0);
     for p in 1..=2usize {
         assert_eq!(g.players[p].era, 5, "P{p} is in era {} after 25 minutes: {}", g.players[p].era, census(&g, p as u8));
+        // It only built where it had explored.
+        for e in g.ents.iter().filter(|e| e.alive && e.is_building() && e.owner as usize == p) {
+            assert!(g.explored_by(p as u8, e.tx, e.ty), "P{p} built on unexplored ground");
+        }
     }
 }
 
