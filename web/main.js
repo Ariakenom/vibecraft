@@ -1846,7 +1846,7 @@ let stalledSince = 0;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   Watchers.pump(performance.now()); // spectators, also after the game has ended
-  if (mp && Trace.cur && last) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
+  if (Trace.cur && last && running) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
   last = now;
   if (running) {
     const f0 = performance.now();
@@ -1859,6 +1859,7 @@ function loop(now) {
       let steps = 0;
       const most = Math.max(8, speed * 4);
       while (acc >= SIM_MS && steps < most) { W.tick(); simTick++; acc -= SIM_MS; steps++; }
+      if (Trace.cur) Trace.cur.ticks += steps;
       if (steps === most) acc = 0;
       if (steps) handleEvents();
       if (!Rec.done) Rec.ticks = simTick;
@@ -1883,7 +1884,9 @@ function loop(now) {
     if (frame % 6 === 0) { renderTopBar(); renderBuildList(); renderSelection(false); renderScoreboard(false); }
     if (frame % 30 === 0 && !$("menuScreen").hidden) renderGameSeats(false);
     syncObserverUi();
-    if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
+    frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
+    // (Multiplayer rolls the trace in pumpMultiplayer, with the lockstep's numbers.)
+    if (!mp && Trace.roll(performance.now(), perfSnapshot())) renderTrace();
     // Is the game over? For a player, from their own point of view; for
     // someone only watching, once anyone has won.
     // (Multiplayer decides in pumpMultiplayer, on the confirmed copy.)
@@ -1976,6 +1979,9 @@ function frameTrace(now, sim, world, draw, gpu, hud) {
   const programs = R3.renderer.info.programs ? R3.renderer.info.programs.length : 0;
   if (c) {
     c.maxWork = Math.max(c.maxWork || 0, Math.round(total));
+    c.frames++;
+    if (lastFrameNow) c.gaps.push(now - lastFrameNow);
+    c.work.sim += sim; c.work.world += world; c.work.draw += draw; c.work.gpu += gpu; c.work.hud += hud;
     if (heap && lastHeap - heap > 512 * 1024) { c.cleanups = (c.cleanups || 0) + 1; c.freedMB = Math.round(((c.freedMB || 0) + (lastHeap - heap) / 1048576) * 10) / 10; }
   }
   const gap = lastFrameNow ? now - lastFrameNow : 0;
@@ -1990,18 +1996,45 @@ function frameTrace(now, sim, world, draw, gpu, hud) {
   }
   lastWork = work; lastFrameNow = now; lastHeap = heap; lastPrograms = programs;
 }
+// What the game and the drawing look like this second, for the trace.
+function perfSnapshot() {
+  const r = R3.drawn, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  return {
+    role: "single player", gameTime: Math.round(W.game_time()), speed, paused,
+    ents: entCount, drawCalls: r.calls, triangles: r.triangles,
+    heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
+    view: [R3.renderer.domElement.width, R3.renderer.domElement.height],
+  };
+}
 // Chrome and Edge report tasks that block the page for over 50 ms.
 try {
-  new PerformanceObserver(list => { if (mp) for (const e of list.getEntries()) Trace.event("long task", { ms: Math.round(e.duration) }); }).observe({ type: "longtask", buffered: false });
+  new PerformanceObserver(list => { if (running) for (const e of list.getEntries()) Trace.event("long task", { ms: Math.round(e.duration) }); }).observe({ type: "longtask", buffered: false });
 } catch { /* not in this browser */ }
 
 // ---- the trace panel (F8) ----
+// The frames part, for single player and multiplayer alike.
+function frameLines(s) {
+  const ms = n => n == null ? "?" : `${n} ms`, w = s.avgWork || {};
+  const lines = [`Frames ${s.fps}/s · between frames: median ${ms(s.p50)}, 95% within ${ms(s.p95)}, longest ${ms(s.maxFrameGap)}`];
+  lines.push(`Work per frame on average: game ${w.sim} ms, world ${w.world} ms, drawing ${w.draw} ms, graphics card ${w.gpu} ms, HUD ${w.hud} ms (most ${ms(s.maxWork)})`);
+  if (s.ents != null) lines.push(`Map ${MW}×${MH} · ${s.ents} things in sight · ${s.drawCalls} draw calls, ${Math.round(s.triangles / 1000)}k triangles · view ${s.view[0]}×${s.view[1]}${s.heapMB ? ` · memory ${s.heapMB} MB` : ""}`);
+  return lines;
+}
 function renderTrace() {
   const box = $("netTrace");
-  if (box.hidden || !mp) return;
+  if (box.hidden) return;
   const s = Trace.samples[Trace.samples.length - 1];
   if (!s) { $("netTraceBody").textContent = "Measuring…"; return; }
   const ms = n => n == null ? "?" : `${n} ms`;
+  if (!mp) {
+    const lines = [`Single player · game time ${s.gameTime} s · speed ${s.speed}×${s.paused ? " (paused)" : ""} · ticks ${s.ticks}/s`, ...frameLines(s)];
+    const slow = Trace.events.filter(e => e.kind === "slow frame");
+    if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
+    const long = Trace.events.filter(e => e.kind === "long task").length;
+    if (long) lines.push(`Long tasks (page blocked over 50 ms): ${long}`);
+    $("netTraceBody").textContent = lines.join("\n");
+    return;
+  }
   const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : "–";
   const st = s.stats, tick = NET.TICK_MS;
   const lines = [];
@@ -2019,14 +2052,14 @@ function renderTrace() {
   lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
   lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);
   lines.push(`Messages in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, longest gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`);
-  lines.push(`Longest frame ${ms(s.maxFrameGap)} (our work at most ${ms(s.maxWork)}) · longest clock gap ${ms(s.maxClockGap)}`);
+  lines.push(...frameLines(s), `Longest clock gap ${ms(s.maxClockGap)}`);
   const slow = Trace.events.filter(e => e.kind === "slow frame");
   if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
   if (s.cleanups) lines.push(`Browser memory clean-ups: ${s.cleanups} this second (${s.freedMB} MB)`);
   $("netTraceBody").textContent = lines.join("\n");
 }
 function toggleTrace(show = $("netTrace").hidden) {
-  $("netTrace").hidden = !show || !mp;
+  $("netTrace").hidden = !show || !running;
   renderTrace();
 }
 $("netBtn").onclick = () => toggleTrace();
@@ -2059,12 +2092,16 @@ function enterWorld(local = 0) {
   simTick = 0; stalledSince = 0; outShown = false; surrendered = false;
   stopObserving();
   $("outScreen").hidden = true;
+  const b0 = performance.now();
   bakeTerrain();
   buildWorld();
   updateFog();
   readWorld();
   resizeView();
   R3.ghostKind = -1;
+  // The trace, from the start (multiplayer starts its own after this).
+  Trace.start({ role: "single player", mode: W.game_mode() ? "frontier" : "skirmish", players: W.n_players(), map: [MW, MH], startMs: Math.round(performance.now() - b0) });
+  $("netBtn").hidden = false;
   const i = findOwn(K.Capitol);
   cam.dist = 24; cam.pitch = 0.95; cam.yaw = 0;
   if (i != null) centerOn(E(i, F.x), E(i, F.y));
@@ -2757,7 +2794,7 @@ function finishMultiplayer() {
   paused = false; speed = 1; lastPace = 1; slowFor.clear(); announced.clear();
   $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
   syncSpeedUi();
-  $("netBtn").hidden = true; $("netTrace").hidden = true;
+  $("netTrace").hidden = true;
   $("netWait").hidden = true;
 }
 

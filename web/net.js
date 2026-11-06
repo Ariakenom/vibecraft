@@ -195,7 +195,7 @@ const Trace = {
     this.info = info;
     this.event("start", info);
   },
-  blank() { return { ticks: 0, stallMs: 0, inMsgs: 0, inBytes: 0, outMsgs: 0, outBytes: 0, maxInGap: 0, maxClockGap: 0, maxFrameGap: 0 }; },
+  blank() { return { ticks: 0, stallMs: 0, inMsgs: 0, inBytes: 0, outMsgs: 0, outBytes: 0, maxInGap: 0, maxClockGap: 0, maxFrameGap: 0, frames: 0, gaps: [], work: { sim: 0, world: 0, draw: 0, gpu: 0, hud: 0 } }; },
   ts() { return Math.round(performance.now() - this.t0); },
   event(kind, data) {
     this.events.push(Object.assign({ t: this.ts(), kind }, data));
@@ -214,13 +214,19 @@ const Trace = {
   roll(now, snapshot) {
     if (!this.cur || now - this.curAt < 1000) return false;
     const c = this.cur;
-    const sample = Object.assign({ t: this.ts() }, snapshot, c, { secs: Math.round(now - this.curAt) });
+    // Frames: how many, how long between them (median, 95th and worst),
+    // and the average work in each, part by part.
+    const g = c.gaps.sort((a, b) => a - b), q = f => g.length ? Math.round(g[Math.min(g.length - 1, Math.floor(g.length * f))]) : 0;
+    const avg = {};
+    for (const k in c.work) avg[k] = c.frames ? Math.round(c.work[k] / c.frames * 10) / 10 : 0;
+    const frames = { fps: c.frames, p50: q(0.5), p95: q(0.95), avgWork: avg };
+    const sample = Object.assign({ t: this.ts() }, snapshot, c, { gaps: undefined, work: undefined }, frames, { secs: Math.round(now - this.curAt) });
     this.samples.push(sample);
     if (this.samples.length > 1200) this.samples.shift();
     this.cur = this.blank(); this.curAt = now;
     return true;
   },
-  dump() { return JSON.stringify({ trace: 2, protocol: NET.PROTOCOL, version: typeof versionInfo === "function" ? versionInfo() : null, tickMs: NET.TICK_MS, ua: navigator.userAgent, info: this.info, samples: this.samples, events: this.events }); },
+  dump() { return JSON.stringify({ trace: 3, protocol: NET.PROTOCOL, version: typeof versionInfo === "function" ? versionInfo() : null, tickMs: NET.TICK_MS, ua: navigator.userAgent, info: this.info, samples: this.samples, events: this.events }); },
 };
 
 

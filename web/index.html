@@ -459,7 +459,7 @@ body.observing #hint { display: none; }
     <button class="tbtn" id="pauseBtn" aria-pressed="false" title="Pause (P)">Pause</button>
     <label class="speed" id="speedBox" title="Game speed"><input type="range" id="speedSlider" min="1" max="10" step="0.5" value="1" aria-label="Game speed"><span id="speedLabel">1×</span></label>
     <button class="tbtn" id="chatBtn" title="Chat (Enter)" hidden>Chat</button>
-    <button class="tbtn" id="netBtn" title="Network details (F8)" hidden>Net</button>
+    <button class="tbtn" id="netBtn" title="Frame times and network details (F8)" hidden>Trace</button>
     <button class="tbtn" id="menuBtn" title="Menu">Menu</button>
   </header>
   <main id="stage">
@@ -492,7 +492,7 @@ body.observing #hint { display: none; }
       </span>
       <button class="tbtn" id="obsExit">Exit replay</button>
     </div>
-    <section id="netTrace" hidden aria-label="Network details">
+    <section id="netTrace" hidden aria-label="Frame times and network details">
       <pre id="netTraceBody"></pre>
       <div class="row">
         <button class="tbtn" id="netTraceCopy">Copy trace</button>

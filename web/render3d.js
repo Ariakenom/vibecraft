@@ -10,6 +10,7 @@
 const NUDGE_MS = 150;
 const R3 = {
   gpuMs: 0,
+  drawn: { calls: 0, triangles: 0 }, // the last frame's scene, for the trace
   mark: 0,
   nudges: new Map(), // unit id -> { dx, dy, t }: offset to fade out (see mpHooks.restore in main.js)
   renderer: null, scene: null, camera: null, sun: null,
@@ -2737,12 +2738,16 @@ _black.needsUpdate = true;
 
 function renderScene() {
   const r = R3.renderer;
-  if (!GFX.post) { r.render(R3.scene, R3.camera); return; }
+  // (What the scene took, for the trace: read here, as icons drawn later
+  // with the same renderer reset the counts.)
+  const note = () => { R3.drawn = { calls: r.info.render.calls, triangles: r.info.render.triangles }; };
+  if (!GFX.post) { r.render(R3.scene, R3.camera); note(); return; }
   if (!Post.rt) buildPost();
   const sz = r.getDrawingBufferSize(_v2);
   if (Post.rt.width !== sz.x || Post.rt.height !== sz.y) Post.rt.setSize(sz.x, sz.y);
   r.setRenderTarget(Post.rt);
   r.render(R3.scene, R3.camera);
+  note();
   const u = Post.mat.uniforms;
   u.tBloom.value = GFX.bloom ? renderBloom(r, sz) : _black;
   u.uBloom.value = GFX.bloom ? 0.32 : 0;
