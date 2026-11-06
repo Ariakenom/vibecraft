@@ -3278,7 +3278,10 @@ const Boot = {
   // sits next to the page at ./relay; a copy opened as a file has to be told.
   const onClaude = !!(window.claude && window.claude.use);
   const onSite = /^https?:$/.test(location.protocol) && !onClaude;
-  if (onSite) $("relayUrl").value = new URL("relay", location.href.split("#")[0]).href.replace(/^http/, "ws");
+  // Every version on GitHub Pages (deploy/pages.sh) uses the live site's relay.
+  const onPages = /\.github\.io$/.test(location.hostname);
+  if (onPages) $("relayUrl").value = "wss://ginnu.freemyip.com/vibecraft/relay";
+  else if (onSite) $("relayUrl").value = new URL("relay", location.href.split("#")[0]).href.replace(/^http/, "ws");
   const hasRoom = await Net.init($("relayUrl").value.trim());
   netOk = hasRoom || !onClaude;
   $("relayRow").hidden = onClaude || onSite;

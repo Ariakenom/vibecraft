@@ -15,7 +15,8 @@
 //
 // Settings (environment variables):
 //   ALLOWED_ORIGINS  pages allowed to connect, comma-separated (default
-//                    https://ginnu.freemyip.com); local copies and pages on
+//                    https://ginnu.freemyip.com and the GitHub Pages copies,
+//                    https://ariakenom.github.io); local copies and pages on
 //                    localhost or a home network are always allowed; "*" = anyone
 //   MAX_CONNECTIONS  total open connections (default 200)
 //   MAX_PER_IP       open connections from one address (default 8)
@@ -33,7 +34,7 @@ let nextId = 1;
 // connection (the Origin header), so this stops other websites from using the
 // relay. A local copy opened as a file sends "null". ALLOWED_ORIGINS is a
 // comma-separated list that replaces the site address below; "*" allows all.
-const SITES = (process.env.ALLOWED_ORIGINS || "https://ginnu.freemyip.com").split(",").map(s => s.trim()).filter(Boolean);
+const SITES = (process.env.ALLOWED_ORIGINS || "https://ginnu.freemyip.com,https://ariakenom.github.io").split(",").map(s => s.trim()).filter(Boolean);
 const LOCAL = /^(null|https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|10\.[\d.]+|192\.168\.[\d.]+|172\.(1[6-9]|2\d|3[01])\.[\d.]+)(:\d+)?)$/;
 function originOk(origin) {
   if (SITES.indexOf("*") >= 0) return true;

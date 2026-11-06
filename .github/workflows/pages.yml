@@ -1,0 +1,33 @@
+# Every commit to main playable on GitHub Pages (deploy/pages.sh).
+# "Run workflow" by hand with a number adds that many older versions too.
+name: Pages
+on:
+  push:
+    branches: [main]
+    paths: [dist/vibecraft.html]
+  workflow_dispatch:
+    inputs:
+      older:
+        description: Also add this many older versions of the page
+        default: "0"
+permissions:
+  contents: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish
+        env:
+          OLDER: ${{ github.event.inputs.older || '0' }}
+          GIT_NAME: github-actions[bot]
+          GIT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          commits=$(git log --format=%H -n "$((OLDER + 1))" -- dist/vibecraft.html | tac)
+          deploy/pages.sh $commits HEAD
+          git push origin gh-pages
