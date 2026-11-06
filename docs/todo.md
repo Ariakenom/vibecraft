@@ -20,23 +20,18 @@ not straight away (see `CLAUDE.md`).
 - **Middle barbarians are too weak** (playtest, Nov 2026, large Frontier
   map). In the replay, at minute 20 you were Industrial with 28 soldiers,
   while the central camps (capped Modern and Atomic) were still Medieval
-  with 3 to 11 soldiers: every camp starts from nothing and grows at an
-  ordinary town's pace, so it never gets near its cap. Ideas: camps start
-  at their site's era with a garrison, or grow faster the higher their cap.
-- **Pointing at the ground tests every triangle of the terrain.** Found in
-  the traces (Nov 2026): `screenToGround` and `pickAt` raycast the whole
-  terrain mesh (49k triangles on Skirmish, 187k on Frontier small, 346k on
-  large): 12 / 15 / 27 ms each in the test browser, and the cursor check
-  does it about 11 times a second while units are selected; placing a
-  building does it on every mouse move. Walking the ray over the height
-  grid instead would cost the same on any map.
-- **A ~40 ms frame about once a second on the large map** (~27 ms on the
-  small one), often followed by an ~80 ms one. It's in the drawing but not
-  in any part the trace times, so likely the browser cleaning up memory or
-  work done when a building is placed (flattening the ground recomputes the
-  normals of the whole terrain, `flattenUnder` in render3d.js). Firefox's
-  clock is coarse (1 ms), so short parts show as 0 there: a Chrome trace
-  would also show memory.
+  with 3 to 11 soldiers. Worse, they stay Medieval all game: at minute 65
+  you were Atomic (tanks, bombers) and the central camps, capped Atomic and
+  Modern, were Medieval with about 110 people each. So it's a stall, not
+  just a slow start; worth finding what they lack for the Gunpowder era
+  (`diag_camp` in barbarians.rs shows a camp's houses and the AI's reasons).
+  Ideas besides fixing the stall: camps start at their site's era with a
+  garrison, or grow faster the higher their cap.
+- **The page makes 65 to 110 MB of garbage a second** (Chrome traces, Nov
+  2026), with up to 12 memory clean-ups a second; the ~60 ms frames that
+  remain are those. Find what allocates every frame (Chrome's memory
+  profiler on a running game). Also: placing a building recomputes the
+  shading of the whole terrain (`flattenUnder` in render3d.js).
 
 ## Done
 
