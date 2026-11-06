@@ -4,3 +4,5 @@
 1793993052	2026-11-06	6a80dabe9a3a5cc766d3a8b7f1086b9e6900b488	Merge pull request #38 from Ariakenom/ground-pick
 1793994922	2026-11-06	73d4413d7e0dcdb04ec06d6c57c8c758ab3e194d	Less garbage: one material per kind of mesh, so three.js stops rebuilding shader settings
 1793997558	2026-11-06	21d68b2145e23e808a83343a8f75b1d3e380561b	Merge pull request #39 from Ariakenom/less-garbage
+1793999520	2026-11-06	56595fa3ffa79c09530b898b8b6804936ced10ea	Faster ticks in big Frontier games, and no whole-map reshading when a building appears
+1793999881	2026-11-06	4fe31f9c7e23eab83fbe8afd14a435490b3d6352	Merge pull request #40 from Ariakenom/faster-ticks
