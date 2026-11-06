@@ -372,7 +372,8 @@ static GALLEON: Stats = unit(420.0, 40.0, 8.0, 4.0, 2.4, 9.0, &[(Wood, 3), (Iron
 static IRONCLAD: Stats = unit(700.0, 60.0, 10.0, 4.0, 2.6, 10.0, &[(Steel, 2), (Coal, 1), (Explosives, 1)], 36.0);
 static SUBMARINE: Stats = unit(420.0, 120.0, 5.0, 5.0, 2.8, 8.0, &[(Steel, 2), (Explosives, 1)], 34.0);
 static NUCLEAR_SUB: Stats = unit(650.0, 90.0, 5.0, 5.0, 3.0, 9.0, &[(Steel, 3), (Uranium, 1)], 45.0);
-static CARRIER: Stats = unit(1600.0, 12.0, 6.0, 1.0, 2.2, 11.0, &[(Steel, 4), (Oil, 2), (Aluminum, 1)], 50.0);
+// No guns of its own: it fights only through its aircraft.
+static CARRIER: Stats = unit(1600.0, 0.0, 0.0, 0.0, 2.2, 11.0, &[(Steel, 4), (Oil, 2), (Aluminum, 1)], 50.0);
 static DESTROYER: Stats = unit(800.0, 30.0, 9.0, 1.4, 3.6, 11.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, and
@@ -823,7 +824,7 @@ impl Kind {
     /// Can it shoot at aircraft? Fighters, machine guns, modern infantry,
     /// destroyers, towers and the Capitol.
     pub fn hits_air(self) -> bool {
-        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Destroyer | Kind::Carrier | Kind::Tower | Kind::Capitol | Kind::AirDefense)
+        matches!(self, Kind::Fighter | Kind::Jet | Kind::MachineGunner | Kind::Infantry | Kind::Destroyer | Kind::Tower | Kind::Capitol | Kind::AirDefense)
     }
 
     /// Can a transport carry it? Anything that walks.

@@ -93,7 +93,7 @@ const DESC = {
   [K.Galleon]: "A gun ship: broadsides that smash boats and bombard the coast, hurting everything around where they land. Costs iron and gunpowder.",
   [K.Ironclad]: "A steam-driven armoured ship with heavy guns. Long reach; flattens the waterfront.",
   [K.Destroyer]: "Fast and tough, with quick-firing guns that also shoot at aircraft. The submarine hunter: it sees them from its full sight, and does double and a half damage to them. Costs steel, oil and explosives.",
-  [K.Carrier]: "A floating airfield: your aircraft refuel and rearm next to it, so they can strike far from home. Anti-aircraft guns, but little else: escort it. Costs steel, oil and aluminum.",
+  [K.Carrier]: "A floating airfield: your aircraft refuel and rearm next to it, so they can strike far from home. No guns of its own: it fights only through its aircraft, so escort it. Costs steel, oil and aluminum.",
   [K.NuclearSub]: "A submarine that carries a nuke. Arm it (V) while it lies at one of your docks (2 uranium and 2 explosives, 2 minutes; it waits while the submarine is away), then launch it (C) from anywhere at sea. Hidden like any submarine, but everyone sees where a nuke comes from. Torpedoes for boats too.",
   [K.Submarine]: "Sails under the water: enemies see it only when something of theirs is within 3 tiles of it, or a destroyer has it in sight. Its torpedoes hit boats hard, and nothing else; only warships can hit it. Costs steel and explosives.",
   [K.HuntingLodge]: "Hunts the game grazing next to it.",
@@ -188,8 +188,22 @@ let myName = "";
 try { myName = cleanName(localStorage.getItem(NAME_KEY) || ""); } catch { /* storage blocked */ }
 if (!myName) { myName = randomName(); try { localStorage.setItem(NAME_KEY, myName); } catch { /* storage blocked */ } }
 const pnames = {};
-const pn = p => pnames[p] || PNAME[p];                                        // in tables and labels
-const pnc = p => pnames[p] ? `${pnames[p]} (${PNAME[p]})` : PNAME[p] || "";   // in sentences: who, and which colour
+// A barbarian camp is named after its site, from the same names (the same
+// on every computer: the map's seed and the site's number pick it).
+function campName(p) {
+  const site = W.camp_site ? W.camp_site(p) : -1;
+  if (site < 0) return "";
+  // A step through the list from a start the seed picks: different sites,
+  // different names (31 shares no factor with the list's 76).
+  const n = RANDOM_NAMES.length, start = Math.imul(W.game_seed() ^ 0x5bd1e995, 2654435761) >>> 0;
+  return RANDOM_NAMES[(start + site * 31) % n];
+}
+const pn = p => pnames[p] || (W.is_barbarian(p) && campName(p)) || PNAME[p];   // in tables and labels
+const pnc = p => {                                                             // in sentences: who, and which colour
+  if (pnames[p]) return `${pnames[p]} (${PNAME[p]})`;
+  const c = W.is_barbarian(p) && campName(p);
+  return c ? `${c} (barbarians)` : PNAME[p] || "";
+};
 // Replace this game's names (from the host, a snapshot, a replay).
 function setNames(o) {
   for (const k of Object.keys(pnames)) delete pnames[k];
@@ -1349,7 +1363,7 @@ function house_room(k, goods) { return W.house_max_goods(stat(k, 10)) - popcount
 const popcount = v => { let n = 0; for (; v; v >>>= 1) n += v & 1; return n; };
 function explain(code) {
   if (code >= 2000) return `Build a ${NAMES[code - 2000]} first`;
-  if (code >= 1000) {
+  if (code >= 1000 && RES_NAMES[code - 1000]) { // (a code past the list: "Can't do that", not "Not enough undefined")
     const r = code - 1000, p = producerOf(r);
     return `Not enough ${RES_NAMES[r]}` + (p != null ? `: build another ${NAMES[p]}` : "");
   }

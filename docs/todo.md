@@ -8,15 +8,12 @@ not straight away (see `CLAUDE.md`).
 
 ## Waiting
 
-- **Barbarian names.** Give each barbarian camp a name, from the same
-  scheme as random players' names.
 - **"Not enough undefined" when upgrading a hut.** Reported Nov 2026. Not
   reproduced yet: in a 16-minute computer-played game every upgrade message
   came out right (wood, stone, brick, steel, the era and goods messages).
   Needs: the exact text, where it showed (the Upgrade button's tip, a
-  message at the top, the house's panel) and which version.
-- **Carriers don't attack themselves.** Remove the aircraft carrier's own
-  attack: it fights only through its aircraft.
+  message at the top, the house's panel) and which version. (Since Nov 6
+  an unknown code reads "Can't do that" instead.)
 - **More garbage to cut**: about 20 MB a second is left, mostly three.js
   setting uniforms and the unit animation (`animateRig`).
 - **Barbarians without the extra yield.** Camps' land yields 40% more per
@@ -28,6 +25,15 @@ not straight away (see `CLAUDE.md`).
   compactly or picks better producers (a Kiln as soon as it can), camps
   that start at their site's era. `diag_camp` with `VC_CENTRAL=1` shows a
   central camp's buildings and what the AI is waiting for.
+
+- **A loaded game's checksum can differ from the saved one** (found Nov
+  2026; makes `frontier.mjs`'s save check fail now and then). Loading works
+  out players' supply again from the buildings as they are, while the
+  running game still has the supply from the start of the tick: a camp
+  settled or a building finished since then. The next tick works it out
+  again, so play is the same, but checksums (multiplayer compares them)
+  disagree for a tick. In a 2-player small Frontier game, 4 of 40 save
+  points differed. Fix: recount at the end of each tick, or save supply.
 
 ## Done
 
@@ -68,3 +74,7 @@ not straight away (see `CLAUDE.md`).
   minutes, Gunpowder 12, Industrial 20, Modern 30, Atomic 45). In a
   computer game the Modern-capped camps reached Gunpowder at 15 minutes,
   Industrial at 25 and Modern at 30. Wants a playtest.
+- **Barbarian names**: each camp is named after its site, from the random
+  players' names (`campName` in main.js; the same on every computer).
+- **Carriers don't attack themselves**: no guns of their own, they fight
+  only through their aircraft.

@@ -33,6 +33,11 @@ const g = await pg.evaluate(() => ({ mode: W.game_mode(), seed: W.game_seed(), n
 console.log(g);
 check(g.mode === 1 && g.seed === 4242, "Begin plays the Frontier map picked");
 check(g.barb === 1 && g.col === "#3a3a3a" && g.name === "Barbarians" && g.seat === "#d2452f", "barbarians in black, the seats in their own colours");
+// Each camp goes by a name of its own, from its site: the same every time.
+const names = await pg.evaluate(() => { const o = []; for (let p = W.n_players() + 1; p < 40 && W.is_barbarian(p); p++) if (W.camp_site(p) >= 0) o.push([pn(p), pn(p), pnc(p)]); return o; });
+console.log(names.map(n => n[2]).join(", "));
+check(names.length >= 3 && names.every(([a, b, c]) => a && a === b && a !== "Barbarians" && c === `${a} (barbarians)`), `the camps have names (${names.length})`);
+check(new Set(names.map(n => n[0])).size > 1, "not all the same name");
 // (Software WebGL here: a Skirmish game takes ~20 s to start too.)
 console.log(`started in ${(startMs / 1000).toFixed(1)} s`);
 const tex = await pg.evaluate(() => ({ w: terrainCanvas.width, most: R3.renderer.capabilities.maxTextureSize }));
