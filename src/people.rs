@@ -66,6 +66,7 @@ impl Game {
     }
 
     /// Every campfire of `owner`'s, oldest Capitol first.
+    #[cfg(test)]
     pub fn campfires(&self, owner: u8) -> Vec<(f32, f32)> {
         self.capitols(owner).map(|c| self.campfire_of(c)).collect()
     }
@@ -111,6 +112,22 @@ impl Game {
             let (cx, cy) = self.campfire_of(c);
             (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA
         })
+    }
+
+    /// Every player's campfires, found in one pass (index: owner).
+    pub(crate) fn campfires_by_owner(&self) -> Vec<Vec<(f32, f32)>> {
+        let mut fires: Vec<Vec<(f32, f32)>> = vec![Vec::new(); self.players.len()];
+        for (i, e) in self.ents.iter().enumerate() {
+            if e.alive && e.kind == Kind::Capitol && e.built >= 1.0 && (e.owner as usize) < fires.len() {
+                fires[e.owner as usize].push(self.campfire_of(i));
+            }
+        }
+        fires
+    }
+
+    /// `is_free_worker`, given `campfires_by_owner`.
+    pub(crate) fn is_free_at(e: &Entity, fires: &[Vec<(f32, f32)>]) -> bool {
+        e.alive && e.kind == Kind::Worker && e.order == Order::Idle && e.aboard == 0 && fires.get(e.owner as usize).is_some_and(|f| f.iter().any(|&(cx, cy)| (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA))
     }
 
     /// Send a worker back to stand at the campfire nearest them.
@@ -190,6 +207,7 @@ impl Game {
         let mut free = vec![0u32; n];
         let mut working = vec![0u32; n];
         let mut soldiers = vec![0u32; n];
+        let fires = self.campfires_by_owner();
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
             if !e.alive {
@@ -218,7 +236,7 @@ impl Game {
                         building[b as usize] = building[b as usize].saturating_add(1);
                     }
                 }
-            } else if self.is_free_worker(e) {
+            } else if Self::is_free_at(e, &fires) {
                 free[o] += 1;
             }
         }
@@ -445,7 +463,7 @@ impl Game {
     /// have reached its tier. Eras are never lost.
     fn raise_era(&mut self, owner: u8) {
         let era = self.players[owner as usize].era;
-        if era >= LAST_ERA {
+        if era >= LAST_ERA.min(self.era_cap(owner)) {
             return;
         }
         // An Easy computer player doesn't hurry: no era before its time.
@@ -454,6 +472,9 @@ impl Game {
         }
         if self.houses_past_era(owner) >= HOUSES_FOR_ERA {
             self.players[owner as usize].era = era + 1;
+            if self.is_barb(owner) {
+                return;
+            }
             self.push_event(Ev::EraReached, 0.0, 0.0, (owner as u32 * 16 + era as u32 + 1) as f32);
         }
     }
@@ -660,18 +681,34 @@ impl Game {
                 }
             }
         }
+        // Everyone's free workers and buildings, sorted by owner in one pass
+        // (in id order, as before): with many players, a pass over every
+        // entity per player was most of a tick.
+        let owners = self.players.len();
+        let mut free_of: Vec<Vec<usize>> = vec![Vec::new(); owners];
+        let mut blds_of: Vec<Vec<usize>> = vec![Vec::new(); owners];
+        let fires = self.campfires_by_owner();
+        for i in 0..n {
+            let e = &self.ents[i];
+            if !e.alive || e.owner as usize >= owners {
+                continue;
+            }
+            if e.is_building() {
+                blds_of[e.owner as usize].push(i);
+            } else if Self::is_free_at(e, &fires) {
+                free_of[e.owner as usize].push(i);
+            }
+        }
         for owner in self.player_ids() {
-            let mut free: Vec<usize> = (0..n).filter(|&i| self.ents[i].owner == owner && self.is_free_worker(&self.ents[i])).collect();
+            let mut free = std::mem::take(&mut free_of[owner as usize]);
             if free.is_empty() {
                 continue;
             }
+            let blds = std::mem::take(&mut blds_of[owner as usize]);
             // (building, order to give) in priority order.
             let mut jobs: Vec<(usize, Order)> = Vec::new();
-            for i in 0..n {
+            for &i in &blds {
                 let b = &self.ents[i];
-                if !b.alive || b.owner != owner || !b.is_building() {
-                    continue;
-                }
                 let st = b.kind.stats();
                 if b.built < 1.0 {
                     // As many as will work there once it's done (at least
@@ -685,9 +722,9 @@ impl Game {
                 jobs.extend((0..need).map(|_| (i, Order::Enlist(i as u32))));
             }
             for goods_first in [true, false] {
-                for i in 0..n {
+                for &i in &blds {
                     let b = &self.ents[i];
-                    if !b.alive || b.owner != owner || b.built < 1.0 || !b.hiring {
+                    if b.built < 1.0 || !b.hiring {
                         continue;
                     }
                     let st = b.kind.stats();

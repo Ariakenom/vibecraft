@@ -69,7 +69,16 @@ pub struct Pathfinder {
     closed: Vec<u32>,
     generation: u32,
     heap: BinaryHeap<Open>,
+    /// Tiles a search may expand before it gives up and returns the way to
+    /// the nearest tile it found. Part of the rules (it decides paths), so
+    /// copies keep it.
+    pub limit: usize,
 }
+
+/// `Pathfinder::limit` in Skirmish games.
+pub const SEARCH_LIMIT: usize = 5000;
+/// And on Frontier's big maps, where trips are long.
+pub const SEARCH_LIMIT_FRONTIER: usize = 30000;
 
 const DIRS: [(i32, i32); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
 
@@ -80,14 +89,16 @@ const DIRS: [(i32, i32); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1)
 // `#[derive(Clone)]` is how you say "copying this type means something special".
 impl Clone for Pathfinder {
     fn clone(&self) -> Self {
-        Pathfinder::new(self.g.len())
+        Pathfinder { limit: self.limit, ..Pathfinder::new(self.g.len()) }
     }
-    fn clone_from(&mut self, _source: &Self) {}
+    fn clone_from(&mut self, source: &Self) {
+        self.limit = source.limit;
+    }
 }
 
 impl Pathfinder {
     pub fn new(n: usize) -> Self {
-        Pathfinder { g: vec![0.0; n], parent: vec![0; n], seen: vec![0; n], closed: vec![0; n], generation: 0, heap: BinaryHeap::new() }
+        Pathfinder { g: vec![0.0; n], parent: vec![0; n], seen: vec![0; n], closed: vec![0; n], generation: 0, heap: BinaryHeap::new(), limit: SEARCH_LIMIT }
     }
 
     /// Returns tile coordinates from (but not including) the start tile to the goal.
@@ -132,7 +143,7 @@ impl Pathfinder {
                 best = idx;
             }
             expanded += 1;
-            if expanded > 5000 {
+            if expanded > self.limit {
                 break;
             }
             for (dx, dy) in DIRS {

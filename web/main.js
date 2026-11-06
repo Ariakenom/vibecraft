@@ -153,6 +153,28 @@ const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
 const PDARK = ["#555", "#1f4f8f", "#7f2216", "#1f6b33", "#8c6a12"];
 const PLIGHT = ["#bbb", "#8cb9f0", "#ec8a77", "#86d69a", "#f2d27f"];
 const PNAME = ["Nature", "Blue", "Red", "Green", "Gold"];
+// Frontier: every owner after the seats is a barbarian camp, all in black.
+// Filled in for each game (`setOwnerColors`), as which owners they are
+// depends on the number of seats.
+const BARB = { col: "#3a3a3a", dark: "#1b1b1b", light: "#8a8a8a", name: "Barbarians" };
+let ownerColorsFor = "";
+function setOwnerColors() {
+  const n = W.n_players(), frontier = !!(W.game_mode && W.game_mode());
+  const key = `${frontier}:${n}`;
+  if (key === ownerColorsFor) return;
+  ownerColorsFor = key;
+  // The seats' own colours first, then black for every barbarian owner.
+  [PCOL, PDARK, PLIGHT, PNAME].forEach((a, k) => { a.length = 0; a.push(...SEAT_COLORS[k]); });
+  if (frontier) for (let o = n + 1; o < 32; o++) [PCOL[o], PDARK[o], PLIGHT[o], PNAME[o]] = [BARB.col, BARB.dark, BARB.light, BARB.name];
+  // Models and icons made in the last game's colours are made again.
+  if (typeof modelCache !== "undefined") modelCache.clear();
+  if (typeof iconCache !== "undefined") iconCache.clear();
+}
+const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()];
+// Skirmish or Frontier, as chosen on the start screen (kept in the browser).
+const MODE_KEY = "vibecraft.mode";
+let gameMode = 0, lastMode = 0;
+try { gameMode = localStorage.getItem(MODE_KEY) === "frontier" ? 1 : 0; } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
 // game's: slot -> name, for the seats people play. A seat without one (the
 // computer's, or someone who didn't pick a name) goes by its colour.
@@ -458,8 +480,15 @@ function bakeTerrain() {
   }
   sc.putImageData(img, 0, 0);
 
-  // The 3D texture: a mid-resolution colour pass (8 px per tile), scaled up.
-  const MID = 8;
+  // The 3D texture is one canvas of TILE px per tile, which the GPU takes as
+  // one texture: on Frontier's big maps that would be 13,000 px and more
+  // (700 MB+), past what GPUs take (often 8192) and more memory than many
+  // machines have. So big maps get fewer px per tile, keeping it in 8192.
+  const most = Math.min(8192, (R3.renderer && R3.renderer.capabilities.maxTextureSize) || 8192);
+  const T = Math.max(4, Math.min(TILE, Math.floor(most / Math.max(MW, MH))));
+  // A mid-resolution colour pass (8 px per tile; fewer on a big map, where
+  // it was most of the time to start), scaled up.
+  const MID = Math.max(4, Math.min(8, Math.floor(2600 / Math.max(MW, MH))));
   const mid = document.createElement("canvas"); mid.width = MW * MID; mid.height = MH * MID;
   const mc = mid.getContext("2d"), mi = mc.createImageData(mid.width, mid.height);
   for (let py = 0; py < mid.height; py++) for (let px = 0; px < mid.width; px++) {
@@ -468,10 +497,10 @@ function bakeTerrain() {
   }
   mc.putImageData(mi, 0, 0);
   terrainCanvas = document.createElement("canvas");
-  terrainCanvas.width = MW * TILE; terrainCanvas.height = MH * TILE;
+  terrainCanvas.width = MW * T; terrainCanvas.height = MH * T;
   const tc = terrainCanvas.getContext("2d");
   tc.imageSmoothingEnabled = true; tc.imageSmoothingQuality = "high";
-  tc.drawImage(mid, 0, 0, MW * TILE, MH * TILE);
+  tc.drawImage(mid, 0, 0, MW * T, MH * T);
 
   // Detail on top: only pebbles on rocky slopes. Grass gets its detail from
   // 3D clumps instead (render3d.js), and sand from the ground shader.
@@ -479,9 +508,9 @@ function bakeTerrain() {
     if (slopeAt(tx + 0.5, ty + 0.5) <= 0.35) continue;
     for (let k = 0; k < 4; k++) {
       const hx = hash2(tx * 7 + k, ty * 13 - k), hy = hash2(ty * 11 + k, tx * 5 + k);
-      const x = (tx + hx) * TILE, y = (ty + hy) * TILE;
+      const x = (tx + hx) * T, y = (ty + hy) * T, s = T / TILE;
       tc.fillStyle = k % 2 ? "rgba(70,62,50,.35)" : "rgba(200,192,176,.3)";
-      tc.beginPath(); tc.ellipse(x, y, 1.5 + hx * 2.5, 1 + hy * 1.5, hx * 3, 0, 7); tc.fill();
+      tc.beginPath(); tc.ellipse(x, y, (1.5 + hx * 2.5) * s, (1 + hy * 1.5) * s, hx * 3, 0, 7); tc.fill();
     }
   }
 
@@ -2012,9 +2041,11 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 
 // Start a game. Single player: `players` is you plus the computer players.
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
-function newGame(seedArg, local = 0, players = 2) {
+function newGame(seedArg, local = 0, players = 2, mode = 0) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  W.init(seed, difficulty, players);
+  lastMode = mode === 1 ? 1 : 0;
+  if (lastMode === 1) W.init_frontier(seed, difficulty, players);
+  else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
   else for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
   enterWorld(local);
@@ -2024,6 +2055,7 @@ function newGame(seedArg, local = 0, players = 2) {
 // one just loaded from a save.
 function enterWorld(local = 0) {
   ME = W.local_player();
+  setOwnerColors();
   simTick = 0; stalledSince = 0; outShown = false; surrendered = false;
   stopObserving();
   $("outScreen").hidden = true;
@@ -2281,16 +2313,17 @@ function renderMapPick() {
   $("mapRow").hidden = guest;
   if (guest) return;
   $("mapMode").value = mapMode;
+  $("gameMode").value = gameMode === 1 ? "frontier" : "skirmish";
   const pick = mapMode === "pick";
   $("mapPickCtl").hidden = !pick;
   $("mapPreview").hidden = !pick;
   if (document.activeElement !== $("mapSeed")) $("mapSeed").value = mapSeed;
   if (!pick || !W || !W.map_preview) return;
   const players = Math.max(2, seats.filter(s => s !== "open").length);
-  const key = `${mapSeed}:${players}`;
+  const key = `${mapSeed}:${players}:${gameMode}`;
   if (key === previewKey) return;
   previewKey = key;
-  const w = W.map_preview(mapSeed, players);
+  const w = W.map_preview(mapSeed, players, gameMode);
   const px = new Uint8Array(W.memory.buffer, W.preview_ptr(), w * w);
   const cv = $("mapPreview");
   cv.width = cv.height = w;
@@ -2299,6 +2332,11 @@ function renderMapPick() {
   for (let i = 0; i < w * w; i++) { const c = rgb[px[i]] || rgb[3]; img.data.set([c[0], c[1], c[2], 255], i * 4); }
   ctx.putImageData(img, 0, 0); // (town sites in white)
 }
+$("gameMode").onchange = () => {
+  gameMode = $("gameMode").value === "frontier" ? 1 : 0;
+  try { localStorage.setItem(MODE_KEY, gameMode === 1 ? "frontier" : "skirmish"); } catch { /* storage blocked */ }
+  renderMapPick();
+};
 $("mapMode").onchange = () => { mapMode = $("mapMode").value === "pick" ? "pick" : "surprise"; saveMapChoice(); renderMapPick(); };
 $("mapSeed").oninput = () => { const v = Math.floor(+$("mapSeed").value); if (v >= 1 && v <= 999999) { mapSeed = v; saveMapChoice(); renderMapPick(); } };
 $("mapSeed").onchange = () => { $("mapSeed").value = mapSeed; };
@@ -2464,7 +2502,7 @@ function beginGame() {
   if (!room || !active.some(isFriend)) {
     lastWasMultiplayer = false; lastPlayers = active.length;
     $("startScreen").hidden = true;
-    newGame(chosenSeed(), 0, active.length);
+    newGame(chosenSeed(), 0, active.length, gameMode);
     running = true; Rec.real = true;
     publishLobby(); // friends who arrive now wait for the next game
     return;
@@ -2472,7 +2510,7 @@ function beginGame() {
   const slots = {}, ai = [];
   const names = { 1: myName };
   active.forEach((s, k) => { if (isFriend(s)) { slots[s.slice(2)] = k + 1; names[k + 1] = peerNames.get(s.slice(2)) || ""; } else if (s === "ai") ai.push(k + 1); });
-  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: chosenSeed(), n: active.length, slots, ai, diffs: slotDiffs, host: myToken };
+  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: chosenSeed(), mode: gameMode, n: active.length, slots, ai, diffs: slotDiffs, host: myToken };
   // Keep telling the guests until all of them have answered.
   const send = () => room && room.emit("start", settings);
   send();
@@ -2491,7 +2529,7 @@ function beginGame() {
 function startMultiplayer(me, d, seq) {
   const n = Math.max(2, Math.min(4, d.n | 0));
   $("startScreen").hidden = true;
-  newGame(d.seed >>> 0, me, n);
+  newGame(d.seed >>> 0, me, n, d.mode === 1 ? 1 : 0);
   const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
   for (const s of ai) { W.set_ai(s, 1); W.set_difficulty(s, [0, 1, 2].includes(d.diffs && d.diffs[s]) ? d.diffs[s] : 1); }
   // Record from here: the start everyone shares, then the confirmed bundles.
@@ -3041,7 +3079,7 @@ $("loadFile").onchange = async e => {
   } catch { toast("That file isn't a VibeCraft save or replay.", "bad"); }
 };
 $("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused && !mp) togglePause(); };
-$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers); Rec.real = true; };
+$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers, lastMode); Rec.real = true; };
 $("quitBtn").onclick = toMenu;
 // Copy the invite link. Some app views refuse the clipboard: then select it
 // so it can be copied by hand.
