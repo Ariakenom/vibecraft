@@ -6,9 +6,11 @@
 //! map's blocked/occupied tiles, deposits, players, AI brains, timers), so
 //! a loaded game carries on exactly as the saved one would have: same
 //! checksum, tick for tick. Scratch space (pathfinder buffers, the spatial
-//! grid) is rebuilt instead, and pending UI events are dropped. Supply and
-//! use of slots aren't stored either: they follow from what exists, and are
-//! recounted on load.
+//! grid) is rebuilt instead, and pending UI events are dropped. What
+//! follows from what exists (crews, beds, who lives where) is recounted on
+//! load; players' supply and use of slots are stored too, as they stood
+//! (the start of the tick's count: recounting gave a newer one, so a loaded
+//! game's checksum could differ for a tick).
 //!
 //! No serde here (the crate has no dependencies), so it's done by hand with a
 //! tiny writer and reader. The reader never panics on bad input: every read
@@ -37,7 +39,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 14: maps vary more from seed to seed (the same seed draws another map).
 /// 15: an air defense fires at a nuke before it lands (`Nuke::shot`).
 /// 19: Frontier games: barbarian sites and camps, owners past the seats.
-const VERSION: u32 = 19;
+/// 20: players' supply and use of slots (19 still loads, recounted).
+const VERSION: u32 = 20;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -300,6 +303,9 @@ impl Game {
             w.u32(p.trained);
             w.u32(p.lost);
             w.u32(p.built);
+            for r in 0..crate::defs::N_RES {
+                w.u32(p.supply[r] as u32 | (p.used[r] as u32) << 16);
+            }
         }
 
         w.len(self.proj.len());
@@ -375,7 +381,11 @@ impl Game {
     /// this version understands (or are damaged).
     pub fn load(bytes: &[u8]) -> Option<Game> {
         let r = &mut R { b: bytes, at: 0 };
-        if r.take(4)? != MAGIC || r.u32()? != VERSION {
+        if r.take(4)? != MAGIC {
+            return None;
+        }
+        let version = r.u32()?;
+        if version != VERSION && version != 19 {
             return None;
         }
         let seed = r.u32()?;
@@ -483,6 +493,12 @@ impl Game {
             p.trained = r.u32()?;
             p.lost = r.u32()?;
             p.built = r.u32()?;
+            if version >= 20 {
+                for k in 0..crate::defs::N_RES {
+                    let v = r.u32()?;
+                    (p.supply[k], p.used[k]) = (v as u16, (v >> 16) as u16);
+                }
+            }
             players.push(p);
         }
 
@@ -593,7 +609,13 @@ impl Game {
             return None;
         }
 
+        let kept: Vec<_> = players.iter().map(|p| (p.supply, p.used)).collect();
         let mut g = Game::from_parts(seed, map, deps, ents, players, n_players, proj, fog, ais, local);
+        if version >= 20 {
+            for (p, (supply, used)) in g.players.iter_mut().zip(kept) {
+                (p.supply, p.used) = (supply, used);
+            }
+        }
         g.explored = explored;
         g.nukes = nukes;
         g.craters = craters;
@@ -611,6 +633,28 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A loaded game has the saved one's checksum straight away, wherever
+    /// in a tick's ups and downs it was saved (a camp just settled, a
+    /// building just finished: supply from the tick's start is kept).
+    #[test]
+    fn loaded_frontier_games_have_the_same_checksum() {
+        let mut g = Game::new_frontier(4242, 1, 2, crate::map_frontier::Size::Small);
+        for p in g.seat_ids() {
+            g.set_ai(p, true);
+        }
+        let mut differ = Vec::new();
+        for k in 0..30 {
+            for _ in 0..150 {
+                g.tick();
+                g.events.clear();
+            }
+            if Game::load(&g.save()).unwrap().checksum() != g.checksum() {
+                differ.push(k);
+            }
+        }
+        assert!(differ.is_empty(), "checksums differ after loading at save points {differ:?}");
+    }
 
     /// Play a while, save, load, then play both copies on: they must stay
     /// identical, byte for byte, the whole way.

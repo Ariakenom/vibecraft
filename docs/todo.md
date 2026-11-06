@@ -8,32 +8,7 @@ not straight away (see `CLAUDE.md`).
 
 ## Waiting
 
-- **"Not enough undefined" when upgrading a hut.** Reported Nov 2026. Not
-  reproduced yet: in a 16-minute computer-played game every upgrade message
-  came out right (wood, stone, brick, steel, the era and goods messages).
-  Needs: the exact text, where it showed (the Upgrade button's tip, a
-  message at the top, the house's panel) and which version. (Since Nov 6
-  an unknown code reads "Can't do that" instead.)
-- **More garbage to cut**: about 20 MB a second is left, mostly three.js
-  setting uniforms and the unit animation (`animateRig`).
-- **Barbarians without the extra yield.** Camps' land yields 40% more per
-  era of their site (`CAMP_YIELD_PER_ERA`, PR #41): that's the AI cheating.
-  Find other ways for the central camps to reach their eras. What held them
-  back was room: a camp builds only round its site, so it ran out of
-  places for quarries and brickworks. Ideas: bigger or richer deposits at
-  central sites, a wider building range there, an AI that builds more
-  compactly or picks better producers (a Kiln as soon as it can), camps
-  that start at their site's era. `diag_camp` with `VC_CENTRAL=1` shows a
-  central camp's buildings and what the AI is waiting for.
-
-- **A loaded game's checksum can differ from the saved one** (found Nov
-  2026; makes `frontier.mjs`'s save check fail now and then). Loading works
-  out players' supply again from the buildings as they are, while the
-  running game still has the supply from the start of the tick: a camp
-  settled or a building finished since then. The next tick works it out
-  again, so play is the same, but checksums (multiplayer compares them)
-  disagree for a tick. In a 2-player small Frontier game, 4 of 40 save
-  points differed. Fix: recount at the end of each tick, or save supply.
+(Nothing right now.)
 
 ## Done
 
@@ -73,8 +48,29 @@ not straight away (see `CLAUDE.md`).
   patches, and no camp enters an era before `CAMP_ERA_AT` (Medieval at 5
   minutes, Gunpowder 12, Industrial 20, Modern 30, Atomic 45). In a
   computer game the Modern-capped camps reached Gunpowder at 15 minutes,
-  Industrial at 25 and Modern at 30. Wants a playtest.
+  Industrial at 25 and Modern at 30. Wants a playtest. (The yield bonus
+  was then taken out again: see "without the extra yield" below.)
 - **Barbarian names**: each camp is named after its site, from the random
   players' names (`campName` in main.js; the same on every computer).
 - **Carriers don't attack themselves**: no guns of their own, they fight
   only through their aircraft.
+- **Barbarians without the extra yield**: the 40% bonus is gone. What
+  held the central camps back was the plan: it counts on fishing boats for
+  the houses' goods, and camps have no docks, so they sat one house short
+  of each era. Now a camp may build three more of each goods producer than
+  the target (`ai_max`). In a computer game the Modern-capped camps reach
+  Gunpowder at about 15 minutes and Industrial at 25, one Modern at 45.
+- **A loaded game has the saved one's checksum**: saves keep players'
+  supply and use as they stood (save version 20; 19 still loads).
+  `loaded_frontier_games_have_the_same_checksum` checks 30 save points.
+- **Less garbage again**: walk cycles only for units in view; each bone's
+  rotation set once a frame, straight into three.js's fields; resources
+  (remade when more are explored, or a building levels the ground) written
+  straight into the instance arrays. About 17 MB a second in the
+  test (with many ticks a frame, so more than a real game); what's left is
+  mostly three.js's own drawing code.
+- **"Not enough undefined"**: clicking a building of the next era (its page
+  shows once the era's first house stands) when only the era was missing,
+  not a building: the lookup for the missing building ran off the end
+  (2000 + -1, read as a resource). It now says "Not until the Gunpowder
+  era: it takes 10 townhouses, you have 4" (`lockedText` in main.js).

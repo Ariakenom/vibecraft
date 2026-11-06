@@ -5,6 +5,11 @@ import { browser, open, check, failed, sleep } from "./lib.mjs";
 const b = await browser();
 const pg = await open(b, "", { draw: !!process.env.SHOT });
 await pg.evaluate(() => { newGame(7, 0, 2); running = true; paused = true; $("startScreen").hidden = true; });
+// A building locked by its era says which era and what it takes, not
+// "Not enough undefined" (what clicking one on the next era's page said).
+const why = await pg.evaluate(() => [lockedText(K.Kiln), lockedText(K.Stable)]);
+console.log(why);
+check(why[0] === "Not until the Gunpowder era" && /^Not until the Medieval era: it takes \d+ cottages, you have 0$/.test(why[1]), "a building of a later era says what it waits for");
 await sleep(300);
 check(await pg.evaluate(() => { readWorld(); renderBuildList(); return $("buildList").hidden; }), "hidden while nothing is being built");
 // Place a few foundations near the Capitol, with every worker sent to them.
