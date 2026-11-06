@@ -66,6 +66,7 @@ impl Game {
     }
 
     /// Every campfire of `owner`'s, oldest Capitol first.
+    #[cfg(test)]
     pub fn campfires(&self, owner: u8) -> Vec<(f32, f32)> {
         self.capitols(owner).map(|c| self.campfire_of(c)).collect()
     }

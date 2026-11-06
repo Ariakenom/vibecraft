@@ -74,6 +74,25 @@ pub extern "C" fn init(seed: u32, difficulty: u32, players: u32) {
 }
 
 #[unsafe(no_mangle)]
+/// `init`, for a Frontier game: the big map of continents, with barbarians.
+pub extern "C" fn init_frontier(seed: u32, difficulty: u32, players: u32) {
+    let world = World { game: Game::new_frontier(seed, difficulty, players.clamp(2, 4) as u8), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
+    WORLD.with(|w| *w.borrow_mut() = Some(world));
+}
+
+/// The game being played: 0 Skirmish, 1 Frontier.
+#[unsafe(no_mangle)]
+pub extern "C" fn game_mode() -> u32 {
+    game(|g| g.frontier.is_some() as u32)
+}
+
+/// Is `owner` a barbarian (Frontier)? 1 or 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn is_barbarian(owner: u32) -> u32 {
+    game(|g| (owner < 256 && g.is_barb(owner as u8)) as u32)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn tick() {
     game(|g| g.tick())
 }
@@ -1165,8 +1184,16 @@ thread_local! {
 /// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width; it's
 /// square. `preview_ptr` has the bytes.
 #[unsafe(no_mangle)]
-pub extern "C" fn map_preview(seed: u32, players: u32) -> u32 {
-    let (m, deps, bases) = map::generate(seed, players.clamp(2, 4) as usize);
+pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
+    let players = players.clamp(2, 4) as usize;
+    // (On a Frontier map, the barbarian sites are drawn in white too.)
+    let (m, deps, bases) = if mode == 1 {
+        let (m, d, mut b, sites) = map_frontier::generate_frontier(seed, players);
+        b.extend(sites.iter().map(|s| (s.x, s.y)));
+        (m, d, b)
+    } else {
+        map::generate(seed, players)
+    };
     let mut px: Vec<u8> = m.terrain.iter().map(|&t| match t {
         map::WATER => 0,
         map::SHALLOW => 1,

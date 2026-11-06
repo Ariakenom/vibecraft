@@ -637,10 +637,12 @@ impl Game {
     /// Every slot starts human; `set_ai` hands slots to the computer.
     pub fn setup_multiplayer(&mut self, local: u8) {
         self.local = local;
-        for ai in self.ais.iter_mut() {
+        // The seats only: Frontier's barbarians play on.
+        let seats = self.n_players as usize + 1;
+        for ai in self.ais.iter_mut().take(seats) {
             ai.on = false;
         }
-        for p in self.players.iter_mut() {
+        for p in self.players.iter_mut().take(seats) {
             p.supply_pct = 100; // no difficulty handicap between people
         }
         for e in self.ents.iter_mut() {

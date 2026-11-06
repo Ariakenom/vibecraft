@@ -222,8 +222,14 @@ mod tests {
             assert!(g.players[o as usize].era <= g.era_cap(o));
             assert!(g.home_capitol(o).is_some());
         }
+        // Online, the seats' computer brains go off; the barbarians' don't.
+        let mut online = g.clone();
+        online.setup_multiplayer(1);
+        assert!(online.player_ids().filter(|&o| online.is_barb(o)).all(|o| online.ais[o as usize].on));
+        assert!(online.seat_ids().all(|o| !online.ais[o as usize].on));
         let bytes = g.save();
         let mut h = Game::load(&bytes).expect("a Frontier save loads");
+        assert_eq!(h.pf.limit, crate::path::SEARCH_LIMIT_FRONTIER);
         run(&mut g, 30.0);
         run(&mut h, 30.0);
         assert_eq!(g.checksum(), h.checksum());

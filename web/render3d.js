@@ -872,7 +872,7 @@ function glbModel(kind, owner) {
 let entMat, ghostMat, hitMat, treeMat, treeDepthMat, stoneMat, goldMat;
 const modelCache = new Map();
 function cachedModel(kind, owner) {
-  const key = kind * 8 + owner;
+  const key = kind * 64 + owner;
   if (!modelCache.has(key)) modelCache.set(key, glbModel(kind, owner) || (isBld(kind) ? { body: buildingModel(kind, owner) } : unitModel(kind, owner)));
   return modelCache.get(key);
 }
