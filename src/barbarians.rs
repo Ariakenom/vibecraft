@@ -22,6 +22,11 @@ const UNSEEN: f32 = 32.0;
 /// A camp's town: what it builds on and knows about, and how far it raids.
 pub const BARB_RANGE: f32 = 36.0;
 pub const RAID_RANGE: f32 = 70.0;
+/// Extra yield (percent of a seat's) a camp's land gives per era of its site.
+pub const CAMP_YIELD_PER_ERA: u16 = 40;
+/// The earliest time (seconds of game) a camp enters each era (Medieval,
+/// Gunpowder, Industrial, Modern, Atomic): a little behind a quick player.
+pub const CAMP_ERA_AT: [f32; 5] = [300.0, 720.0, 1200.0, 1800.0, 2700.0];
 
 /// The Frontier part of a game: the sites and who holds them.
 #[derive(Clone)]
@@ -152,7 +157,11 @@ impl Game {
         f.settled += 1;
         // A fresh town: nothing carried over from the last camp in this slot.
         let (diff, phase) = (self.ais[owner as usize].difficulty, owner as f32 * 0.13);
-        self.players[owner as usize] = Player::new(handicap(diff));
+        // Camps further in are richer: their land yields more, by the
+        // site's era (a camp's town has only the room round its site, and
+        // with no more than a seat's yield the central ones never got out
+        // of the Medieval era).
+        self.players[owner as usize] = Player::new(handicap(diff) + CAMP_YIELD_PER_ERA * site.era as u16);
         self.ais[owner as usize] = Ai::new(diff, true, phase);
         let cap = self.spawn_building(Kind::Capitol, owner, site.x - 1, site.y - 1, 1.0);
         // Like a start's: it holds no slots.
@@ -310,6 +319,8 @@ mod why {
         let slots: Vec<(u8, u16)> = f.camps.iter().enumerate().filter_map(|(k, c)| c.map(|s| (g.n_players + 1 + k as u8, s))).collect();
         let (me, site) = match want {
             Some(s) => *slots.iter().find(|&&(_, x)| x == s).expect("no camp there"),
+            // (VC_CENTRAL: the camp of the highest era cap instead.)
+            None if std::env::var("VC_CENTRAL").is_ok() => *slots.iter().max_by_key(|&&(o, _)| (g.era_cap(o), g.players[o as usize].people)).unwrap(),
             None => *slots.iter().max_by_key(|&&(o, _)| g.players[o as usize].people).unwrap(),
         };
         let p = &g.players[me as usize];
