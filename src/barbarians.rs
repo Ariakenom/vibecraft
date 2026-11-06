@@ -44,6 +44,12 @@ impl Frontier {
 }
 
 impl Game {
+    /// Make this a Frontier game (a new one, or one just loaded).
+    pub(crate) fn set_frontier(&mut self, f: Frontier) {
+        self.frontier = Some(f);
+        self.pf.limit = crate::path::SEARCH_LIMIT_FRONTIER;
+    }
+
     /// A new Frontier game: the seats as in `new`, then the barbarian slots.
     pub fn new_frontier(seed: u32, difficulty: u32, n_players: u8) -> Game {
         let n_players = n_players.clamp(2, crate::game::MAX_PLAYERS as u8);
@@ -58,7 +64,7 @@ impl Game {
         for p in n_players as usize + 1..=owners {
             g.players[p].defeated = true;
         }
-        g.frontier = Some(front);
+        g.set_frontier(front);
         for (i, &(bx, by)) in bases.iter().enumerate() {
             let cap = g.spawn_building(Kind::Capitol, i as u8 + 1, bx - 1, by - 1, 1.0);
             g.ents[cap as usize].starting = true;
@@ -357,5 +363,46 @@ mod prof {
                 g.events.clear();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod paths {
+    use super::*;
+    use crate::path::{Goal, Pathfinder, SEARCH_LIMIT, SEARCH_LIMIT_FRONTIER};
+
+    /// Long trips across a home continent, round its lakes and bays, arrive
+    /// with Frontier's search limit (more than with Skirmish's).
+    #[test]
+    fn long_paths_arrive() {
+        let g = Game::new_frontier(5, 1, 2);
+        let c = g.home_capitol(1).unwrap();
+        let (sx, sy) = (g.ents[c].x + 3.0, g.ents[c].y + 3.0);
+        let reach = g.reach_for_tests(sx, sy);
+        let land: Vec<(i32, i32)> = (0..g.map.h).flat_map(|y| (0..g.map.w).map(move |x| (x, y))).filter(|&(x, y)| reach[g.map.idx(x, y)]).collect();
+        let (mut short, mut long, mut tried) = (0, 0, 0);
+        let mut ms = [0.0f64; 2];
+        for k in 0..400usize {
+            let a = land[(k * 7919) % land.len()];
+            let b = land[(k * 104729 + 13) % land.len()];
+            if ((a.0 - b.0) as f32).hypot((a.1 - b.1) as f32) < 80.0 {
+                continue;
+            }
+            tried += 1;
+            let goal = Goal::point(b.0 as f32 + 0.5, b.1 as f32 + 0.5, 0.5);
+            for (j, (limit, n)) in [(SEARCH_LIMIT, &mut short), (SEARCH_LIMIT_FRONTIER, &mut long)].into_iter().enumerate() {
+                let mut pf = Pathfinder::new((g.map.w * g.map.h) as usize);
+                pf.limit = limit;
+                let t = std::time::Instant::now();
+                let p = pf.find(&g.map, false, a.0 as f32 + 0.5, a.1 as f32 + 0.5, &goal);
+                ms[j] = ms[j].max(t.elapsed().as_secs_f64() * 1000.0);
+                if p.last() == Some(&b) {
+                    *n += 1;
+                }
+            }
+        }
+        println!("trips over 80 tiles that arrive: {short} of {tried} with {SEARCH_LIMIT} (slowest {:.1} ms), {long} with {SEARCH_LIMIT_FRONTIER} (slowest {:.1} ms)", ms[0], ms[1]);
+        let long = long * 20 / tried.max(1);
+        assert!(long >= 18, "only {long} of 20 arrive");
     }
 }

@@ -1298,14 +1298,25 @@ impl Game {
             .map(|e| (e.x, e.y))
     }
 
-    /// Where an attack wave goes: for a town, `target_for`; for barbarians,
+    /// Where an attack wave goes: in Skirmish, `target_for`; for barbarians,
     /// the nearest building of anyone else they can walk to, within
     /// `RAID_RANGE` of their camp.
     fn wave_target(&self, me: u8, bx: f32, by: f32, reach: &[bool]) -> Option<(f32, f32)> {
-        if !self.is_barb(me) {
+        let m = &self.map;
+        if self.frontier.is_none() {
             return self.target_for(me, bx, by);
         }
-        let m = &self.map;
+        // A Frontier town: the nearest Capitol it can walk to (a barbarian
+        // camp's, most likely); one across the sea would only march the
+        // army to the shore.
+        if !self.is_barb(me) {
+            return self
+                .ents
+                .iter()
+                .filter(|e| e.alive && e.kind == Kind::Capitol && e.owner != me && e.owner != 0 && touches(m, reach, e.tx, e.ty, e.kind.stats().size))
+                .min_by(|a, b| (a.x - bx).hypot(a.y - by).total_cmp(&(b.x - bx).hypot(b.y - by)))
+                .map(|e| (e.x, e.y));
+        }
         self.ents
             .iter()
             .filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && (e.x - bx).hypot(e.y - by) < crate::barbarians::RAID_RANGE)

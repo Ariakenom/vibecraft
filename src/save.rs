@@ -601,7 +601,9 @@ impl Game {
         g.state = state;
         g.winner = winner;
         g.load_timers(timers);
-        g.frontier = frontier;
+        if let Some(f) = frontier {
+            g.set_frontier(f);
+        }
         Some(g)
     }
 }

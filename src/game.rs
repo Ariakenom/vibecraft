@@ -509,7 +509,7 @@ pub struct Game {
     pub events: Vec<f32>,
     /// One computer brain per player slot; `on` says who it plays for.
     pub ais: Vec<Ai>,
-    pf: Pathfinder,
+    pub(crate) pf: Pathfinder,
     grid: Vec<Vec<u32>>,
     /// Water joined to the open sea round the map (lakes aren't), worked out
     /// from the map: never saved, as the water never changes.
