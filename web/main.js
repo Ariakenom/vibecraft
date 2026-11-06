@@ -1743,6 +1743,7 @@ function handleEvents() {
         else Sfx.at("melee", x, y, 45, d);
         break;
       case EV.Shoot:
+        shotFired(x, y, d); // recoil, the trebuchet's throw, muzzle flash (render3d.js)
         if (isGun(d)) { Sfx.at(isBigGun(d) ? "cannon" : d === K.MachineGunner || d === K.Infantry || d === K.Fighter ? "mg" : "musket", x, y, 40); if (!isAir(d)) gunSmoke(x, y, d); }
         else if (d === K.Submarine) Sfx.at("cannon", x, y, 25); // a muffled thump under the water
         else Sfx.at("bow", x, y, 60, isBld(d));
