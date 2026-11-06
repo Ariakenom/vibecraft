@@ -130,6 +130,16 @@ pub extern "C" fn is_barbarian(owner: u32) -> u32 {
     game(|g| (owner < 256 && g.is_barb(owner as u8)) as u32)
 }
 
+/// The site a barbarian camp holds (its number among the map's sites), or
+/// -1: the page names each camp after its site.
+#[unsafe(no_mangle)]
+pub extern "C" fn camp_site(owner: u32) -> i32 {
+    game(|g| {
+        let Some(f) = g.frontier.as_ref().filter(|_| owner < 256 && g.is_barb(owner as u8)) else { return -1 };
+        f.camps.get(owner as usize - g.n_players as usize - 1).copied().flatten().map_or(-1, |s| s as i32)
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn tick() {
     game(|g| g.tick())
