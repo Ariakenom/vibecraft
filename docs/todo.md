@@ -3,6 +3,9 @@
 Ideas and fixes waiting their turn. Newest at the bottom of each list.
 When one is done, move it to "Done" with the commit or PR.
 
+Messages to Claude that start with "todo:" come here, to be done later,
+not straight away (see `CLAUDE.md`).
+
 ## Waiting
 
 - **Barbarian names.** Give each barbarian camp a name, from the same
@@ -12,6 +15,8 @@ When one is done, move it to "Done" with the commit or PR.
   came out right (wood, stone, brick, steel, the era and goods messages).
   Needs: the exact text, where it showed (the Upgrade button's tip, a
   message at the top, the house's panel) and which version.
+- **Carriers don't attack themselves.** Remove the aircraft carrier's own
+  attack: it fights only through its aircraft.
 
 ## Done
 
