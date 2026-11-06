@@ -591,7 +591,10 @@ function drawOverlay() {
     const ready = bld && E(i, F.owner) === ME && !(flags & 2) && HOUSE_UP[k] && W.house_upgrade_state(E(i, F.id)) === 0;
     // A converter of yours without all its inputs: the one it lacks, crossed out.
     const unfed = bld && E(i, F.owner) === ME && (flags & 256) && !paused;
-    if (!sel && !short && !idleP && !paused && !unfed && want === undefined && !ready && (f >= 1 || bld)) continue;
+    // A health bar on anything hurt: units, and finished buildings (one going
+    // up is short of health only because it isn't finished).
+    const hurt = f < 1 && !(bld && (flags & 2));
+    if (!sel && !short && !idleP && !paused && !unfed && want === undefined && !ready && !hurt) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
     if (ready) {
@@ -599,14 +602,14 @@ function drawOverlay() {
       octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
       octx.fillStyle = "#79c95f"; octx.beginPath(); octx.moveTo(x, y - 8); octx.lineTo(x + 7, y); octx.lineTo(x + 3, y); octx.lineTo(x + 3, y + 7);
       octx.lineTo(x - 3, y + 7); octx.lineTo(x - 3, y); octx.lineTo(x - 7, y); octx.closePath(); octx.fill();
-      if (want === undefined && !sel && f >= 1) continue;
+      if (want === undefined && !sel && !hurt) continue;
     }
     if (want !== undefined) {
       const x = p.x - (ready ? 15 : 0), y = p.y - 18, img = resImage(want);
       octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
       octx.beginPath(); octx.moveTo(x - 4, y + 11); octx.lineTo(x, y + 16); octx.lineTo(x + 4, y + 11); octx.fill();
       if (img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
-      if (!sel && f >= 1) continue;
+      if (!sel && !hurt) continue;
     }
     if (unfed) {
       const lack = slotsOf(k, 2).find(([r, n]) => free(r) < n), x = p.x, y = p.y - (idleP ? 46 : 20);
@@ -614,13 +617,13 @@ function drawOverlay() {
       const img = lack && resImage(lack[0]);
       if (img && img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
       octx.strokeStyle = "#e2593f"; octx.lineWidth = 2.5; octx.beginPath(); octx.moveTo(x - 9, y + 9); octx.lineTo(x + 9, y - 9); octx.stroke();
-      if (!idleP && !sel && f >= 1) continue;
+      if (!idleP && !sel && !hurt) continue;
     }
     if (paused) { // a producer you paused: two bars
       const x = p.x, y = p.y - 20;
       octx.fillStyle = "rgba(20,16,10,.8)"; octx.beginPath(); octx.arc(x, y, 11, 0, 7); octx.fill();
       octx.fillStyle = "#e3b23c"; octx.fillRect(x - 5, y - 5.5, 3.5, 11); octx.fillRect(x + 1.5, y - 5.5, 3.5, 11);
-      if (!sel && f >= 1) continue;
+      if (!sel && !hurt) continue;
     }
     if (idleP) { // a producer with no crew: a person, crossed out
       const x = p.x, y = p.y - 20;
@@ -628,7 +631,7 @@ function drawOverlay() {
       octx.fillStyle = "#d9c9a8"; octx.beginPath(); octx.arc(x, y - 4, 3.6, 0, 7); octx.fill();
       octx.beginPath(); octx.moveTo(x - 7, y + 8); octx.quadraticCurveTo(x, y - 4, x + 7, y + 8); octx.fill();
       octx.strokeStyle = "#e2593f"; octx.lineWidth = 2.5; octx.beginPath(); octx.moveTo(x - 8, y - 8); octx.lineTo(x + 8, y + 8); octx.stroke();
-      if (!sel && f >= 1) continue;
+      if (!sel && !hurt) continue;
     }
     if (short) { // unsupplied: a small amber warning sign above the bar
       octx.fillStyle = "#e3b23c"; octx.strokeStyle = "rgba(0,0,0,.7)"; octx.lineWidth = 1.5;
