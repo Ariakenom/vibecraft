@@ -36,7 +36,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 13: cheat mode.
 /// 14: maps vary more from seed to seed (the same seed draws another map).
 /// 15: an air defense fires at a nuke before it lands (`Nuke::shot`).
-const VERSION: u32 = 18;
+/// 19: Frontier games: barbarian sites and camps, owners past the seats.
+const VERSION: u32 = 19;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -351,6 +352,22 @@ impl Game {
         w.f32(fog_timer);
         w.f32(alert_cooldown);
         w.u32(idle_cursor);
+        w.bool(self.frontier.is_some());
+        if let Some(f) = &self.frontier {
+            w.len(f.sites.len());
+            for s in &f.sites {
+                w.i32(s.x);
+                w.i32(s.y);
+                w.u8(s.era);
+            }
+            w.len(f.camps.len());
+            for c in &f.camps {
+                w.bool(c.is_some());
+                w.u32(c.unwrap_or(0) as u32);
+            }
+            w.f32(f.next_camp);
+            w.u32(f.settled);
+        }
         w.0
     }
 
@@ -394,7 +411,7 @@ impl Game {
             let id = r.u32()?;
             let kind = r.kind()?;
             let owner = r.u8()?;
-            if id as usize != i || owner as usize > n_players as usize {
+            if id as usize != i || owner as usize > n_players as usize + crate::barbarians::MAX_BARBS {
                 return None;
             }
             let mut e = Entity::blank(id, kind, owner);
@@ -448,7 +465,7 @@ impl Game {
         }
 
         let nplayers = r.len(1)?;
-        if nplayers != n_players as usize + 1 {
+        if nplayers < n_players as usize + 1 || nplayers > n_players as usize + 1 + crate::barbarians::MAX_BARBS || ents.iter().any(|e| e.owner as usize >= nplayers) {
             return None;
         }
         let mut players = Vec::with_capacity(nplayers);
@@ -518,6 +535,37 @@ impl Game {
         let state = r.u8()?;
         let winner = r.u8()?;
         let timers = (r.f32()?, r.f32()?, r.u32()?);
+        // Frontier: the sites, who holds which, and the camp timer.
+        let frontier = if r.bool()? {
+            let nsites = r.len(9)?;
+            let mut sites = Vec::with_capacity(nsites);
+            for _ in 0..nsites {
+                let (x, y, era) = (r.i32()?, r.i32()?, r.u8()?);
+                if !(0..mw).contains(&x) || !(0..mh).contains(&y) || era > 5 {
+                    return None;
+                }
+                sites.push(crate::map_frontier::Site { x, y, era });
+            }
+            let ncamps = r.len(5)?;
+            if ncamps > crate::barbarians::MAX_BARBS {
+                return None;
+            }
+            let mut camps = Vec::with_capacity(ncamps);
+            for _ in 0..ncamps {
+                let (held, s) = (r.bool()?, r.u32()?);
+                if held && s as usize >= nsites {
+                    return None;
+                }
+                camps.push(held.then_some(s as u16));
+            }
+            let (next_camp, settled) = (r.f32()?, r.u32()?);
+            Some(crate::barbarians::Frontier { sites, camps, next_camp, settled })
+        } else {
+            None
+        };
+        if nplayers != n_players as usize + 1 + frontier.as_ref().map_or(0, |f| f.camps.len()) {
+            return None;
+        }
         if r.at != bytes.len() {
             return None;
         }
@@ -553,6 +601,7 @@ impl Game {
         g.state = state;
         g.winner = winner;
         g.load_timers(timers);
+        g.frontier = frontier;
         Some(g)
     }
 }

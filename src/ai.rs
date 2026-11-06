@@ -253,6 +253,11 @@ impl Game {
     /// goods, what `target` has, plus one; huts and farms a few past the
     /// next era's needs. The soldiers' buildings have their plan and reserve.
     fn ai_max(&self, me: u8, kind: Kind) -> usize {
+        // Barbarians stay on their land: no boats, aircraft, nukes or
+        // second towns.
+        if self.is_barb(me) && matches!(kind, Kind::Dock | Kind::Airfield | Kind::MissileSilo | Kind::Capitol) {
+            return if kind == Kind::Capitol { 1 } else { 0 };
+        }
         let mut hard = Self::max_of(kind);
         // A dozen houses are all the next era asks for; more huts only hold
         // the wood the upgrades are waiting for.
@@ -335,6 +340,10 @@ impl Game {
         let style = &STYLES[self.ais[me as usize].difficulty.min(2) as usize];
         let next = self.ai_economy(&mut c);
         self.ai_army(style, next, &mut c);
+        if self.is_barb(me) {
+            self.ai_fight(&c);
+            return;
+        }
         self.ai_navy(next, &mut c);
         self.ai_scout(&mut c);
         self.ai_fight(&c);
@@ -831,7 +840,11 @@ impl Game {
                     .deps
                     .iter()
                     .enumerate()
-                    .filter(|(_, d)| d.kind == dep && self.explored_by(me, d.tx, d.ty))
+                    // (In Frontier, only ones our workers can get to: on its
+                    // big maps most deposits seen across the water aren't,
+                    // and trying them all was most of a turn. Skirmish games
+                    // are left exactly as they were.)
+                    .filter(|(_, d)| d.kind == dep && self.explored_by(me, d.tx, d.ty) && (self.frontier.is_none() || touches(&self.map, &c.reach, d.tx, d.ty, 1)))
                     .map(|(i, d)| ((d.center().0 - bx).powi(2) + (d.center().1 - by).powi(2), i))
                     .collect();
                 // `total_cmp` orders floats totally, and the index breaks
@@ -966,7 +979,11 @@ impl Game {
             .collect();
         let queued: usize = self.ents.iter().filter(|e| e.alive && e.owner == me && e.kind != Kind::Capitol && e.kind != Kind::Dock).map(|e| e.queue.len()).sum();
         let mut army = c.army.len() + queued;
+        let cap = self.army_cap(me);
         for b in producers {
+            if army >= cap {
+                break;
+            }
             let pl = self.players[me as usize];
             let people = pl.people as f32;
             // Well short of its army, it takes the next free worker even if
@@ -1032,7 +1049,13 @@ impl Game {
         // isn't fishing goes to the nearest spot no boat fishes or is
         // sailing to (anyone's: a spot takes one boat).
         let claims = self.fishing_claims();
-        let mut busy: Vec<(f32, f32)> = self.deps.iter().enumerate().filter(|&(d, _)| claims.contains(&Some(d))).map(|(_, d)| d.center()).collect();
+        // (Which deposits are claimed, as a table: looking each one up in
+        // `claims` was deposits × entities, most of a turn on a big map.)
+        let mut claimed = vec![false; self.deps.len()];
+        for &d in claims.iter().flatten() {
+            claimed[d] = true;
+        }
+        let mut busy: Vec<(f32, f32)> = self.deps.iter().enumerate().filter(|&(d, _)| claimed[d]).map(|(_, d)| d.center()).collect();
         busy.extend(self.ents.iter().filter(|o| o.alive && o.kind == Kind::FishingBoat).filter_map(|o| match o.order { Order::Move { x, y } => Some((x, y)), _ => None }));
         let shoals: Vec<(f32, f32)> = self.deps.iter().filter(|d| d.kind == Dep::Fish && self.sea[self.map.idx(d.tx, d.ty)]).map(|d| d.center()).collect();
         for i in 0..self.ents.len() {
@@ -1213,7 +1236,7 @@ impl Game {
             let there = c.army.iter().filter(|&&id| (self.ents[id as usize].x - gx).hypot(self.ents[id as usize].y - gy) < 6.0).count();
             if there * 10 >= c.army.len() * 8 || self.time >= self.ais[me as usize].gather_until {
                 self.ais[me as usize].gather = None;
-                if let Some((tx, ty)) = self.target_for(me, bx, by) {
+                if let Some((tx, ty)) = self.wave_target(me, bx, by, &c.reach) {
                     let spots = formation_around(c.army.len(), tx, ty);
                     for (&id, &(x, y)) in c.army.iter().zip(&spots) {
                         self.order_attack_move(id, x, y);
@@ -1233,7 +1256,7 @@ impl Game {
         let due = self.ais[me as usize].next_attack;
         let stuck = p.people >= p.beds && c.spare <= 1 && c.army.len() >= 4 && self.time >= due + 120.0;
         if (self.time >= due && c.army.len() >= wave) || stuck {
-            if let Some((tx, ty)) = self.target_for(me, bx, by) {
+            if let Some((tx, ty)) = self.wave_target(me, bx, by, &c.reach) {
                 // The warships sail for the coast nearest it.
                 for id in self.navy(me) {
                     self.order_attack_move(id, tx, ty);
@@ -1272,6 +1295,22 @@ impl Game {
         self.ents
             .iter()
             .find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.holds_bed() && !e.kind.is_naval() && (e.x - x).hypot(e.y - y) < r)
+            .map(|e| (e.x, e.y))
+    }
+
+    /// Where an attack wave goes: for a town, `target_for`; for barbarians,
+    /// the nearest building of anyone else they can walk to, within
+    /// `RAID_RANGE` of their camp.
+    fn wave_target(&self, me: u8, bx: f32, by: f32, reach: &[bool]) -> Option<(f32, f32)> {
+        if !self.is_barb(me) {
+            return self.target_for(me, bx, by);
+        }
+        let m = &self.map;
+        self.ents
+            .iter()
+            .filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && (e.x - bx).hypot(e.y - by) < crate::barbarians::RAID_RANGE)
+            .filter(|e| touches(m, reach, e.tx, e.ty, e.kind.stats().size))
+            .min_by(|a, b| (a.x - bx).hypot(a.y - by).total_cmp(&(b.x - bx).hypot(b.y - by)))
             .map(|e| (e.x, e.y))
     }
 

@@ -2173,3 +2173,17 @@ fn diag_big_map() {
     }
     crate::map::SIZE_OVERRIDE.with(|c| c.set(0));
 }
+
+/// The checksum of two computer-played Skirmish games after 12 minutes: run
+/// before and after a change that shouldn't alter the game (a speed-up),
+/// and compare. `cargo test --release diag_same_game -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn diag_same_game() {
+    for (seed, players) in [(3u32, 4u8), (11, 2)] {
+        let mut g = Game::new(seed, 1, players);
+        for p in 1..=players { g.set_ai(p, true); }
+        for _ in 0..12 * 1200 { g.tick(); g.events.clear(); }
+        println!("CHECK {seed} {players}: {:x} {}", g.checksum(), g.ents.len());
+    }
+}

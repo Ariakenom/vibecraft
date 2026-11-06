@@ -151,7 +151,7 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
     let clear_of = |keep: &[(f32, f32, f32)], cx: i32, cy: i32, r: f32| {
         images(cx, cy).all(|(ix, iy)| keep.iter().all(|&(x, y, k)| dist((ix as f32, iy as f32), (x, y)) > k + r + 1.0))
     };
-    let mut place = |terrain: &mut Vec<u8>, feat: &mut Vec<Feat>, keep: &[(f32, f32, f32)], cx: i32, cy: i32, f: Feat, r: f32, ring_max: i32| -> bool {
+    let place = |terrain: &mut Vec<u8>, feat: &mut Vec<Feat>, keep: &[(f32, f32, f32)], cx: i32, cy: i32, f: Feat, r: f32, ring_max: i32| -> bool {
         let mut at = None;
         'search: for ring in 0..=ring_max {
             for k in 0..(8 * ring).max(1) {
@@ -252,7 +252,7 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
         tries += 1;
         let (x, y) = ((hash(tries, 61, seed) * lf) as i32, (hash(tries, 63, seed) * lf) as i32);
         let p = (x as f32 + 0.5, y as f32 + 0.5);
-        if inside(p) > 0.72 || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || !dry(&terrain, x, y, 5.0) {
+        if inside(p) > 0.66 || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || !dry(&terrain, x, y, 8.0) {
             continue;
         }
         let imgs: Vec<(f32, f32)> = images(x, y).map(|(a, b)| (a as f32 + 0.5, b as f32 + 0.5)).collect();
@@ -268,9 +268,12 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
         keep_clear.push((s.x as f32 + 0.5, s.y as f32 + 0.5, 6.0));
     }
     for (si, s) in sites.iter().enumerate() {
-        let mut kinds: Vec<(Feat, f32)> = vec![(Feat::Stone, 1.5), (Feat::Fertile, 2.0), (Feat::Game, 2.0)];
+        // A forest first, as by a Skirmish start: wood is what every era
+        // waits for.
+        // Food for houses that want three kinds, as much as a start has.
+        let mut kinds: Vec<(Feat, f32)> = vec![(Feat::Tree, 3.4), (Feat::Stone, 1.5), (Feat::Fertile, 2.4), (Feat::Game, 2.4), (Feat::Fertile, 2.2), (Feat::Game, 2.2), (Feat::Stone, 1.5)];
         if s.era >= 1 {
-            kinds.extend([(Feat::Iron, 1.4), (Feat::Clay, 1.4), (Feat::Hills, 1.5), (Feat::Horses, 1.5)]);
+            kinds.extend([(Feat::Iron, 1.5), (Feat::Clay, 1.6), (Feat::Hills, 1.6), (Feat::Horses, 1.6), (Feat::Clay, 1.5)]);
         }
         if s.era >= 2 {
             kinds.push((Feat::Nitrate, 1.3));
@@ -284,10 +287,17 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
         if s.era >= 5 {
             kinds.push((Feat::Uranium, 1.3));
         }
+        // Each round the site, trying other directions and distances until
+        // one fits (sites near a coast have less room).
         for (j, &(f, r)) in kinds.iter().enumerate() {
-            let a = (j as f32 / kinds.len() as f32 + hash(si as i32, 65, seed)) * std::f32::consts::TAU;
-            let d = 10.0 + 3.0 * (j % 3) as f32;
-            place(&mut terrain, &mut feat, &keep_clear, s.x + (a.cos() * d) as i32, s.y + (a.sin() * d) as i32, f, r, 8);
+            let a0 = (j as f32 / kinds.len() as f32 + hash(si as i32, 65, seed)) * std::f32::consts::TAU;
+            'tries: for t in 0..40 {
+                let a = a0 + t as f32 * 0.7;
+                let d = 9.0 + 2.0 * ((j + t) % 6) as f32 + if t >= 24 { 4.0 } else { 0.0 };
+                if place(&mut terrain, &mut feat, &keep_clear, s.x + (a.cos() * d) as i32, s.y + (a.sin() * d) as i32, f, r, 3) {
+                    break 'tries;
+                }
+            }
         }
     }
     // Clear the town and camp sites themselves.
@@ -517,5 +527,32 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod site_tests {
+    use super::*;
+    /// Every barbarian site has what its era needs within reach.
+    #[test]
+    fn sites_have_their_deposits() {
+        let mut missing = Vec::new();
+        for players in [2, 4] {
+            for seed in 0..6 {
+                let (_, deps, _, sites) = generate_frontier(seed, players);
+                for (i, s) in sites.iter().enumerate() {
+                    let mut need = vec![Dep::Forest, Dep::Stone, Dep::Fertile, Dep::Game];
+                    if s.era >= 1 {
+                        need.extend([Dep::Iron, Dep::Clay, Dep::Hills, Dep::Horses]);
+                    }
+                    for k in need {
+                        if !deps.iter().any(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (s.x as f32, s.y as f32)) < 26.0) {
+                            missing.push(format!("{players}p seed {seed} site {i} era {}: {k:?}", s.era));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{} missing:\n{}", missing.len(), missing.join("\n"));
     }
 }

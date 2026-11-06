@@ -12,6 +12,7 @@ mod econ;
 mod game;
 mod map;
 mod map_frontier;
+mod barbarians;
 mod path;
 mod people;
 mod save;

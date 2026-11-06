@@ -207,7 +207,7 @@ pub struct Entity {
     pub aboard: u32,
     /// Submarines: which players see it, one bit per player (its owner
     /// always). Worked out every tick (`Game::spot_submarines`), so not saved.
-    pub spotted: u8,
+    pub spotted: u32,
     /// Aircraft: seconds of fuel left (see `air_fuel`). Saved.
     pub fuel: f32,
     /// Aircraft: shots left (see `air_ammo`). Saved.
@@ -516,6 +516,8 @@ pub struct Game {
     pub sea: Vec<bool>,
     alert_cooldown: f32,
     idle_cursor: u32,
+    /// Frontier games only: the barbarian sites and camps (`barbarians.rs`).
+    pub frontier: Option<crate::barbarians::Frontier>,
 }
 
 /// A computer player's supply, in percent, at each difficulty: Hard gets a
@@ -581,6 +583,7 @@ impl Game {
             sea: Vec::new(),
             alert_cooldown: 0.0,
             idle_cursor: 0,
+            frontier: None,
         };
         g.sea = g.open_sea();
         // Slots aren't saved: they follow from what exists. Only counted
@@ -600,7 +603,7 @@ impl Game {
                 continue;
             }
             let (x, y, owner) = (s.x, s.y, s.owner);
-            let mut seen = 1u8 << owner;
+            let mut seen = 1u32 << owner;
             for e in self.ents.iter() {
                 if !e.alive || e.aboard != 0 || e.owner == GAIA || e.owner == owner || seen & (1 << e.owner) != 0 {
                     continue;
@@ -836,7 +839,7 @@ impl Game {
     /// The host's cheat switch: every player a person plays (not the
     /// computer) can build anything, free. Everyone hears.
     pub fn set_cheats(&mut self, on: bool) {
-        for p in self.player_ids() {
+        for p in self.seat_ids() {
             let human = !self.ais[p as usize].on;
             self.players[p as usize].cheat = on && human;
         }
@@ -870,8 +873,14 @@ impl Game {
         self.players[player as usize].supply_pct = handicap(d);
     }
 
-    /// Players 1..=n, for `for p in self.player_ids()`.
+    /// Everyone who plays: the seats 1..=n_players, then (in Frontier) the
+    /// barbarian slots. For `for p in self.player_ids()`.
     pub fn player_ids(&self) -> std::ops::RangeInclusive<u8> {
+        1..=self.players.len() as u8 - 1
+    }
+
+    /// The seats only: the players who can win.
+    pub fn seat_ids(&self) -> std::ops::RangeInclusive<u8> {
         1..=self.n_players
     }
 
@@ -1048,10 +1057,13 @@ impl Game {
             let ai = &mut self.ais[p as usize];
             ai.timer -= DT;
             if ai.on && ai.timer <= 0.0 && !self.players[p as usize].defeated {
-                ai.timer = 0.5;
+                // Barbarians think half as often: there are many of them,
+                // and a camp has little to decide.
+                ai.timer = if self.frontier.is_some() && p > self.n_players { 1.0 } else { 0.5 };
                 self.ai_think(p);
             }
         }
+        self.frontier_tick();
         self.check_victory();
     }
 
@@ -1070,7 +1082,7 @@ impl Game {
     }
 
     fn check_victory(&mut self) {
-        for p in self.player_ids() {
+        for p in self.seat_ids() {
             if !self.players[p as usize].defeated && self.home_capitol(p).is_none() {
                 self.players[p as usize].defeated = true;
                 for e in self.ents.iter_mut().filter(|e| e.alive && e.owner == p) {
@@ -1079,7 +1091,7 @@ impl Game {
                 self.push_event(Ev::Eliminated, 0.0, 0.0, p as f32);
             }
         }
-        let standing: Vec<u8> = self.player_ids().filter(|&p| !self.players[p as usize].defeated).collect();
+        let standing: Vec<u8> = self.seat_ids().filter(|&p| !self.players[p as usize].defeated).collect();
         let w = match standing.as_slice() {
             [only] => *only,
             [] => self.local, // everyone fell at once: call it a draw, kindly
@@ -1269,8 +1281,21 @@ impl Game {
         }
         // Keep every campfire clear: the free workers stand there.
         let (x0, y0, x1, y1) = (tx as f32, ty as f32, (tx + s) as f32, (ty + s) as f32);
-        for p in self.player_ids() {
-            for (cx, cy) in self.campfires(p) {
+        // (Everyone's. A campfire is just in front of its Capitol, so only
+        // Capitols standing on the tiles round the footprint can matter:
+        // looking there, not at every entity, keeps the AI's searches cheap.)
+        let pad = (CAMPFIRE_CLEAR + CAMPFIRE_AHEAD).ceil() as i32 + Kind::Capitol.stats().size;
+        for y in (ty - pad).max(0)..(ty + s + pad).min(self.map.h) {
+            for x in (tx - pad).max(0)..(tx + s + pad).min(self.map.w) {
+                let b = self.map.bld_at[self.map.idx(x, y)];
+                if b < 0 {
+                    continue;
+                }
+                let c = &self.ents[b as usize];
+                if !(c.alive && c.owner != GAIA && c.kind == Kind::Capitol && c.built >= 1.0) {
+                    continue;
+                }
+                let (cx, cy) = self.campfire_of(b as usize);
                 let (nx, ny) = (cx.clamp(x0, x1), cy.clamp(y0, y1));
                 if (nx - cx).powi(2) + (ny - cy).powi(2) < CAMPFIRE_CLEAR * CAMPFIRE_CLEAR {
                     return false;
@@ -2463,7 +2488,7 @@ impl Game {
     pub(crate) fn explore(&mut self) {
         let (w, h) = (self.map.w, self.map.h);
         let map = &self.map;
-        for e in self.ents.iter().filter(|e| e.alive && e.owner != GAIA && e.owner < 8 && Self::staked_on(map, e)) {
+        for e in self.ents.iter().filter(|e| e.alive && e.owner != GAIA && e.owner <= self.n_players && e.owner < 8 && Self::staked_on(map, e)) {
             let st = e.kind.stats();
             let r = st.sight + st.size as f32 / 2.0;
             let ri = r.ceil() as i32;
@@ -2482,7 +2507,11 @@ impl Game {
 
     /// Has player `p` ever seen tile (x, y)?
     pub fn explored_by(&self, p: u8, x: i32, y: i32) -> bool {
-        self.map.inside(x, y) && self.explored[self.map.idx(x, y)] & (1 << p) != 0
+        // A barbarian knows the ground round its site, and nothing else.
+        if self.is_barb(p) {
+            return self.map.inside(x, y) && self.barb_site(p).is_some_and(|s| ((x - s.x) as f32).hypot((y - s.y) as f32) <= crate::barbarians::BARB_RANGE);
+        }
+        self.map.inside(x, y) && p < 8 && self.explored[self.map.idx(x, y)] & (1 << p) != 0
     }
 
     pub(crate) fn update_fog(&mut self) {
