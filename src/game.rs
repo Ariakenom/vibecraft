@@ -1017,6 +1017,8 @@ impl Game {
         if self.state != 0 {
             return;
         }
+        use crate::prof::{span, Part};
+        let _tick = span(Part::Tick);
         self.time += DT;
         self.alert_cooldown -= DT;
         for e in self.ents.iter_mut().filter(|e| e.alive) {
@@ -1024,16 +1026,35 @@ impl Game {
             e.py = e.y;
             e.hit_flash = (e.hit_flash - DT).max(0.0);
         }
-        self.resolve();
-        self.stake_foundations();
-        self.grow();
-        self.recruit();
-        self.rebuild_grid();
-        self.spot_submarines();
+        {
+            let _s = span(Part::Resolve);
+            self.resolve();
+        }
+        {
+            let _s = span(Part::Stake);
+            self.stake_foundations();
+        }
+        {
+            let _s = span(Part::Grow);
+            self.grow();
+        }
+        {
+            let _s = span(Part::Recruit);
+            self.recruit();
+        }
+        {
+            let _s = span(Part::Grid);
+            self.rebuild_grid();
+        }
+        {
+            let _s = span(Part::Subs);
+            self.spot_submarines();
+        }
 
         // Index loop rather than `for e in &mut self.ents`: each update needs
         // `&mut self` (to read other entities, spawn projectiles, ...), and the
         // borrow checker won't let us hold a borrow of one element meanwhile.
+        let units = span(Part::Units);
         for i in 0..self.ents.len() {
             if !self.ents[i].alive {
                 continue;
@@ -1044,14 +1065,28 @@ impl Game {
                 self.update_unit(i);
             }
         }
-        self.separate();
-        self.update_projectiles();
-        self.update_nukes();
-        self.reap();
+        drop(units);
+        {
+            let _s = span(Part::Separate);
+            self.separate();
+        }
+        {
+            let _s = span(Part::Projectiles);
+            self.update_projectiles();
+        }
+        {
+            let _s = span(Part::Nukes);
+            self.update_nukes();
+        }
+        {
+            let _s = span(Part::Reap);
+            self.reap();
+        }
 
         self.fog_timer -= DT;
         if self.fog_timer <= 0.0 {
             self.fog_timer = 0.2;
+            let _s = span(Part::Fog);
             self.update_fog();
             self.explore();
         }
@@ -1062,10 +1097,14 @@ impl Game {
                 // Barbarians think half as often: there are many of them,
                 // and a camp has little to decide.
                 ai.timer = if self.frontier.is_some() && p > self.n_players { 1.0 } else { 0.5 };
+                let _s = span(if p > self.n_players && self.frontier.is_some() { Part::AiBarbarians } else { Part::AiTowns });
                 self.ai_think(p);
             }
         }
-        self.frontier_tick();
+        {
+            let _s = span(Part::Frontier);
+            self.frontier_tick();
+        }
         self.check_victory();
     }
 

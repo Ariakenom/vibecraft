@@ -171,10 +171,11 @@ function setOwnerColors() {
   if (typeof iconCache !== "undefined") iconCache.clear();
 }
 const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()];
-// Skirmish or Frontier, as chosen on the start screen (kept in the browser).
-const MODE_KEY = "vibecraft.mode";
+// The mode chosen on the start screen (kept in the browser): 0 Skirmish,
+// 1 Frontier on a small map, 2 Frontier on a large one.
+const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large"];
 let gameMode = 0, lastMode = 0;
-try { gameMode = localStorage.getItem(MODE_KEY) === "frontier" ? 1 : 0; } catch { /* storage blocked */ }
+try { gameMode = Math.max(0, MODES.indexOf(localStorage.getItem(MODE_KEY))); } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
 // game's: slot -> name, for the seats people play. A seat without one (the
 // computer's, or someone who didn't pick a name) goes by its colour.
@@ -307,7 +308,8 @@ CURSORS[8] = svgCursor(`<path d="M16 3v16M9 13l7 7 7-7" fill="none" stroke="${DK
 let W, mem;
 async function loadWasm() {
   const bin = Uint8Array.from(atob(WASM_B64), c => c.charCodeAt(0));
-  const { instance } = await WebAssembly.instantiate(bin, {});
+  // (The game's clock for timing its parts in the trace: never for the game itself.)
+  const { instance } = await WebAssembly.instantiate(bin, { env: { now_ms: () => performance.now() } });
   W = instance.exports;
   mem = W.memory;
 }
@@ -361,6 +363,17 @@ let aimSilo = null;
 let groups = {};
 let lastClick = { t: 0, x: 0, y: 0 };
 let lastAlert = null;
+// Where warnings came from (attacks, silos, nukes): Space goes to the last,
+// and the minimap rings each one while it's fresh.
+const ALERT_MS = 15000;
+let alertMarks = [];
+function alertAt(x, y) {
+  const t = performance.now();
+  lastAlert = { x, y, t };
+  // One ring per place: a fresh alert near an old ring restarts it.
+  alertMarks = alertMarks.filter(m => t - m.t < ALERT_MS && Math.hypot(m.x - x, m.y - y) > 6);
+  alertMarks.push({ x, y, t });
+}
 let keys = new Set();
 let selKey = "";
 let hoverTip = null;
@@ -578,7 +591,10 @@ function drawOverlay() {
     const ready = bld && E(i, F.owner) === ME && !(flags & 2) && HOUSE_UP[k] && W.house_upgrade_state(E(i, F.id)) === 0;
     // A converter of yours without all its inputs: the one it lacks, crossed out.
     const unfed = bld && E(i, F.owner) === ME && (flags & 256) && !paused;
-    if (!sel && !short && !idleP && !paused && !unfed && want === undefined && !ready && (f >= 1 || bld)) continue;
+    // A health bar on anything hurt: units, and finished buildings (one going
+    // up is short of health only because it isn't finished).
+    const hurt = f < 1 && !(bld && (flags & 2));
+    if (!sel && !short && !idleP && !paused && !unfed && want === undefined && !ready && !hurt) continue;
     const p = entScreen(i, true);
     if (!p || p.behind) continue;
     if (ready) {
@@ -586,14 +602,14 @@ function drawOverlay() {
       octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
       octx.fillStyle = "#79c95f"; octx.beginPath(); octx.moveTo(x, y - 8); octx.lineTo(x + 7, y); octx.lineTo(x + 3, y); octx.lineTo(x + 3, y + 7);
       octx.lineTo(x - 3, y + 7); octx.lineTo(x - 3, y); octx.lineTo(x - 7, y); octx.closePath(); octx.fill();
-      if (want === undefined && !sel && f >= 1) continue;
+      if (want === undefined && !sel && !hurt) continue;
     }
     if (want !== undefined) {
       const x = p.x - (ready ? 15 : 0), y = p.y - 18, img = resImage(want);
       octx.fillStyle = "rgba(20,16,10,.78)"; rr(octx, x - 12, y - 12, 24, 24, 6); octx.fill();
       octx.beginPath(); octx.moveTo(x - 4, y + 11); octx.lineTo(x, y + 16); octx.lineTo(x + 4, y + 11); octx.fill();
       if (img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
-      if (!sel && f >= 1) continue;
+      if (!sel && !hurt) continue;
     }
     if (unfed) {
       const lack = slotsOf(k, 2).find(([r, n]) => free(r) < n), x = p.x, y = p.y - (idleP ? 46 : 20);
@@ -601,13 +617,13 @@ function drawOverlay() {
       const img = lack && resImage(lack[0]);
       if (img && img.complete) octx.drawImage(img, x - 8, y - 8, 16, 16);
       octx.strokeStyle = "#e2593f"; octx.lineWidth = 2.5; octx.beginPath(); octx.moveTo(x - 9, y + 9); octx.lineTo(x + 9, y - 9); octx.stroke();
-      if (!idleP && !sel && f >= 1) continue;
+      if (!idleP && !sel && !hurt) continue;
     }
     if (paused) { // a producer you paused: two bars
       const x = p.x, y = p.y - 20;
       octx.fillStyle = "rgba(20,16,10,.8)"; octx.beginPath(); octx.arc(x, y, 11, 0, 7); octx.fill();
       octx.fillStyle = "#e3b23c"; octx.fillRect(x - 5, y - 5.5, 3.5, 11); octx.fillRect(x + 1.5, y - 5.5, 3.5, 11);
-      if (!sel && f >= 1) continue;
+      if (!sel && !hurt) continue;
     }
     if (idleP) { // a producer with no crew: a person, crossed out
       const x = p.x, y = p.y - 20;
@@ -615,7 +631,7 @@ function drawOverlay() {
       octx.fillStyle = "#d9c9a8"; octx.beginPath(); octx.arc(x, y - 4, 3.6, 0, 7); octx.fill();
       octx.beginPath(); octx.moveTo(x - 7, y + 8); octx.quadraticCurveTo(x, y - 4, x + 7, y + 8); octx.fill();
       octx.strokeStyle = "#e2593f"; octx.lineWidth = 2.5; octx.beginPath(); octx.moveTo(x - 8, y - 8); octx.lineTo(x + 8, y + 8); octx.stroke();
-      if (!sel && f >= 1) continue;
+      if (!sel && !hurt) continue;
     }
     if (short) { // unsupplied: a small amber warning sign above the bar
       octx.fillStyle = "#e3b23c"; octx.strokeStyle = "rgba(0,0,0,.7)"; octx.lineWidth = 1.5;
@@ -654,6 +670,21 @@ function drawMinimap() {
     mctx.fillStyle = (E(i, F.flags) & 1) ? "#fff" : PLIGHT[o];
     if (isBld(k)) { const z = stat(k, 6) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
     else mctx.fillRect(E(i, F.x) * s - 1.5, E(i, F.y) * s - 1.5, 3, 3);
+  }
+  // Warnings: a red ring that pulses for the first seconds, then fades.
+  const now = performance.now();
+  alertMarks = alertMarks.filter(m => now - m.t < ALERT_MS);
+  for (const m of alertMarks) {
+    const age = now - m.t, x = m.x * s, y = m.y * s;
+    const fade = 1 - age / ALERT_MS;
+    mctx.strokeStyle = `rgba(255,70,50,${(0.5 + 0.5 * fade).toFixed(2)})`;
+    mctx.lineWidth = 2;
+    mctx.beginPath(); mctx.arc(x, y, 5, 0, 7); mctx.stroke();
+    if (age < 4000) { // the pulse
+      const p = (age % 1000) / 1000;
+      mctx.strokeStyle = `rgba(255,70,50,${(1 - p).toFixed(2)})`;
+      mctx.beginPath(); mctx.arc(x, y, 5 + p * 10, 0, 7); mctx.stroke();
+    }
   }
   // What the camera sees is a trapezoid on the ground.
   const q = viewQuad();
@@ -1749,7 +1780,7 @@ function handleEvents() {
     switch (type) {
       case EV.Alert:
         toast(isBld(d) ? `Your ${NAMES[d]} is under attack. Space to view.` : "Your people are under attack. Space to view.", "bad");
-        lastAlert = { x, y, t: performance.now() };
+        alertAt(x, y);
         Sfx.ui("horn");
         break;
       case EV.Trained: Sfx.ui("trained"); break;
@@ -1785,14 +1816,14 @@ function handleEvents() {
       case EV.Cheats: if (!mp) cheatsToast(d); break; // (online: when the host's command is confirmed)
       // Silos and nukes: everyone is told about everyone's.
       case EV.SiloBuilt:
-        if (d !== ME) { toast(`Warning: ${pnc(d)} has built a missile silo.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
+        if (d !== ME) { toast(`Warning: ${pnc(d)} has built a missile silo.`, "bad"); Sfx.ui("horn"); alertAt(x, y); }
         break;
       case EV.NukeArming:
-        if (d !== ME) { toast(`Warning: ${pnc(d)} has started arming a nuke. It takes ${W.nuke_numbers(0) / 60} minutes. An Air Defense shoots one down.`, "bad"); Sfx.ui("horn"); lastAlert = { x, y, t: performance.now() }; }
+        if (d !== ME) { toast(`Warning: ${pnc(d)} has started arming a nuke. It takes ${W.nuke_numbers(0) / 60} minutes. An Air Defense shoots one down.`, "bad"); Sfx.ui("horn"); alertAt(x, y); }
         break;
       case EV.NukeArmed:
         if (d === ME) { toast("A nuke is armed. Select it and press C to launch.", "good"); Sfx.ui("trained"); }
-        else { toast(`Warning: ${pnc(d)} has a nuke ready to launch.`, "bad"); Sfx.ui("siren"); lastAlert = { x, y, t: performance.now() }; }
+        else { toast(`Warning: ${pnc(d)} has a nuke ready to launch.`, "bad"); Sfx.ui("siren"); alertAt(x, y); }
         break;
       case EV.NukeIntercepted:
         toast(d === ME ? "Your nuke was shot down by an air defense." : `An air defense shot down ${pnc(d)}'s nuke.`, d === ME ? "bad" : "good");
@@ -1802,7 +1833,7 @@ function handleEvents() {
         // Everyone is told, and shown where it will fall.
         toast(d === ME ? "Nuke launched. It lands in 20 seconds." : `${pnc(d)} has launched a nuke! It lands in 20 seconds: get out of the marked area.`, d === ME ? "good" : "bad");
         Sfx.ui("siren");
-        lastAlert = { x, y, t: performance.now() };
+        alertAt(x, y);
         break;
       case EV.NukeDetonated:
         Sfx.ui("nuke");
@@ -1846,7 +1877,7 @@ let stalledSince = 0;
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   Watchers.pump(performance.now()); // spectators, also after the game has ended
-  if (mp && Trace.cur && last) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
+  if (Trace.cur && last && running) Trace.cur.maxFrameGap = Math.max(Trace.cur.maxFrameGap, Math.round(now - last));
   last = now;
   if (running) {
     const f0 = performance.now();
@@ -1859,8 +1890,9 @@ function loop(now) {
       let steps = 0;
       const most = Math.max(8, speed * 4);
       while (acc >= SIM_MS && steps < most) { W.tick(); simTick++; acc -= SIM_MS; steps++; }
+      if (Trace.cur) Trace.cur.ticks += steps;
       if (steps === most) acc = 0;
-      if (steps) handleEvents();
+      if (steps) { const h = performance.now(); handleEvents(); Prof.add("events (sounds, effects)", h); }
       if (!Rec.done) Rec.ticks = simTick;
       // Handing a seat to a spectator: right after a tick, before any new command.
       if (pendingSeat && steps) {
@@ -1869,21 +1901,33 @@ function loop(now) {
       }
     }
     const f1 = performance.now();
+    let t = f1;
     readWorld();
-    if (frame % 3 === 0) updateFog();
+    t = Prof.add("read the world", t);
+    if (frame % 3 === 0) { updateFog(); t = Prof.add("fog", t); }
     // How far between the last tick and the next one we are. In multiplayer,
     // count the time since the clock last moved, so motion stays smooth.
     const along = mp ? mp.alpha() * SIM_MS : acc;
     const f2 = performance.now();
     render3d(paused && !mp ? 1 : Math.min(1, along / SIM_MS), now, dt);
     const f3 = performance.now();
+    t = f3;
     drawOverlay();
     updateHoverCursor(now);
-    if (frame % 4 === 0) drawMinimap();
-    if (frame % 6 === 0) { renderTopBar(); renderBuildList(); renderSelection(false); renderScoreboard(false); }
+    t = Prof.add("HUD: overlay", t);
+    if (frame % 4 === 0) { drawMinimap(); t = Prof.add("HUD: minimap", t); }
+    if (frame % 6 === 0) {
+      renderTopBar(); t = Prof.add("HUD: top bar", t);
+      renderBuildList(); t = Prof.add("HUD: build list", t);
+      renderSelection(false); t = Prof.add("HUD: selection", t);
+      renderScoreboard(false); t = Prof.add("HUD: scoreboard", t);
+    }
     if (frame % 30 === 0 && !$("menuScreen").hidden) renderGameSeats(false);
     syncObserverUi();
-    if (mp) frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
+    Prof.add("HUD: other", t);
+    frameTrace(now, f1 - f0, f2 - f1, Math.max(0, f3 - f2 - R3.gpuMs), R3.gpuMs, performance.now() - f3);
+    // (Multiplayer rolls the trace in pumpMultiplayer, with the lockstep's numbers.)
+    if (!mp && Trace.roll(performance.now(), perfSnapshot())) renderTrace();
     // Is the game over? For a player, from their own point of view; for
     // someone only watching, once anyone has won.
     // (Multiplayer decides in pumpMultiplayer, on the confirmed copy.)
@@ -1943,7 +1987,7 @@ function stepMultiplayer(now) {
     Trace.event("resume", { ms });
     stalledSince = 0;
   }
-  if (Trace.roll(now, mp.snapshot())) renderTrace();
+  if (Trace.roll(now, Object.assign(mp.snapshot(), partsSnapshot()))) renderTrace();
   if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
@@ -1976,6 +2020,9 @@ function frameTrace(now, sim, world, draw, gpu, hud) {
   const programs = R3.renderer.info.programs ? R3.renderer.info.programs.length : 0;
   if (c) {
     c.maxWork = Math.max(c.maxWork || 0, Math.round(total));
+    c.frames++;
+    if (lastFrameNow) c.gaps.push(now - lastFrameNow);
+    c.work.sim += sim; c.work.world += world; c.work.draw += draw; c.work.gpu += gpu; c.work.hud += hud;
     if (heap && lastHeap - heap > 512 * 1024) { c.cleanups = (c.cleanups || 0) + 1; c.freedMB = Math.round(((c.freedMB || 0) + (lastHeap - heap) / 1048576) * 10) / 10; }
   }
   const gap = lastFrameNow ? now - lastFrameNow : 0;
@@ -1990,18 +2037,73 @@ function frameTrace(now, sim, world, draw, gpu, hud) {
   }
   lastWork = work; lastFrameNow = now; lastHeap = heap; lastPrograms = programs;
 }
+// The game's parts (prof.rs) and the page's (Prof) since the last second,
+// in ms, biggest first; and the path searches.
+let profNames = null;
+function partsSnapshot() {
+  const r1 = x => Math.round(x * 10) / 10;
+  const out = { page: {}, game: {} };
+  for (const [k, v] of Object.entries(Prof.take()).sort((a, b) => b[1] - a[1])) out.page[k] = r1(v);
+  if (!W.prof_take) return out;
+  if (!profNames) profNames = new TextDecoder().decode(new Uint8Array(W.memory.buffer, W.prof_names_ptr(), W.prof_names_len())).split("\n");
+  const n = W.prof_parts(), a = new Float64Array(W.memory.buffer, W.prof_take(), 2 * n + 1);
+  const parts = profNames.map((name, i) => [name, a[i], a[n + i]]).filter(p => p[2] > 0).sort((x, y) => y[1] - x[1]);
+  for (const [name, ms, count] of parts) out.game[name] = { ms: r1(ms), n: count };
+  out.pathTiles = a[2 * n];
+  return out;
+}
+
+// What the game and the drawing look like this second, for the trace.
+function perfSnapshot() {
+  const r = R3.drawn, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  return {
+    role: "single player", gameTime: Math.round(W.game_time()), speed, paused,
+    ents: entCount, drawCalls: r.calls, triangles: r.triangles,
+    heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
+    view: [R3.renderer.domElement.width, R3.renderer.domElement.height],
+    ...partsSnapshot(),
+  };
+}
 // Chrome and Edge report tasks that block the page for over 50 ms.
 try {
-  new PerformanceObserver(list => { if (mp) for (const e of list.getEntries()) Trace.event("long task", { ms: Math.round(e.duration) }); }).observe({ type: "longtask", buffered: false });
+  new PerformanceObserver(list => { if (running) for (const e of list.getEntries()) Trace.event("long task", { ms: Math.round(e.duration) }); }).observe({ type: "longtask", buffered: false });
 } catch { /* not in this browser */ }
 
 // ---- the trace panel (F8) ----
+// The frames part, for single player and multiplayer alike.
+function frameLines(s) {
+  const ms = n => n == null ? "?" : `${n} ms`, w = s.avgWork || {};
+  const lines = [`Frames ${s.fps}/s · between frames: median ${ms(s.p50)}, 95% within ${ms(s.p95)}, longest ${ms(s.maxFrameGap)}`];
+  lines.push(`Work per frame on average: game ${w.sim} ms, world ${w.world} ms, drawing ${w.draw} ms, graphics card ${w.gpu} ms, HUD ${w.hud} ms (most ${ms(s.maxWork)})`);
+  // The biggest parts, game and page.
+  const top = (o, k) => Object.entries(o || {}).slice(0, k);
+  const g = s.game || {}, tick = g.tick;
+  if (tick) {
+    const parts = top(g, 9).filter(([k]) => k !== "tick" && !k.startsWith("AI: ")).slice(0, 6).map(([k, v]) => `${k} ${v.ms}`);
+    const ai = ["AI: towns", "AI: barbarians"].filter(k => g[k]).map(k => `${k.slice(4)} ${g[k].ms}`);
+    lines.push(`Game: ${tick.ms} ms/s for ${tick.n} ticks (${Math.round(tick.ms / Math.max(1, tick.n) * 10) / 10} ms each) · biggest: ${parts.join(", ")}`);
+    if (ai.length || g.paths) lines.push(`Computer players: ${ai.join(", ") || "none"} ms/s · paths ${g.paths ? `${g.paths.ms} ms/s, ${g.paths.n} searches, ${Math.round(s.pathTiles / 1000)}k tiles` : "none"}`);
+  }
+  const page = top(s.page, 6).map(([k, v]) => `${k} ${v}`);
+  if (page.length) lines.push(`Page (ms/s): ${page.join(", ")}`);
+  if (s.ents != null) lines.push(`Map ${MW}×${MH} · ${s.ents} things in sight · ${s.drawCalls} draw calls, ${Math.round(s.triangles / 1000)}k triangles · view ${s.view[0]}×${s.view[1]}${s.heapMB ? ` · memory ${s.heapMB} MB` : ""}`);
+  return lines;
+}
 function renderTrace() {
   const box = $("netTrace");
-  if (box.hidden || !mp) return;
+  if (box.hidden) return;
   const s = Trace.samples[Trace.samples.length - 1];
   if (!s) { $("netTraceBody").textContent = "Measuring…"; return; }
   const ms = n => n == null ? "?" : `${n} ms`;
+  if (!mp) {
+    const lines = [`Single player · game time ${s.gameTime} s · speed ${s.speed}×${s.paused ? " (paused)" : ""} · ticks ${s.ticks}/s`, ...frameLines(s)];
+    const slow = Trace.events.filter(e => e.kind === "slow frame");
+    if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
+    const long = Trace.events.filter(e => e.kind === "long task").length;
+    if (long) lines.push(`Long tasks (page blocked over 50 ms): ${long}`);
+    $("netTraceBody").textContent = lines.join("\n");
+    return;
+  }
   const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : "–";
   const st = s.stats, tick = NET.TICK_MS;
   const lines = [];
@@ -2019,14 +2121,14 @@ function renderTrace() {
   lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
   lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);
   lines.push(`Messages in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, longest gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`);
-  lines.push(`Longest frame ${ms(s.maxFrameGap)} (our work at most ${ms(s.maxWork)}) · longest clock gap ${ms(s.maxClockGap)}`);
+  lines.push(...frameLines(s), `Longest clock gap ${ms(s.maxClockGap)}`);
   const slow = Trace.events.filter(e => e.kind === "slow frame");
   if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
   if (s.cleanups) lines.push(`Browser memory clean-ups: ${s.cleanups} this second (${s.freedMB} MB)`);
   $("netTraceBody").textContent = lines.join("\n");
 }
 function toggleTrace(show = $("netTrace").hidden) {
-  $("netTrace").hidden = !show || !mp;
+  $("netTrace").hidden = !show || !running;
   renderTrace();
 }
 $("netBtn").onclick = () => toggleTrace();
@@ -2043,8 +2145,8 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
 function newGame(seedArg, local = 0, players = 2, mode = 0) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  lastMode = mode === 1 ? 1 : 0;
-  if (lastMode === 1) W.init_frontier(seed, difficulty, players);
+  lastMode = mode === 1 || mode === 2 ? mode : 0;
+  if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
   else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
   else for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
@@ -2057,14 +2159,21 @@ function enterWorld(local = 0) {
   ME = W.local_player();
   setOwnerColors();
   simTick = 0; stalledSince = 0; outShown = false; surrendered = false;
+  alertMarks = []; lastAlert = null;
   stopObserving();
   $("outScreen").hidden = true;
+  const b0 = performance.now();
   bakeTerrain();
   buildWorld();
   updateFog();
   readWorld();
   resizeView();
   R3.ghostKind = -1;
+  // The trace, from the start (multiplayer starts its own after this).
+  if (W.prof_enable) W.prof_enable(1);
+  Prof.take(); if (W.prof_take) W.prof_take();
+  Trace.start({ role: "single player", mode: W.game_mode() ? "frontier" : "skirmish", players: W.n_players(), map: [MW, MH], startMs: Math.round(performance.now() - b0) });
+  $("netBtn").hidden = false;
   const i = findOwn(K.Capitol);
   cam.dist = 24; cam.pitch = 0.95; cam.yaw = 0;
   if (i != null) centerOn(E(i, F.x), E(i, F.y));
@@ -2313,7 +2422,7 @@ function renderMapPick() {
   $("mapRow").hidden = guest;
   if (guest) return;
   $("mapMode").value = mapMode;
-  $("gameMode").value = gameMode === 1 ? "frontier" : "skirmish";
+  $("gameMode").value = MODES[gameMode];
   const pick = mapMode === "pick";
   $("mapPickCtl").hidden = !pick;
   $("mapPreview").hidden = !pick;
@@ -2333,8 +2442,8 @@ function renderMapPick() {
   ctx.putImageData(img, 0, 0); // (town sites in white)
 }
 $("gameMode").onchange = () => {
-  gameMode = $("gameMode").value === "frontier" ? 1 : 0;
-  try { localStorage.setItem(MODE_KEY, gameMode === 1 ? "frontier" : "skirmish"); } catch { /* storage blocked */ }
+  gameMode = Math.max(0, MODES.indexOf($("gameMode").value));
+  try { localStorage.setItem(MODE_KEY, MODES[gameMode]); } catch { /* storage blocked */ }
   renderMapPick();
 };
 $("mapMode").onchange = () => { mapMode = $("mapMode").value === "pick" ? "pick" : "surprise"; saveMapChoice(); renderMapPick(); };
@@ -2529,7 +2638,7 @@ function beginGame() {
 function startMultiplayer(me, d, seq) {
   const n = Math.max(2, Math.min(4, d.n | 0));
   $("startScreen").hidden = true;
-  newGame(d.seed >>> 0, me, n, d.mode === 1 ? 1 : 0);
+  newGame(d.seed >>> 0, me, n, [1, 2].includes(d.mode) ? d.mode : 0);
   const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
   for (const s of ai) { W.set_ai(s, 1); W.set_difficulty(s, [0, 1, 2].includes(d.diffs && d.diffs[s]) ? d.diffs[s] : 1); }
   // Record from here: the start everyone shares, then the confirmed bundles.
@@ -2757,7 +2866,7 @@ function finishMultiplayer() {
   paused = false; speed = 1; lastPace = 1; slowFor.clear(); announced.clear();
   $("pauseBtn").textContent = "Pause"; $("pauseBtn").setAttribute("aria-pressed", "false");
   syncSpeedUi();
-  $("netBtn").hidden = true; $("netTrace").hidden = true;
+  $("netTrace").hidden = true;
   $("netWait").hidden = true;
 }
 
@@ -3169,7 +3278,10 @@ const Boot = {
   // sits next to the page at ./relay; a copy opened as a file has to be told.
   const onClaude = !!(window.claude && window.claude.use);
   const onSite = /^https?:$/.test(location.protocol) && !onClaude;
-  if (onSite) $("relayUrl").value = new URL("relay", location.href.split("#")[0]).href.replace(/^http/, "ws");
+  // Every version on GitHub Pages (deploy/pages.sh) uses the live site's relay.
+  const onPages = /\.github\.io$/.test(location.hostname);
+  if (onPages) $("relayUrl").value = "wss://ginnu.freemyip.com/vibecraft/relay";
+  else if (onSite) $("relayUrl").value = new URL("relay", location.href.split("#")[0]).href.replace(/^http/, "ws");
   const hasRoom = await Net.init($("relayUrl").value.trim());
   netOk = hasRoom || !onClaude;
   $("relayRow").hidden = onClaude || onSite;

@@ -36,7 +36,7 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 35,   // 35: the Frontier mode (barbarian owners after the seats; the start carries `mode`); 34: a foundation takes its tiles only once a builder gets there; rivers and fords, a wider sea; 33: boats, docks, harbours and a wider sea; 32: an air defense fires at a nuke before it lands; 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 36,   // 36: Frontier map sizes (`mode` 1 small, 2 large); 35: the Frontier mode (barbarian owners after the seats; the start carries `mode`); 34: a foundation takes its tiles only once a builder gets there; rivers and fords, a wider sea; 33: boats, docks, harbours and a wider sea; 32: an air defense fires at a nuke before it lands; 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
@@ -185,6 +185,14 @@ const Net = {
 // A recording of what multiplayer is doing, for finding out why a game feels
 // slow: one sample a second plus notable events. F8 shows it during a game,
 // and "Copy trace" puts the whole recording on the clipboard as JSON.
+// Where a frame's time goes on the page, part by part, for the trace:
+// `t = Prof.add("name", t)` adds the time since `t` to that part.
+const Prof = {
+  ms: {},
+  add(name, t0) { const t = performance.now(); this.ms[name] = (this.ms[name] || 0) + (t - t0); return t; },
+  take() { const m = this.ms; this.ms = {}; return m; },
+};
+
 const Trace = {
   t0: 0, samples: [], events: [], issued: [], cur: null, curAt: 0, info: {},
   inBytes: 0, // size of the message being handled (0 where the transport can't tell)
@@ -195,7 +203,7 @@ const Trace = {
     this.info = info;
     this.event("start", info);
   },
-  blank() { return { ticks: 0, stallMs: 0, inMsgs: 0, inBytes: 0, outMsgs: 0, outBytes: 0, maxInGap: 0, maxClockGap: 0, maxFrameGap: 0 }; },
+  blank() { return { ticks: 0, stallMs: 0, inMsgs: 0, inBytes: 0, outMsgs: 0, outBytes: 0, maxInGap: 0, maxClockGap: 0, maxFrameGap: 0, frames: 0, gaps: [], work: { sim: 0, world: 0, draw: 0, gpu: 0, hud: 0 } }; },
   ts() { return Math.round(performance.now() - this.t0); },
   event(kind, data) {
     this.events.push(Object.assign({ t: this.ts(), kind }, data));
@@ -214,13 +222,19 @@ const Trace = {
   roll(now, snapshot) {
     if (!this.cur || now - this.curAt < 1000) return false;
     const c = this.cur;
-    const sample = Object.assign({ t: this.ts() }, snapshot, c, { secs: Math.round(now - this.curAt) });
+    // Frames: how many, how long between them (median, 95th and worst),
+    // and the average work in each, part by part.
+    const g = c.gaps.sort((a, b) => a - b), q = f => g.length ? Math.round(g[Math.min(g.length - 1, Math.floor(g.length * f))]) : 0;
+    const avg = {};
+    for (const k in c.work) avg[k] = c.frames ? Math.round(c.work[k] / c.frames * 10) / 10 : 0;
+    const frames = { fps: c.frames, p50: q(0.5), p95: q(0.95), avgWork: avg };
+    const sample = Object.assign({ t: this.ts() }, snapshot, c, { gaps: undefined, work: undefined }, frames, { secs: Math.round(now - this.curAt) });
     this.samples.push(sample);
     if (this.samples.length > 1200) this.samples.shift();
     this.cur = this.blank(); this.curAt = now;
     return true;
   },
-  dump() { return JSON.stringify({ trace: 2, protocol: NET.PROTOCOL, version: typeof versionInfo === "function" ? versionInfo() : null, tickMs: NET.TICK_MS, ua: navigator.userAgent, info: this.info, samples: this.samples, events: this.events }); },
+  dump() { return JSON.stringify({ trace: 3, protocol: NET.PROTOCOL, version: typeof versionInfo === "function" ? versionInfo() : null, tickMs: NET.TICK_MS, ua: navigator.userAgent, info: this.info, samples: this.samples, events: this.events }); },
 };
 
 

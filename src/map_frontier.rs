@@ -12,10 +12,26 @@
 use crate::defs::Dep;
 use crate::map::{dist, fbm, hash, ring_point, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, WATER};
 
-/// Land per side, before the open sea round it: ten times a Skirmish map's
-/// area (120 and 144).
+/// Land per side, before the open sea round it, for a Large map: ten times
+/// a Skirmish map's area (120 and 144).
 pub const LAND_2: i32 = 380;
 pub const LAND_4: i32 = 455;
+/// And for a Small one: five times.
+pub const SMALL_2: i32 = 270;
+pub const SMALL_4: i32 = 320;
+
+/// How big a Frontier map is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Size {
+    Small,
+    Large,
+}
+
+impl Size {
+    pub fn from_u32(v: u32) -> Size {
+        if v == 1 { Size::Large } else { Size::Small }
+    }
+}
 /// Fishing spots by every base.
 const FISH_NEAR_BASE: usize = 6;
 /// No barbarian site this close to a player's start.
@@ -40,10 +56,18 @@ pub fn site_era(d: f32, far: f32) -> u8 {
 
 /// Build a Frontier map for `players` (2 to 4). Returns the map, its
 /// deposits, one base centre per player, and the barbarian sites.
-pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>, Vec<Site>) {
+pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Deposit>, Vec<(i32, i32)>, Vec<Site>) {
     let players = players.clamp(2, 4);
     let four = players > 2;
-    let l = if four { LAND_4 } else { LAND_2 };
+    let l = match (size, four) {
+        (Size::Large, false) => LAND_2,
+        (Size::Large, true) => LAND_4,
+        (Size::Small, false) => SMALL_2,
+        (Size::Small, true) => SMALL_4,
+    };
+    // Distances on the home continent and between sites shrink with the
+    // map (1 on a Large map).
+    let scale = l as f32 / if four { LAND_4 } else { LAND_2 } as f32;
     let (w, h) = (l, l);
     let lf = l as f32;
     let n = (w * h) as usize;
@@ -201,6 +225,13 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
         true
     };
 
+    // Wood by the town for certain (the forests above come from noise, and
+    // a start can miss them): two woods 12–15 tiles out, toward the middle.
+    for (a, d) in [(-60.0f32, 12.0f32), (-20.0, 15.0)] {
+        let a = a.to_radians();
+        place(&mut terrain, &mut feat, &keep_clear, b1.0 + (a.cos() * d) as i32, b1.1 + (a.sin() * d) as i32, Feat::Tree, 3.0, 6);
+    }
+
     // The home continent: wood by the town, the rest in bands further out,
     // in the quarter that faces the middle.
     let bands: [(f32, f32, &[(Feat, f32)]); 4] = [
@@ -210,7 +241,11 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
         (80.0, 100.0, &[(Feat::Nitrate, 1.4), (Feat::Iron, 1.5), (Feat::Clay, 1.6)]),
     ];
     let mut k = 0;
+    // (Nothing nearer than 26 tiles on any map; further out, closer in on a
+    // smaller one.)
+    let out = |d: f32| 26.0 + (d - 26.0) * scale;
     for (lo, hi, kinds) in bands {
+        let (lo, hi) = (out(lo), out(hi));
         for (j, &(f, r)) in kinds.iter().enumerate() {
             k += 1;
             // Spread over the quarter facing the middle (-95° to 5°, y down).
@@ -246,7 +281,9 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
     // starts, each with the deposits a town of its era needs round it.
     let far = dist(all_bases[0], centre);
     let mut sites: Vec<Site> = Vec::new();
-    let want = if four { 10 } else { 13 };
+    let want = ((if four { 10.0 } else { 13.0 }) * scale * scale).round() as usize;
+    // (Not much closer on a small map: each site needs room for its deposits.)
+    let site_gap = SITE_GAP * scale.max(0.85);
     let mut tries = 0;
     while sites.len() < want && tries < 4000 {
         tries += 1;
@@ -256,9 +293,9 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
             continue;
         }
         let imgs: Vec<(f32, f32)> = images(x, y).map(|(a, b)| (a as f32 + 0.5, b as f32 + 0.5)).collect();
-        let apart = imgs.iter().enumerate().all(|(i, &q)| imgs[i + 1..].iter().all(|&o| dist(q, o) >= SITE_GAP));
+        let apart = imgs.iter().enumerate().all(|(i, &q)| imgs[i + 1..].iter().all(|&o| dist(q, o) >= site_gap));
         let from_bases = imgs.iter().all(|&q| all_bases.iter().all(|&b| dist(q, b) >= SITE_FROM_BASE));
-        let from_sites = imgs.iter().all(|&q| sites.iter().all(|s| images(s.x, s.y).all(|(a, b)| dist(q, (a as f32 + 0.5, b as f32 + 0.5)) >= SITE_GAP)));
+        let from_sites = imgs.iter().all(|&q| sites.iter().all(|s| images(s.x, s.y).all(|(a, b)| dist(q, (a as f32 + 0.5, b as f32 + 0.5)) >= site_gap)));
         if !(apart && from_bases && from_sites) {
             continue;
         }
@@ -291,11 +328,15 @@ pub fn generate_frontier(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(
         // one fits (sites near a coast have less room).
         for (j, &(f, r)) in kinds.iter().enumerate() {
             let a0 = (j as f32 / kinds.len() as f32 + hash(si as i32, 65, seed)) * std::f32::consts::TAU;
-            'tries: for t in 0..40 {
+            'tries: for t in 0..56 {
                 let a = a0 + t as f32 * 0.7;
-                let d = 9.0 + 2.0 * ((j + t) % 6) as f32 + if t >= 24 { 4.0 } else { 0.0 };
+                let d = 9.0 + 2.0 * ((j + t) % 6) as f32 + if t >= 40 { 7.0 } else if t >= 24 { 4.0 } else { 0.0 };
                 if place(&mut terrain, &mut feat, &keep_clear, s.x + (a.cos() * d) as i32, s.y + (a.sin() * d) as i32, f, r, 3) {
                     break 'tries;
+                }
+                // Last: anywhere round the site, searching outward.
+                if t == 55 {
+                    place(&mut terrain, &mut feat, &keep_clear, s.x, s.y, f, r, 18);
                 }
             }
         }
@@ -465,7 +506,7 @@ mod tests {
     #[ignore]
     fn frontier_picture() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let (m, deps, bases, sites) = generate_frontier(env("VC_SEED", 7), env("VC_PLAYERS", 2) as usize);
+        let (m, deps, bases, sites) = generate_frontier(env("VC_SEED", 7), env("VC_PLAYERS", 2) as usize, Size::from_u32(env("VC_LARGE", 0)));
         let s = 4;
         for by in 0..m.h / s {
             let mut line = String::new();
@@ -509,9 +550,9 @@ mod tests {
     #[test]
     fn frontier_starts() {
         for players in [2, 4] {
-            for seed in 0..6 {
-                let (m, deps, bases, sites) = generate_frontier(seed, players);
-                assert!(sites.len() >= 16, "seed {seed}: only {} sites", sites.len());
+            for (seed, size) in (0..6).flat_map(|s| [(s, Size::Small), (s, Size::Large)]) {
+                let (m, deps, bases, sites) = generate_frontier(seed, players, size);
+                assert!(sites.len() >= if size == Size::Large { 16 } else { 10 }, "seed {seed} {size:?}: only {} sites", sites.len());
                 for &(bx, by) in &bases {
                     let near = |r: f32, k: Dep| deps.iter().filter(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32)) < r).count();
                     assert!(near(16.0, Dep::Forest) > 10, "seed {seed}: no wood by the start");
@@ -538,8 +579,8 @@ mod site_tests {
     fn sites_have_their_deposits() {
         let mut missing = Vec::new();
         for players in [2, 4] {
-            for seed in 0..6 {
-                let (_, deps, _, sites) = generate_frontier(seed, players);
+            for (seed, size) in (0..6).flat_map(|s| [(s, Size::Small), (s, Size::Large)]) {
+                let (_, deps, _, sites) = generate_frontier(seed, players, size);
                 for (i, s) in sites.iter().enumerate() {
                     let mut need = vec![Dep::Forest, Dep::Stone, Dep::Fertile, Dep::Game];
                     if s.era >= 1 {
@@ -547,7 +588,7 @@ mod site_tests {
                     }
                     for k in need {
                         if !deps.iter().any(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (s.x as f32, s.y as f32)) < 26.0) {
-                            missing.push(format!("{players}p seed {seed} site {i} era {}: {k:?}", s.era));
+                            missing.push(format!("{players}p {size:?} seed {seed} site {i} era {}: {k:?}", s.era));
                         }
                     }
                 }

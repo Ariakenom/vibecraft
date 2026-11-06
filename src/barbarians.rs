@@ -51,9 +51,9 @@ impl Game {
     }
 
     /// A new Frontier game: the seats as in `new`, then the barbarian slots.
-    pub fn new_frontier(seed: u32, difficulty: u32, n_players: u8) -> Game {
+    pub fn new_frontier(seed: u32, difficulty: u32, n_players: u8, size: crate::map_frontier::Size) -> Game {
         let n_players = n_players.clamp(2, crate::game::MAX_PLAYERS as u8);
-        let (map, deps, bases, sites) = crate::map_frontier::generate_frontier(seed, n_players as usize);
+        let (map, deps, bases, sites) = crate::map_frontier::generate_frontier(seed, n_players as usize, size);
         let n = (map.w * map.h) as usize;
         let front = Frontier::new(sites);
         let owners = n_players as usize + front.camps.len();
@@ -179,7 +179,7 @@ mod tests {
     #[ignore]
     fn diag_frontier() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, env("VC_PLAYERS", 2) as u8);
+        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, env("VC_PLAYERS", 2) as u8, crate::map_frontier::Size::from_u32(env("VC_LARGE", 1)));
         for p in g.seat_ids() {
             g.set_ai(p, true);
         }
@@ -208,7 +208,7 @@ mod tests {
     /// loads and carries on exactly the same.
     #[test]
     fn frontier_camps_and_saves() {
-        let mut g = Game::new_frontier(3, 1, 2);
+        let mut g = Game::new_frontier(3, 1, 2, crate::map_frontier::Size::Large);
         let f = g.frontier.as_ref().unwrap();
         assert_eq!(f.camps.iter().flatten().count(), FIRST_CAMPS);
         assert_eq!(g.players.len(), 3 + f.camps.len());
@@ -245,7 +245,7 @@ mod perf {
     #[ignore]
     fn diag_frontier_time() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(7, 1, 2);
+        let mut g = Game::new_frontier(7, 1, 2, crate::map_frontier::Size::Large);
         for p in g.seat_ids() {
             g.set_ai(p, true);
         }
@@ -300,7 +300,7 @@ mod why {
     #[ignore]
     fn diag_camp() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(7, 1, 2);
+        let mut g = Game::new_frontier(7, 1, 2, crate::map_frontier::Size::Large);
         for _ in 0..env("VC_MINUTES", 10) * 1200 {
             g.tick();
             g.events.clear();
@@ -346,7 +346,7 @@ mod prof {
     fn prof_frontier() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
         if let Ok(path) = std::env::var("VC_SAVE") {
-            let mut g = Game::new_frontier(7, 1, 2);
+            let mut g = Game::new_frontier(7, 1, 2, crate::map_frontier::Size::Large);
             for p in g.seat_ids() {
                 g.set_ai(p, true);
             }
@@ -381,7 +381,7 @@ mod paths {
     /// with Frontier's search limit (more than with Skirmish's).
     #[test]
     fn long_paths_arrive() {
-        let g = Game::new_frontier(5, 1, 2);
+        let g = Game::new_frontier(5, 1, 2, crate::map_frontier::Size::Large);
         let c = g.home_capitol(1).unwrap();
         let (sx, sy) = (g.ents[c].x + 3.0, g.ents[c].y + 3.0);
         let reach = g.reach_for_tests(sx, sy);

@@ -10,6 +10,7 @@
 const NUDGE_MS = 150;
 const R3 = {
   gpuMs: 0,
+  drawn: { calls: 0, triangles: 0 }, // the last frame's scene, for the trace
   mark: 0,
   nudges: new Map(), // unit id -> { dx, dy, t }: offset to fade out (see mpHooks.restore in main.js)
   renderer: null, scene: null, camera: null, sun: null,
@@ -1826,6 +1827,7 @@ function render3d(alpha, now, dt) {
   timeUniform.value = t;
   placeCamera();
   const mark = ++R3.mark; // objects still in the world this frame get this mark
+  let pt = performance.now(); // (timing for the trace: `Prof`, net.js)
 
   for (let i = 0; i < entCount; i++) {
     const id = E(i, F.id), kind = E(i, F.kind);
@@ -1932,8 +1934,10 @@ function render3d(alpha, now, dt) {
     R3.dying[keep++] = d;
   }
   R3.dying.length = keep;
+  pt = Prof.add("draw: units and buildings", pt);
 
   updateResources();
+  pt = Prof.add("draw: resources", pt);
   updateArrows(alpha);
   updateRally();
   updateGhost();
@@ -1944,11 +1948,13 @@ function render3d(alpha, now, dt) {
   updateFlashes(performance.now());
   updateNukes(performance.now(), alpha);
   updateAimRings();
+  Prof.add("draw: effects", pt);
   // Timed for the trace: handing the frame to the graphics card (and
   // compiling any shader it hasn't needed before).
   const g = performance.now();
   renderScene();
   R3.gpuMs = performance.now() - g;
+  Prof.add("graphics card", g);
 }
 
 // --- The nuke ------------------------------------------------------------------
@@ -2737,12 +2743,16 @@ _black.needsUpdate = true;
 
 function renderScene() {
   const r = R3.renderer;
-  if (!GFX.post) { r.render(R3.scene, R3.camera); return; }
+  // (What the scene took, for the trace: read here, as icons drawn later
+  // with the same renderer reset the counts.)
+  const note = () => { R3.drawn = { calls: r.info.render.calls, triangles: r.info.render.triangles }; };
+  if (!GFX.post) { r.render(R3.scene, R3.camera); note(); return; }
   if (!Post.rt) buildPost();
   const sz = r.getDrawingBufferSize(_v2);
   if (Post.rt.width !== sz.x || Post.rt.height !== sz.y) Post.rt.setSize(sz.x, sz.y);
   r.setRenderTarget(Post.rt);
   r.render(R3.scene, R3.camera);
+  note();
   const u = Post.mat.uniforms;
   u.tBloom.value = GFX.bloom ? renderBloom(r, sz) : _black;
   u.uBloom.value = GFX.bloom ? 0.32 : 0;

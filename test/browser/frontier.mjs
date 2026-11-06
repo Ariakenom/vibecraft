@@ -16,7 +16,12 @@ const small = await pg.evaluate(() => $("mapPreview").width);
 await pg.selectOption("#gameMode", "frontier");
 await sleep(300);
 const big = await pg.evaluate(() => $("mapPreview").width);
-check(big > small * 2.5, `the preview shows the Frontier map (${small} → ${big} px)`);
+await pg.selectOption("#gameMode", "frontier-large");
+await sleep(300);
+const large = await pg.evaluate(() => $("mapPreview").width);
+await pg.selectOption("#gameMode", "frontier");
+await sleep(300);
+check(big > small * 1.6 && large > big * 1.3, `the preview shows the Frontier maps (Skirmish ${small}, small ${big}, large ${large} px)`);
 check(await pg.evaluate(() => localStorage.getItem("vibecraft.mode")) === "frontier", "the mode is remembered");
 
 // Begin: a Frontier game, timed from the click to the first frame.

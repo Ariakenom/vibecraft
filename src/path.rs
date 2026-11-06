@@ -73,6 +73,8 @@ pub struct Pathfinder {
     /// the nearest tile it found. Part of the rules (it decides paths), so
     /// copies keep it.
     pub limit: usize,
+    /// Tiles the last search expanded (for the trace only).
+    last_expanded: usize,
 }
 
 /// `Pathfinder::limit` in Skirmish games.
@@ -98,13 +100,24 @@ impl Clone for Pathfinder {
 
 impl Pathfinder {
     pub fn new(n: usize) -> Self {
-        Pathfinder { g: vec![0.0; n], parent: vec![0; n], seen: vec![0; n], closed: vec![0; n], generation: 0, heap: BinaryHeap::new(), limit: SEARCH_LIMIT }
+        Pathfinder { g: vec![0.0; n], parent: vec![0; n], seen: vec![0; n], closed: vec![0; n], generation: 0, heap: BinaryHeap::new(), limit: SEARCH_LIMIT, last_expanded: 0 }
     }
 
     /// Returns tile coordinates from (but not including) the start tile to the goal.
     /// If the goal can't be reached, returns a path to the closest tile we found.
     /// Boats (`naval`) go over water, everyone else over land.
     pub fn find(&mut self, map: &Map, naval: bool, sx: f32, sy: f32, goal: &Goal) -> Vec<(i32, i32)> {
+        let _s = crate::prof::span(crate::prof::Part::Paths);
+        let g0 = self.generation;
+        let path = self.search(map, naval, sx, sy, goal);
+        // (Tiles looked at: every tile the search closed has this stamp.)
+        if crate::prof::on() && self.generation == g0 + 1 {
+            crate::prof::path_tiles(self.last_expanded);
+        }
+        path
+    }
+
+    fn search(&mut self, map: &Map, naval: bool, sx: f32, sy: f32, goal: &Goal) -> Vec<(i32, i32)> {
         let passable = |x: i32, y: i32| map.passable_for(naval, x, y);
         self.generation += 1;
         let stamp = self.generation;
@@ -143,6 +156,7 @@ impl Pathfinder {
                 best = idx;
             }
             expanded += 1;
+            self.last_expanded = expanded;
             if expanded > self.limit {
                 break;
             }
