@@ -171,10 +171,11 @@ function setOwnerColors() {
   if (typeof iconCache !== "undefined") iconCache.clear();
 }
 const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()];
-// Skirmish or Frontier, as chosen on the start screen (kept in the browser).
-const MODE_KEY = "vibecraft.mode";
+// The mode chosen on the start screen (kept in the browser): 0 Skirmish,
+// 1 Frontier on a small map, 2 Frontier on a large one.
+const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large"];
 let gameMode = 0, lastMode = 0;
-try { gameMode = localStorage.getItem(MODE_KEY) === "frontier" ? 1 : 0; } catch { /* storage blocked */ }
+try { gameMode = Math.max(0, MODES.indexOf(localStorage.getItem(MODE_KEY))); } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
 // game's: slot -> name, for the seats people play. A seat without one (the
 // computer's, or someone who didn't pick a name) goes by its colour.
@@ -2076,8 +2077,8 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
 function newGame(seedArg, local = 0, players = 2, mode = 0) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  lastMode = mode === 1 ? 1 : 0;
-  if (lastMode === 1) W.init_frontier(seed, difficulty, players);
+  lastMode = mode === 1 || mode === 2 ? mode : 0;
+  if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
   else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
   else for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
@@ -2350,7 +2351,7 @@ function renderMapPick() {
   $("mapRow").hidden = guest;
   if (guest) return;
   $("mapMode").value = mapMode;
-  $("gameMode").value = gameMode === 1 ? "frontier" : "skirmish";
+  $("gameMode").value = MODES[gameMode];
   const pick = mapMode === "pick";
   $("mapPickCtl").hidden = !pick;
   $("mapPreview").hidden = !pick;
@@ -2370,8 +2371,8 @@ function renderMapPick() {
   ctx.putImageData(img, 0, 0); // (town sites in white)
 }
 $("gameMode").onchange = () => {
-  gameMode = $("gameMode").value === "frontier" ? 1 : 0;
-  try { localStorage.setItem(MODE_KEY, gameMode === 1 ? "frontier" : "skirmish"); } catch { /* storage blocked */ }
+  gameMode = Math.max(0, MODES.indexOf($("gameMode").value));
+  try { localStorage.setItem(MODE_KEY, MODES[gameMode]); } catch { /* storage blocked */ }
   renderMapPick();
 };
 $("mapMode").onchange = () => { mapMode = $("mapMode").value === "pick" ? "pick" : "surprise"; saveMapChoice(); renderMapPick(); };
@@ -2566,7 +2567,7 @@ function beginGame() {
 function startMultiplayer(me, d, seq) {
   const n = Math.max(2, Math.min(4, d.n | 0));
   $("startScreen").hidden = true;
-  newGame(d.seed >>> 0, me, n, d.mode === 1 ? 1 : 0);
+  newGame(d.seed >>> 0, me, n, [1, 2].includes(d.mode) ? d.mode : 0);
   const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
   for (const s of ai) { W.set_ai(s, 1); W.set_difficulty(s, [0, 1, 2].includes(d.diffs && d.diffs[s]) ? d.diffs[s] : 1); }
   // Record from here: the start everyone shares, then the confirmed bundles.
