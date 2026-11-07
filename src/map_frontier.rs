@@ -10,7 +10,7 @@
 //! turned images, so every player gets the same.
 
 use crate::defs::Dep;
-use crate::map::{dist, fbm, hash, ring_point, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, WATER};
+use crate::map::{dist, fbm, hash, ring_point, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 
 /// Land per side, before the open sea round it, for a Large map: ten times
 /// a Skirmish map's area (120 and 144).
@@ -38,6 +38,20 @@ const FISH_NEAR_BASE: usize = 6;
 const SITE_FROM_BASE: f32 = 48.0;
 /// Barbarian sites at least this far apart.
 const SITE_GAP: f32 = 34.0;
+
+/// A Frontier map's shape, picked by its seed (`layout_of`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Layout {
+    /// Each start on a continent of its own, islands, a continent in the middle.
+    Continents,
+    /// One big landmass, harder toward the middle.
+    Landmass,
+}
+
+/// Which shape the map of `seed` has: half of them each.
+pub fn layout_of(seed: u32) -> Layout {
+    if hash(9, 917, seed) < 0.5 { Layout::Continents } else { Layout::Landmass }
+}
 
 /// Where barbarians can settle, and the highest era a town there reaches.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,8 +111,21 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
     }
     let turn = |x: f32, y: f32| syms.iter().map(move |s| s.apply(x as i32, y as i32, w, h)).map(|(a, b)| (a as f32, b as f32));
     let conts: Vec<(f32, f32, f32)> = canon_conts.iter().flat_map(|&(x, y, r)| turn(x, y).map(move |(a, b)| (a, b, r))).collect();
+    // Half the maps (by seed) are one big landmass instead: the same
+    // places for deposits and camps, but land all the way from each start
+    // to the middle, harder the further in (`site_era`), with only a coast
+    // round the edge and lakes inland. The rest are the continents.
+    let landmass = layout_of(seed) == Layout::Landmass;
     // How far inside a continent a point is: 0 at its centre, 1 at its rim.
-    let inside = |p: (f32, f32)| conts.iter().map(|&(x, y, r)| dist(p, (x, y)) / r).fold(f32::MAX, f32::min);
+    // (On a landmass: 0.4 everywhere inland, rising to 1 at the map's edge.)
+    let inside = |p: (f32, f32)| {
+        if landmass {
+            let edge = p.0.min(p.1).min(lf - p.0).min(lf - p.1);
+            1.0 - 0.6 * (edge / (0.07 * lf)).min(1.0)
+        } else {
+            conts.iter().map(|&(x, y, r)| dist(p, (x, y)) / r).fold(f32::MAX, f32::min)
+        }
+    };
 
     let mut terrain = vec![WATER; n];
     let mut shade = vec![0u8; n];
@@ -112,8 +139,9 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
             let e = inside(p);
             // Land fades into sea toward a continent's rim, raggedly.
             let mut ht = noise * 0.55 + (1.0 - e) * 0.6 - 0.05;
-            // Lakes inland, where the noise is low.
-            if e < 0.6 && noise < 0.3 {
+            // Lakes inland, where the noise is low (fewer on a landmass:
+            // there they'd be most of the water).
+            if e < 0.6 && noise < if landmass { 0.22 } else { 0.3 } {
                 ht = ht.min(water_at - 0.02);
             }
             // Dry ground round every start.
@@ -332,6 +360,23 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
         if s.era >= 1 {
             kinds.extend([(Feat::Stone, 1.8), (Feat::Stone, 1.8)]);
         }
+        // And more of what each later era's chains eat (steel is iron and
+        // coal; then oil and aluminum), so a town that far in has enough to
+        // reach its era by itself.
+        // Food and wool for houses with more goods (camps have no fish), a
+        // patch more of each per era from the Medieval on.
+        for _ in 0..s.era.min(3) {
+            kinds.extend([(Feat::Fertile, 2.2), (Feat::Game, 2.2), (Feat::Hills, 1.6)]);
+        }
+        if s.era >= 2 {
+            kinds.push((Feat::Iron, 1.6));
+        }
+        if s.era >= 3 {
+            kinds.extend([(Feat::Coal, 1.6), (Feat::Iron, 1.6), (Feat::Clay, 1.6)]);
+        }
+        if s.era >= 4 {
+            kinds.extend([(Feat::Oil, 1.4), (Feat::Bauxite, 1.4), (Feat::Coal, 1.6)]);
+        }
         // Each round the site, trying other directions and distances until
         // one fits (sites near a coast have less room).
         for (j, &(f, r)) in kinds.iter().enumerate() {
@@ -389,6 +434,67 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
         }
     }
     clear_round(&mut terrain, &mut feat, b1.0, b1.1, 4);
+
+    // Shallows, which people wade and boats sail (`SHALLOW`): every lake
+    // (water the open sea doesn't reach), and on the continents fords
+    // across the straits, from each home continent to the middle and to
+    // the islands beside it, so every part of the map can be walked to,
+    // by longer ways than by boat.
+    if !landmass {
+        let ford = |terrain: &mut Vec<u8>, shade: &mut Vec<u8>, a: (f32, f32), b: (f32, f32)| {
+            let steps = dist(a, b).ceil() as i32;
+            for k in 0..=steps {
+                let q = k as f32 / steps.max(1) as f32;
+                // A little wander, so it isn't a ruler-straight causeway.
+                let side = (q * std::f32::consts::PI * 3.0).sin() * 4.0;
+                let (nx, ny) = ((b.1 - a.1) / dist(a, b).max(1.0), (a.0 - b.0) / dist(a, b).max(1.0));
+                let (cx, cy) = (a.0 + (b.0 - a.0) * q + nx * side, a.1 + (b.1 - a.1) * q + ny * side);
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        if dx * dx + dy * dy > 5 {
+                            continue;
+                        }
+                        let (x, y) = (cx as i32 + dx, cy as i32 + dy);
+                        if x < 4 || y < 4 || x >= w - 4 || y >= h - 4 {
+                            continue;
+                        }
+                        for (px, py) in images(x, y) {
+                            let i = (py * w + px) as usize;
+                            if terrain[i] == WATER {
+                                terrain[i] = SHALLOW;
+                                shade[i] = 88;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let (home, mid) = (canon_conts[0], canon_conts[1]);
+        ford(&mut terrain, &mut shade, (home.0, home.1), (mid.0, mid.1));
+        for c in &canon_conts[2..] {
+            ford(&mut terrain, &mut shade, (home.0, home.1), (c.0, c.1));
+        }
+    }
+    {
+        let mut sea = vec![false; n];
+        let mut stack = vec![(0, 0)];
+        sea[0] = terrain[0] == WATER;
+        while let Some((x, y)) = stack.pop() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx >= 0 && ny >= 0 && nx < w && ny < h && !sea[(ny * w + nx) as usize] && terrain[(ny * w + nx) as usize] == WATER {
+                    sea[(ny * w + nx) as usize] = true;
+                    stack.push((nx, ny));
+                }
+            }
+        }
+        for i in 0..n {
+            if terrain[i] == WATER && !sea[i] {
+                terrain[i] = SHALLOW;
+                shade[i] = shade[i].max(88);
+            }
+        }
+    }
 
     // Fishing spots: the sea nearest each start, and shoals scattered over
     // the open water between the continents.
@@ -549,7 +655,7 @@ mod tests {
             }
             println!("{line}");
         }
-        println!("{} sites: eras {:?}", sites.len(), sites.iter().map(|s| s.era).collect::<Vec<_>>());
+        println!("{} sites: eras {:?}, layout {:?}", sites.len(), sites.iter().map(|s| s.era).collect::<Vec<_>>(), layout_of(env("VC_SEED", 7)));
     }
 
     /// Fair: every start sees the same deposits (turned), and has wood near,
@@ -582,6 +688,40 @@ mod tests {
 #[cfg(test)]
 mod site_tests {
     use super::*;
+
+    /// Both shapes come up, and on either every start can walk (wading the
+    /// shallows) to the camps of the middle (the highest era's sites).
+    #[test]
+    fn every_start_walks_to_the_middle() {
+        let mut shapes = (0, 0);
+        for seed in 0..12 {
+            if layout_of(seed) == Layout::Continents {
+                shapes.0 += 1;
+            } else {
+                shapes.1 += 1;
+            }
+            for players in [2, 4] {
+                let (m, _, bases, sites) = generate_frontier(seed, players, Size::Small);
+                let top = sites.iter().map(|s| s.era).max().unwrap();
+                for &(bx, by) in &bases {
+                    let mut seen = vec![false; (m.w * m.h) as usize];
+                    let mut stack = vec![(bx, by + 3)];
+                    while let Some((x, y)) = stack.pop() {
+                        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                            let (nx, ny) = (x + dx, y + dy);
+                            if m.passable(nx, ny) && !seen[m.idx(nx, ny)] {
+                                seen[m.idx(nx, ny)] = true;
+                                stack.push((nx, ny));
+                            }
+                        }
+                    }
+                    let walk = sites.iter().filter(|s| s.era == top).any(|s| (-3..=3).any(|d| seen[m.idx(s.x + d, s.y + 3)]));
+                    assert!(walk, "seed {seed}, {players} players: base {bx},{by} can't walk to a camp of the {top} era");
+                }
+            }
+        }
+        assert!(shapes.0 >= 3 && shapes.1 >= 3, "shapes {shapes:?}");
+    }
     /// Every barbarian site has what its era needs within reach.
     #[test]
     fn sites_have_their_deposits() {

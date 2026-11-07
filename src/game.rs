@@ -485,6 +485,13 @@ pub struct Game {
     /// Every id each player has had, alive or not, in id order (an
     /// entity's owner never changes): see `own`. Not saved either.
     pub(crate) owned: Vec<Vec<u32>>,
+    /// Goes up whenever a tile's blocked or freed: what the AI's walkable
+    /// areas (`reach_cache`) were worked out at. Not saved.
+    pub(crate) block_gen: u32,
+    /// Per player: the tiles its workers can walk to from (x, y), as of
+    /// `block_gen` (a flood fill each think was nearly all of a camp's
+    /// thinking on a landmass map). Not saved.
+    pub(crate) reach_cache: Vec<Option<(i32, i32, u32, Vec<bool>)>>,
     /// Index 0 is unused (gaia); players are 1..=n_players.
     pub players: Vec<Player>,
     pub n_players: u8,
@@ -577,6 +584,8 @@ impl Game {
             ents,
             blds,
             owned,
+            block_gen: 0,
+            reach_cache: Vec::new(),
             players,
             n_players,
             proj,
@@ -741,6 +750,7 @@ impl Game {
                 self.map.bld_at[i] = id as i32;
                 if kind.blocks() {
                     self.map.blocked[i] = true;
+                    self.block_gen += 1;
                 }
             }
         }
@@ -2351,6 +2361,7 @@ impl Game {
                     }
                     self.map.bld_at[j] = -1;
                     self.map.blocked[j] = self.map.terrain[j] == map::CRATER; // craters stay blocked
+                    self.block_gen += 1;
                 }
             }
         }
@@ -2587,7 +2598,8 @@ impl Game {
     pub fn explored_by(&self, p: u8, x: i32, y: i32) -> bool {
         // A barbarian knows the ground round its site, and nothing else.
         if self.is_barb(p) {
-            return self.map.inside(x, y) && self.barb_site(p).is_some_and(|s| ((x - s.x) as f32).hypot((y - s.y) as f32) <= crate::barbarians::BARB_RANGE);
+            let r = self.camp_range(p);
+            return self.map.inside(x, y) && self.barb_site(p).is_some_and(|s| ((x - s.x) as f32).hypot((y - s.y) as f32) <= r);
         }
         self.map.inside(x, y) && p < 8 && self.explored[self.map.idx(x, y)] & (1 << p) != 0
     }
@@ -2812,6 +2824,7 @@ impl Game {
                 let i = self.map.idx(tx, ty);
                 self.map.terrain[i] = map::CRATER;
                 self.map.blocked[i] = true;
+                self.block_gen += 1;
             }
         }
         self.craters.push((x, y));
