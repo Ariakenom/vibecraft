@@ -1,8 +1,9 @@
 //! Frontier's barbarians: computer towns on the map's barbarian sites
 //! (`map_frontier`). Each is an ordinary AI player in an owner slot after
-//! the seats, held back by its site: it never passes the site's era, keeps
-//! an army of at most `army_cap`, only builds and raids within reach of its
-//! site, and never sails, flies or launches nukes. They fight everyone,
+//! the seats, held back by its site: it never passes the site's era (and
+//! never before `CAMP_ERA_AT`), keeps a small army only out by the starts
+//! (`army_cap`), only builds and raids within reach of its site, and never
+//! sails, flies or launches nukes. Camps further in keep more Capitols. They fight everyone,
 //! each other too. When one falls its site is free again, and new camps
 //! settle free sites nobody can see, all game long.
 
@@ -19,8 +20,11 @@ const FIRST_CAMPS: usize = 8;
 pub const CAMP_EVERY: f32 = 90.0;
 /// No camp settles where a player has anything this close.
 const UNSEEN: f32 = 32.0;
-/// A camp's town: what it builds on and knows about, and how far it raids.
+/// A camp's town: what it builds on and knows about (more further in, by
+/// `CAMP_RANGE_PER_ERA` an era of its site: a later era's town is bigger),
+/// and how far it raids.
 pub const BARB_RANGE: f32 = 36.0;
+pub const CAMP_RANGE_PER_ERA: f32 = 4.0;
 pub const RAID_RANGE: f32 = 70.0;
 /// The earliest time (seconds of game) a camp enters each era (Medieval,
 /// Gunpowder, Industrial, Modern, Atomic): a little behind a quick player.
@@ -93,6 +97,11 @@ impl Game {
         f.camps.get(k).copied().flatten().map(|s| f.sites[s as usize])
     }
 
+    /// How far round its site a camp builds and knows the ground.
+    pub fn camp_range(&self, owner: u8) -> f32 {
+        BARB_RANGE + CAMP_RANGE_PER_ERA * self.barb_site(owner).map_or(0, |s| s.era) as f32
+    }
+
     /// The highest era `owner` may reach: its site's for a barbarian.
     pub fn era_cap(&self, owner: u8) -> u8 {
         if self.is_barb(owner) {
@@ -102,9 +111,18 @@ impl Game {
         }
     }
 
-    /// The most soldiers a barbarian keeps, by its site's era.
+    /// The most soldiers a barbarian keeps: a few for the Ancient and
+    /// Medieval camps out by the starts, as many as it likes further in
+    /// (the middle is meant to be hard).
     pub fn army_cap(&self, owner: u8) -> usize {
-        self.barb_site(owner).map_or(usize::MAX, |s| 6 + 5 * s.era as usize)
+        self.barb_site(owner).map_or(usize::MAX, |s| if s.era <= 1 { 6 + 5 * s.era as usize } else { usize::MAX })
+    }
+
+    /// How many Capitols a barbarian keeps: one out by the starts, two from a
+    /// Gunpowder site, three from a Modern one, so taking a camp further in
+    /// means more than sniping one building.
+    pub fn camp_capitols(&self, owner: u8) -> usize {
+        self.barb_site(owner).map_or(1, |s| 1 + s.era as usize / 2)
     }
 
     /// Every tick in a Frontier game: put out camps that have lost their
@@ -248,7 +266,7 @@ mod perf {
     #[ignore]
     fn diag_frontier_time() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(7, 1, 2, crate::map_frontier::Size::Large);
+        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, 2, crate::map_frontier::Size::Large);
         for p in g.seat_ids() {
             g.set_ai(p, true);
         }
@@ -303,7 +321,11 @@ mod why {
     #[ignore]
     fn diag_camp() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(7, 1, 2, crate::map_frontier::Size::Large);
+        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, 2, crate::map_frontier::Size::Large);
+        // (The seats played by the computer, as in diag_frontier: the same game.)
+        for p in g.seat_ids() {
+            g.set_ai(p, true);
+        }
         for _ in 0..env("VC_MINUTES", 10) * 1200 {
             g.tick();
             g.events.clear();
