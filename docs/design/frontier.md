@@ -31,10 +31,8 @@ agree them among themselves.
       inland. Land all the way from each start to the middle, harder the
       further in (the camps' eras). The deposits go to the same places as
       on the continents.
-  - **Shallows** (people wade them, boats sail them): every lake, and on
-    the continents fords across the straits from each home continent to
-    the middle and to the islands. Every start can walk to the middle's
-    camps, the long way round; boats are the quick way.
+  - **Shallows** (people wade them, boats sail them): every lake. The sea
+    between continents and islands is deep: crossing it takes boats.
 - **Resources by distance:**
   - by the town only wood (and fish at sea);
   - on the home continent, in bands: stone, grain fields and game 26–58
@@ -42,8 +40,7 @@ agree them among themselves.
     iron and clay 80–100;
   - coal, saltpeter and iron on the islands (or, on a landmass, the far
     edges between the starts); oil, bauxite, uranium and coal in the
-    middle. On the continents they're across the water: by boat, or the
-    long way over the fords.
+    middle. On the continents they're across the water, by boat.
 - **The start** is as in Skirmish: a Capitol making 2 wood, 1 stone, 1 grain
   and 1 fruit.
 - **Barbarians** (`src/barbarians.rs`) are computer towns run by the
