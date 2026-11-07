@@ -436,45 +436,8 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
     clear_round(&mut terrain, &mut feat, b1.0, b1.1, 4);
 
     // Shallows, which people wade and boats sail (`SHALLOW`): every lake
-    // (water the open sea doesn't reach), and on the continents fords
-    // across the straits, from each home continent to the middle and to
-    // the islands beside it, so every part of the map can be walked to,
-    // by longer ways than by boat.
-    if !landmass {
-        let ford = |terrain: &mut Vec<u8>, shade: &mut Vec<u8>, a: (f32, f32), b: (f32, f32)| {
-            let steps = dist(a, b).ceil() as i32;
-            for k in 0..=steps {
-                let q = k as f32 / steps.max(1) as f32;
-                // A little wander, so it isn't a ruler-straight causeway.
-                let side = (q * std::f32::consts::PI * 3.0).sin() * 4.0;
-                let (nx, ny) = ((b.1 - a.1) / dist(a, b).max(1.0), (a.0 - b.0) / dist(a, b).max(1.0));
-                let (cx, cy) = (a.0 + (b.0 - a.0) * q + nx * side, a.1 + (b.1 - a.1) * q + ny * side);
-                for dy in -2..=2 {
-                    for dx in -2..=2 {
-                        if dx * dx + dy * dy > 5 {
-                            continue;
-                        }
-                        let (x, y) = (cx as i32 + dx, cy as i32 + dy);
-                        if x < 4 || y < 4 || x >= w - 4 || y >= h - 4 {
-                            continue;
-                        }
-                        for (px, py) in images(x, y) {
-                            let i = (py * w + px) as usize;
-                            if terrain[i] == WATER {
-                                terrain[i] = SHALLOW;
-                                shade[i] = 88;
-                            }
-                        }
-                    }
-                }
-            }
-        };
-        let (home, mid) = (canon_conts[0], canon_conts[1]);
-        ford(&mut terrain, &mut shade, (home.0, home.1), (mid.0, mid.1));
-        for c in &canon_conts[2..] {
-            ford(&mut terrain, &mut shade, (home.0, home.1), (c.0, c.1));
-        }
-    }
+    // (water the open sea doesn't reach). The sea between continents and
+    // islands stays deep: boats only.
     {
         let mut sea = vec![false; n];
         let mut stack = vec![(0, 0)];
@@ -689,8 +652,9 @@ mod tests {
 mod site_tests {
     use super::*;
 
-    /// Both shapes come up, and on either every start can walk (wading the
-    /// shallows) to the camps of the middle (the highest era's sites).
+    /// Both shapes come up, and on a landmass every start can walk (wading
+    /// the lakes) to the camps of the middle (the highest era's sites). On
+    /// the continents the middle is across the sea: by boat.
     #[test]
     fn every_start_walks_to_the_middle() {
         let mut shapes = (0, 0);
@@ -699,6 +663,9 @@ mod site_tests {
                 shapes.0 += 1;
             } else {
                 shapes.1 += 1;
+            }
+            if layout_of(seed) == Layout::Continents {
+                continue;
             }
             for players in [2, 4] {
                 let (m, _, bases, sites) = generate_frontier(seed, players, Size::Small);
