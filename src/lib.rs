@@ -1133,6 +1133,27 @@ mod tests {
         assert!(on(2));
     }
 
+    /// Taking over a seat (a spectator sitting down, a person replacing the
+    /// computer) keeps that player's explored map, not just what they see now.
+    #[test]
+    fn a_seat_keeps_its_explored_map() {
+        init(7, 2, 2);
+        set_ai(1, 1);
+        set_ai(2, 1);
+        for _ in 0..1200 * 4 {
+            tick();
+            take_events();
+        }
+        set_view(2, 0);
+        let (explored, now) = game(|g| {
+            let bit = 1u8 << 2;
+            (g.explored.iter().filter(|&&e| e & bit != 0).count(), g.fog.iter().filter(|&&v| v == 2).count())
+        });
+        let shown = game(|g| g.fog.iter().filter(|&&v| v > 0).count());
+        assert!(explored > now, "explored {explored}, visible {now}: the computer explored nothing?");
+        assert_eq!(shown, explored);
+    }
+
     /// Lifting the fog, or looking through another player's eyes, changes
     /// only what's shown: the game runs exactly the same.
     #[test]
@@ -1171,8 +1192,9 @@ mod tests {
 
 /// Look at the game through player `player`'s eyes (their fog, HUD numbers
 /// and alerts), or with `reveal` the whole map. Through a player's eyes the
-/// fog starts afresh: the parts they can see now, the rest unexplored. Only changes what this
-/// computer shows, never the game itself, so it's safe in multiplayer. Both
+/// fog is what they have explored (the game keeps that for every player,
+/// for the AI) plus what they see now. Only changes what this computer
+/// shows, never the game itself, so it's safe in multiplayer. Both
 /// multiplayer copies get it, so a correction doesn't undo it.
 #[unsafe(no_mangle)]
 pub extern "C" fn set_view(player: u32, reveal: u32) {
@@ -1181,9 +1203,14 @@ pub extern "C" fn set_view(player: u32, reveal: u32) {
             g.local = player.clamp(1, g.n_players as u32) as u8;
             g.reveal = reveal != 0;
             if !g.reveal {
-                // Only one player's fog is ever kept, so we can't know what
-                // this one has explored before: start from what they see now.
-                g.fog.iter_mut().for_each(|v| *v = 0);
+                // Explored ground from the game's record of every player's
+                // (a seat that changed hands keeps its map). Buildings
+                // remembered in the fog only for their own: anything else
+                // shows again once they see it.
+                let bit = 1u8.checked_shl(g.local as u32).unwrap_or(0);
+                for (v, &e) in g.fog.iter_mut().zip(&g.explored) {
+                    *v = (e & bit != 0) as u8;
+                }
                 let local = g.local;
                 for e in g.ents.iter_mut() {
                     e.seen = e.owner == local;
