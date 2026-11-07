@@ -89,11 +89,15 @@ const Rec = {
   real: false,        // a game someone played (not the map behind the title screen)
   done: true,
   replay: null,       // a promise of the finished replay, once `finish` ran
+  packed: null,       // `start` compressed ({ z, data }), once ready: closing the page has no time to compress
 
   begin(meta = {}) {
     this.finish();
     this.start = saveBytes();
     this.id = randomCode() + Date.now().toString(36);
+    this.packed = null;
+    const start = this.start;
+    packBytes(start).then(p => { if (this.start === start) this.packed = p; }).catch(() => {});
     this.base = meta.base || 0;
     this.cmds = new Map(); this.keys = []; this.ticks = 0; this.seq = 0;
     this.meta = Object.assign({ version: versionInfo(), players: W.n_players(), difficulty: W.game_difficulty(), startTime: W.game_time(), me: ME, who: {} }, meta);
@@ -137,7 +141,7 @@ const Rec = {
     if (!this.real) return null;
     const r = this.object(String(result).replace(/\.$/, ""));
     this.replay = (async () => {
-      Object.assign(r, await packBytes(this.start));
+      Object.assign(r, this.packed || await packBytes(this.start));
       if (r.ticks >= REPLAY_MIN_TICKS) storeReplay(r);
       return r;
     })().catch(() => null);
@@ -157,15 +161,17 @@ const Rec = {
   async saveNow() {
     if (this.done || !this.real || !this.start) return false;
     const r = this.object("Not finished (saved)");
-    Object.assign(r, await packBytes(this.start));
+    Object.assign(r, this.packed || await packBytes(this.start));
     return storeReplay(r);
   },
-  // The page is closing: keep the game as it stands, uncompressed (there's
-  // no time to compress it).
+  // The page is closing: keep the game as it stands. There's no time to
+  // compress now, so the start compressed in `begin` is used; only if that
+  // isn't ready yet, the raw bytes (a Frontier map's are megabytes, more
+  // than the browser keeps).
   storeNow() {
     if (this.done || !this.real || this.ticks < REPLAY_MIN_TICKS) return;
     this.done = true;
-    storeReplay(Object.assign(this.object("Not finished"), { z: false, data: toB64(this.start) }));
+    storeReplay(Object.assign(this.object("Not finished"), this.packed || { z: false, data: toB64(this.start) }));
   },
 };
 window.addEventListener("pagehide", () => Rec.storeNow());
@@ -174,12 +180,15 @@ function readReplays() {
   try { const v = JSON.parse(localStorage.getItem(REPLAY_KEY) || "[]"); return Array.isArray(v) ? v : []; }
   catch { return []; }
 }
-// Newest first. Out of room: drop the oldest until it fits.
+// Newest first. Out of room: drop the oldest until it fits. If even the
+// first alone doesn't fit, nothing changes: the replays already kept stay
+// (writing an empty list there once threw them all away).
 function writeReplays(list) {
-  for (let keep = list.length; keep >= 0; keep--) {
+  for (let keep = list.length; keep >= 1; keep--) {
     try { localStorage.setItem(REPLAY_KEY, JSON.stringify(list.slice(0, keep))); return keep; }
     catch { /* quota, or storage blocked */ }
   }
+  if (!list.length) try { localStorage.setItem(REPLAY_KEY, "[]"); } catch { /* blocked */ }
   return 0;
 }
 // Keep `r` among the replays. If the browser has no room even for it
