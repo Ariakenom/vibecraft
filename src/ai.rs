@@ -117,7 +117,7 @@ const NAVY: [Kind; 6] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad,
 /// The build plan: (building, how many we want), in order. It follows the
 /// tech tree, so each step is unlocked in time. Producers for whatever runs
 /// short are added along the way (`ai_project`), and beds come first.
-const PLAN: [(Kind, u32); 61] = [
+const PLAN: [(Kind, u32); 62] = [
     (Kind::LumberCamp, 1),
     (Kind::Farm, 1),
     (Kind::Barracks, 1),
@@ -172,7 +172,9 @@ const PLAN: [(Kind, u32); 61] = [
     (Kind::Factory, 1),
     (Kind::CoalMine, 2),
     // Modern: power, oil and aluminum, radios, then tanks and aircraft.
+    // (A third Capitol for a barbarian camp only: see `camp_capitols`.)
     (Kind::PowerPlant, 1),
+    (Kind::Capitol, 3),
     (Kind::OilWell, 1),
     (Kind::RadioFactory, 1),
     (Kind::BauxiteMine, 1),
@@ -286,7 +288,7 @@ impl Game {
         // Barbarians stay on their land: no boats, aircraft, nukes or
         // second towns.
         if self.is_barb(me) && matches!(kind, Kind::Dock | Kind::Airfield | Kind::MissileSilo | Kind::Capitol) {
-            return if kind == Kind::Capitol { 1 } else { 0 };
+            return if kind == Kind::Capitol { self.camp_capitols(me) } else { 0 };
         }
         let mut hard = Self::max_of(kind);
         // A dozen houses are all the next era asks for; more huts only hold
@@ -301,9 +303,16 @@ impl Game {
         // to make up for it, with a few more of their producers than the
         // target (which counts on fishing boats). Without, the central
         // camps sat one house short of the Gunpowder era.
+        // (Not farms: more of those held all the wood. And never past
+        // `MAX_SAME`: tried, and the central camps grew slower.)
         let no_fish = if self.is_barb(me) && kind.stats().produces.iter().any(|&(r, _)| r.is_house_good()) { 3 } else { 0 };
+        // And with all that to build, a few more lumber camps than a seat's
+        // limit (a camp on a landmass stood still, every slot of wood held).
+        if self.is_barb(me) && kind == Kind::LumberCamp {
+            hard = MAX_SAME + 3;
+        }
         if kind == Kind::Farm {
-            hard = target(self.players[me as usize].era).count(kind) as usize + 3 + no_fish;
+            hard = target(self.players[me as usize].era).count(kind) as usize + 3;
         }
         // Stone for the last houses before the Gunpowder era (which brings
         // the Stone Works) can run out with every quarry built: a house
@@ -435,8 +444,17 @@ impl Game {
     pub fn reach_for_tests(&self, x: f32, y: f32) -> Vec<bool> {
         self.reachable_from(x, y)
     }
+    #[cfg(test)]
     fn reachable_from(&self, x: f32, y: f32) -> Vec<bool> {
+        self.reachable_within(x, y, None)
+    }
+
+    /// `reachable_from`, only as far as `within` (a centre and radius) if
+    /// given: a barbarian's land, which on a landmass map is a small part of
+    /// what it could walk to.
+    fn reachable_within(&self, x: f32, y: f32, within: Option<(i32, i32, i32)>) -> Vec<bool> {
         let m = &self.map;
+        let near = |nx: i32, ny: i32| within.is_none_or(|(cx, cy, r)| (nx - cx).pow(2) + (ny - cy).pow(2) <= r * r);
         let mut seen = vec![false; (m.w * m.h) as usize];
         let (sx, sy) = (x.floor() as i32, y.floor() as i32);
         if !m.inside(sx, sy) {
@@ -447,7 +465,7 @@ impl Game {
         while let Some((x, y)) = stack.pop() {
             for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
                 let (nx, ny) = (x + dx, y + dy);
-                if !m.passable(nx, ny) || seen[m.idx(nx, ny)] {
+                if !m.passable(nx, ny) || seen[m.idx(nx, ny)] || !near(nx, ny) {
                     continue;
                 }
                 if dx != 0 && dy != 0 && (!m.passable(x + dx, y) || !m.passable(x, y + dy)) {
@@ -463,7 +481,22 @@ impl Game {
     fn census(&mut self, me: u8, home: (f32, f32)) -> Census {
         let mut c = Census { me, home, have: vec![0; 128], ..Default::default() };
         let (fx, fy) = self.campfire(me).unwrap_or(home);
-        c.reach = self.reachable_from(fx, fy);
+        // (The same as last think while nothing's been built or knocked down.)
+        let (sx, sy, at) = (fx.floor() as i32, fy.floor() as i32, self.block_gen);
+        let cached = self.reach_cache.get(me as usize).and_then(|c| c.as_ref()).filter(|c| (c.0, c.1, c.2) == (sx, sy, at));
+        c.reach = match cached {
+            Some((_, _, _, r)) => r.clone(),
+            None => {
+                // (A barbarian walks no further than it raids, and a little.)
+                let land = self.barb_site(me).map(|s| (s.x, s.y, crate::barbarians::RAID_RANGE as i32 + 10));
+                let r = self.reachable_within(fx, fy, land);
+                if self.reach_cache.len() <= me as usize {
+                    self.reach_cache.resize(me as usize + 1, None);
+                }
+                self.reach_cache[me as usize] = Some((sx, sy, at, r.clone()));
+                r
+            }
+        };
         let scout = self.ais[me as usize].scout;
         for e in self.own(me) {
             if e.is_building() {
@@ -546,7 +579,7 @@ impl Game {
         // The plan: the first project that isn't impossible.
         let mut next = None;
         for (kind, n) in PLAN {
-            if c.have[kind as usize] >= n || !self.unlocked(me, kind) {
+            if c.have[kind as usize] >= n || !self.unlocked(me, kind) || (kind == Kind::Capitol && n >= 3 && !self.is_barb(me)) {
                 continue;
             }
             // Soldiers' buildings only from a surplus: what `ai_free_up`
