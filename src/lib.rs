@@ -312,6 +312,12 @@ pub extern "C" fn terrain_ptr() -> *const u8 {
 pub extern "C" fn shade_ptr() -> *const u8 {
     game(|g| g.map.shade.as_ptr() as usize) as *const u8
 }
+/// Work out once, now, what would otherwise freeze the first game a moment
+/// (the computer players' plans). The page calls it while loading.
+#[unsafe(no_mangle)]
+pub extern "C" fn warm_up() {
+    crate::ai::warm_up();
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn fog_ptr() -> *const u8 {
     game(|g| g.fog.as_ptr() as usize) as *const u8
