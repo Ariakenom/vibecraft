@@ -40,7 +40,8 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 15: an air defense fires at a nuke before it lands (`Nuke::shot`).
 /// 19: Frontier games: barbarian sites and camps, owners past the seats.
 /// 20: players' supply and use of slots (19 still loads, recounted).
-const VERSION: u32 = 20;
+/// 21: computer players remember where there was no room (`Ai::no_room`).
+const VERSION: u32 = 21;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -349,6 +350,11 @@ impl Game {
             w.bool(a.last_grew);
             w.opt_pt(a.gather);
             w.f32(a.gather_until);
+            w.len(a.no_room.len());
+            for &(k, until) in &a.no_room {
+                w.u32(k as u32);
+                w.f32(until);
+            }
         }
 
         w.f32(self.time);
@@ -385,7 +391,7 @@ impl Game {
             return None;
         }
         let version = r.u32()?;
-        if version != VERSION && version != 19 {
+        if !(19..=VERSION).contains(&version) {
             return None;
         }
         let seed = r.u32()?;
@@ -541,6 +547,13 @@ impl Game {
             a.last_grew = r.bool()?;
             a.gather = r.opt_pt()?;
             a.gather_until = r.f32()?;
+            if version >= 21 {
+                let n = r.len(8)?;
+                for _ in 0..n {
+                    let k = Kind::from_u32(r.u32()?)?;
+                    a.no_room.push((k, r.f32()?));
+                }
+            }
             if a.scout.is_some_and(|s| s as usize >= ents.len()) {
                 return None;
             }
@@ -654,6 +667,15 @@ mod tests {
             }
         }
         assert!(differ.is_empty(), "checksums differ after loading at save points {differ:?}");
+    }
+
+    /// A computer player's memory of where there was no room is kept.
+    #[test]
+    fn no_room_is_saved() {
+        let mut g = Game::new(1234, 1, 2);
+        g.ais[2].no_room = vec![(Kind::Stoneworks, 31.5), (Kind::Brickworks, 40.0)];
+        let l = Game::load(&g.save()).unwrap();
+        assert_eq!(l.ais[2].no_room, g.ais[2].no_room);
     }
 
     /// Play a while, save, load, then play both copies on: they must stay

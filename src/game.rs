@@ -471,6 +471,11 @@ pub enum Pick {
 // live copy you play in can be thrown away and replaced by a copy of the
 // confirmed one. `derive` writes the copying code for every field, as long
 // as every field's type can be cloned too (hence the derives above).
+/// Counts changes to any game's fog (`update_fog`, and the page's own
+/// changes in lib.rs), so the page redraws it only when it changed. Only
+/// for the page: never read by the rules.
+pub static FOG_GEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Clone)]
 pub struct Game {
     /// The map seed. Kept so a saved game can be redrawn the same way.
@@ -1039,9 +1044,26 @@ impl Game {
         if bk.0 == 0 {
             return best;
         }
-        for &b in &self.blds {
+        // Buildings: those standing on the tiles within reach (only a
+        // building that has taken its tiles counts, `staked`), in id order
+        // as a pass over every building would meet them. (That pass, over
+        // every building on the map, was most of the time this took.)
+        let r = reach.ceil() as i32 + 1;
+        let (cx, cy) = (x.floor() as i32, y.floor() as i32);
+        let mut near: Vec<u32> = Vec::new();
+        for ty in (cy - r).max(0)..=(cy + r).min(self.map.h - 1) {
+            for tx in (cx - r).max(0)..=(cx + r).min(self.map.w - 1) {
+                let b = self.map.bld_at[self.map.idx(tx, ty)];
+                if b >= 0 && near.last() != Some(&(b as u32)) {
+                    near.push(b as u32);
+                }
+            }
+        }
+        near.sort_unstable();
+        near.dedup();
+        for b in near {
             let e = &self.ents[b as usize];
-            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && self.staked(e) {
+            if e.alive && e.is_building() && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && self.staked(e) {
                 let k = key(e);
                 if better(k, bk) {
                     bk = k;
@@ -1395,8 +1417,10 @@ impl Game {
             return false;
         }
         // Nor across your own plans not begun yet (others' you can't see).
-        for e in self.ents.iter() {
-            if e.alive && e.is_building() && e.owner == owner && e.id as i32 != except && !self.staked(e) {
+        // (Only this owner's: a pass over every entity per spot was a good
+        // part of the AI's searches.)
+        for e in self.own(owner) {
+            if e.is_building() && e.id as i32 != except && !self.staked(e) {
                 let es = e.kind.stats().size;
                 if e.tx < tx + s + margin && tx - margin < e.tx + es && e.ty < ty + s + margin && ty - margin < e.ty + es {
                     return false;
@@ -2605,6 +2629,7 @@ impl Game {
     }
 
     pub(crate) fn update_fog(&mut self) {
+        FOG_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.reveal {
             self.fog.iter_mut().for_each(|v| *v = 2);
             for e in self.ents.iter_mut().filter(|e| e.alive && e.is_building()) {

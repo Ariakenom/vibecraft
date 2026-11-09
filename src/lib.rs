@@ -316,6 +316,14 @@ pub extern "C" fn shade_ptr() -> *const u8 {
 pub extern "C" fn fog_ptr() -> *const u8 {
     game(|g| g.fog.as_ptr() as usize) as *const u8
 }
+/// Goes up whenever the fog may have changed: the page redraws it then.
+#[unsafe(no_mangle)]
+pub extern "C" fn fog_gen() -> u32 {
+    crate::game::FOG_GEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+fn fog_changed() {
+    crate::game::FOG_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
 
 #[unsafe(no_mangle)]
 /// 0 playing; from the local player's point of view: 1 won, 2 lost,
@@ -581,6 +589,7 @@ pub extern "C" fn mp_swap() {
     with(|w| {
         if let Some(o) = w.other.as_mut() {
             std::mem::swap(&mut w.game, o);
+            fog_changed();
         }
     })
 }
@@ -594,6 +603,7 @@ pub extern "C" fn mp_restore() {
     with(|w| {
         if let Some(o) = &w.other {
             w.game.clone_from(o);
+            fog_changed();
         }
     })
 }
@@ -1198,6 +1208,7 @@ mod tests {
 /// multiplayer copies get it, so a correction doesn't undo it.
 #[unsafe(no_mangle)]
 pub extern "C" fn set_view(player: u32, reveal: u32) {
+    fog_changed();
     with(|w| {
         for g in std::iter::once(&mut w.game).chain(w.other.as_mut()) {
             g.local = player.clamp(1, g.n_players as u32) as u8;
