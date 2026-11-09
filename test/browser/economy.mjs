@@ -85,8 +85,9 @@ await pg.keyboard.press("Shift+R");
 check(await pg.evaluate(() => buildPage) === 1, "Shift+R: the Medieval page");
 await pg.keyboard.press("Shift+E");
 check(await pg.evaluate(() => buildPage) === 0, "Shift+E: back to the Ancient page");
-const tab = await pg.$("#cmd button.page:nth-of-type(3)");
-const tb = await tab.boundingBox();
+// (Its place, read in one go: the panel is redrawn every few frames, and a
+// handle to the button would then point at one that's gone.)
+const tb = await pg.evaluate(() => { const r = document.querySelector("#cmd button.page:nth-of-type(3)").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
 await pg.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);
 await pg.mouse.down();
 await pg.evaluate(() => { selKey = "changed"; renderSelection(false); }); // something changed meanwhile

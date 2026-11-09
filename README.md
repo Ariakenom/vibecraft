@@ -71,8 +71,11 @@ the other way, like the ids in a command, go through `scratch_ptr()`.
 `[code, arg, x, y, ...ids]`, built in `issue()` in `main.js` and applied by
 `command()` in `lib.rs`. Codes: 1 smart order (right-click), 2 attack-move,
 3 stop, 4 train, 5 cancel, 6 place a building, 7 hand a player to the
-computer (only the host sends this), 8 surrender. In single player, `issue()` applies it
-at once. In multiplayer it's applied at once too, and sent to the host.
+computer (only the host sends this), 8 surrender, 9 demolish (or disband
+units), 10 pause or resume producers, 11 arm a nuke, 12 launch it,
+13 a person takes a seat back from the computer (host only), 14 upgrade
+houses, 15 the cheat switch (host only). In single player, `issue()`
+applies it at once. In multiplayer it's applied at once too, and sent to the host.
 
 **Starting up** shows a loading screen (`#boot` in `index.html`) from the
 first paint: the page then loads the wasm, sets up three.js and the models,
@@ -156,8 +159,8 @@ an icon to `RES_ICON` in `main.js`. Players' slot arrays grow with `N_RES`.
 **The economy, in one place.** `Game::resolve` (`src/game.rs`) recounts
 everything each tick in the design's fixed order: crews (house goods'
 producers first), supply, use, unsupplied units, house goods nearest the
-Capitol first, residents who no longer fit. Only houses' residents and
-goods are saved; `Game::recount` works out the rest after a load.
+Capitol first, residents who no longer fit. Only houses' goods are saved;
+`Game::recount` works out the rest after a load.
 
 **Add a command.**
 - Add a `Command` variant and its handling in `Game::apply` (`src/game.rs`),

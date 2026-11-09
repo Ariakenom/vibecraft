@@ -1386,14 +1386,29 @@ function shortCode(k) { const r = W.short_of(k); return r >= 0 ? 1000 + r : 0; }
 // numbers: [code, arg, x, y, ...ids]. Compact (it has to fit, with others,
 // into 4 KiB messages) and shallow. x and y are rounded to 1/100 of a tile
 // once, here, so every computer applies exactly the same numbers.
+// A command holds at most 60 ids (cleanCmd caps the length). For orders that
+// act on each id on its own (1 move/smart, 2 attack-move, 3 stop, 9 demolish,
+// 10 pause/resume, 14 upgrade) more ids are split into several commands of 60,
+// all sent now; the first error code wins. (Side effect: a move to open ground
+// forms up each chunk in its own square, so chunks overlap and get pushed apart.)
+// The rest are one action, so they keep only the first 60 ids and go once.
+const SPLIT_CODES = [1, 2, 3, 9, 10, 14];
 function issue(cmd) {
   const r2 = v => Math.round((v || 0) * 100) / 100;
   if (observe) return 0; // watching: nothing to command
-  const arr = [cmd.c, cmd.a || 0, r2(cmd.x), r2(cmd.y), ...(cmd.ids || []).slice(0, 60)];
-  const code = applyCmd(ME, arr);
-  if (mp) mp.queue(arr); // multiplayer records the confirmed order instead (mpHooks.confirmed)
-  else Rec.mine(arr);
-  return code;
+  const ids = cmd.ids || [], head = [cmd.c, cmd.a || 0, r2(cmd.x), r2(cmd.y)];
+  const chunks = [];
+  if (SPLIT_CODES.includes(cmd.c)) for (let i = 0; i < ids.length; i += 60) chunks.push(ids.slice(i, i + 60));
+  if (!chunks.length) chunks.push(ids.slice(0, 60));
+  let first = 0;
+  for (const chunk of chunks) {
+    const arr = [...head, ...chunk];
+    const code = applyCmd(ME, arr);
+    if (!first) first = code;
+    if (mp) mp.queue(arr); // multiplayer records the confirmed order instead (mpHooks.confirmed)
+    else Rec.mine(arr);
+  }
+  return first;
 }
 // Run one command on whichever copy of the game is current. No sounds, no
 // messages: multiplayer also uses this to replay commands.
@@ -1923,7 +1938,7 @@ function loop(now) {
       // Handing a seat to a spectator: right after a tick, before any new command.
       if (pendingSeat && steps) {
         const p = pendingSeat; pendingSeat = null;
-        if (canGiveSeats() && !W.defeated(p.slot)) { becomeServer(); if (mp.server.claim(p.slot, p.token)) claimed(p.slot, p.token); }
+        if (canGiveSeats() && !W.defeated(p.slot)) { becomeServer(); if (mp.server.claim(p.slot, p.token, Watchers.peerOf(p.token))) claimed(p.slot, p.token); }
       }
     }
     const f1 = performance.now();
@@ -2345,6 +2360,10 @@ const kicked = new Set();  // friends the host removed: they don't get a seat ag
 const played = new Set();  // games already played, so a leftover "start" never restarts one
 const myToken = Math.random().toString(36).slice(2, 10); // who I am in a room
 const peerNames = new Map(); // token -> the name they picked, from the room's presence
+// The host: token -> the room's id for the connection that first showed it.
+// Tokens can be read by everyone in the room, so a second connection showing
+// a seated friend's token is not that friend.
+const seatPeer = new Map();
 function notePeerNames(peers) {
   for (const p of peers) { const pr = p.presence || {}; if (okToken(pr.token)) peerNames.set(pr.token, cleanName(pr.name)); }
 }
@@ -2502,9 +2521,12 @@ function onHostPeers(peers) {
   setWatchCount(countWatchers(peers));
   Chat.setOthers(peers.length);
   const here = new Set();
+  for (const [t, id] of seatPeer) if (!peers.some(p => p.id === id)) seatPeer.delete(t); // gone: the token is free again
   for (const p of peers) {
     const pr = p.presence || {};
     if (pr.role !== "guest" || pr.v !== NET.PROTOCOL || !okToken(pr.token)) continue;
+    if (!seatPeer.has(pr.token)) seatPeer.set(pr.token, p.id);
+    if (seatPeer.get(pr.token) !== p.id) continue;
     here.add(pr.token);
     if (mp && mp.server) {
       if (pr.playing === mp.server.gameId) mp.server.seenPlaying.add(pr.token);
@@ -2595,9 +2617,10 @@ function onGuestPeers(peers) {
   notePeerNames(peers);
   setWatchCount(mp ? countWatchers(peers) : 0);
   Chat.setOthers(peers.length);
-  const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && Array.isArray(pr.seats));
+  const hp = hostAmong(peers, guestOf.hostPeer, pr => Array.isArray(pr.seats)), host = hp && hp.presence;
+  if (hp) guestOf.hostPeer = hp.id;
   if (mp) {
-    if (!host || host.token !== mp.hostToken) endMultiplayer("The host left the game.");
+    if (!host || host.token !== mp.hostToken || hp.id !== mp.hostPeer) endMultiplayer("The host left the game.");
     else if (host.names && typeof host.names === "object") setNames(host.names); // the host keeps who's who
     return;
   }
@@ -2619,13 +2642,13 @@ function lobbyTick() {
 }
 
 // A guest: the host started the game.
-function onStart(d) {
-  if (mp || !guestOf || !d || d.v !== NET.PROTOCOL || typeof d.seed !== "number" || !d.slots || typeof d.id !== "string" || played.has(d.id)) return;
+function onStart(d, from) {
+  if (mp || !guestOf || guestOf.hostPeer == null || from !== guestOf.hostPeer || !d || d.v !== NET.PROTOCOL || typeof d.seed !== "number" || !d.slots || typeof d.id !== "string" || played.has(d.id)) return;
   const slot = d.slots[myToken];
   if (typeof slot !== "number") return;
   played.add(d.id);
   const client = new Client(slot, room, myToken, mpHooks, endMultiplayer);
-  client.hostToken = d.host;
+  client.hostToken = d.host; client.hostPeer = from;
   room.presence({ playing: d.id }); // tells the host I'm in this game
   startMultiplayer(slot, d, client);
 }
@@ -2660,7 +2683,7 @@ function beginGame() {
   if (pageRoom) pageRoom.presence({ hosting: null });
   // The host runs the server and, like everyone, a client.
   const client = new Client(1, null, myToken, mpHooks, endMultiplayer);
-  client.server = new Server(room, Object.entries(slots).map(([t, s]) => [s, t]), client, endMultiplayer);
+  client.server = new Server(room, Object.entries(slots).map(([t, s]) => [s, t, seatPeer.get(t)]), client, endMultiplayer);
   client.server.gameId = settings.id; client.server.seenPlaying = new Set();
   startMultiplayer(1, settings, client);
 }
@@ -2720,7 +2743,7 @@ function giveSeat(slot, token) {
     pendingSeat = { slot, token };
     if (paused) togglePause();
     $("menuScreen").hidden = true;
-  } else if (!mp.server || !mp.server.claim(slot, token)) return;
+  } else if (!mp.server || !mp.server.claim(slot, token, Watchers.peerOf(token))) return;
   else claimed(slot, token);
   toast(`Handing ${PNAME[slot]} to ${name || "Spectator " + n}…`);
   renderGameSeats(true);
@@ -2774,23 +2797,24 @@ function sendOffers(now) {
 // play from here, as a guest of the host.
 function takeSeat(w) {
   const { slot, T, seq0, gameId, host } = w.seat;
-  const code = w.code, hostPresence = w.host;
+  const code = w.code, hostPresence = w.host, hostPeer = w.hostPeer;
   leaveWatching();
   stopObserving();
   ME = slot;
   if (myName) pnames[slot] = myName;
+  if (Rec.meta && Rec.meta.who) Rec.meta.who[slot] = "human"; // the 13 that gave me the seat was applied by my Watcher copy, not seen by system()
   W.set_view(slot, 0);
   W.clear_selection();
   // Commands already confirmed, so late early-news of them isn't taken for new.
   const done = new Map();
   for (const list of Rec.cmds.values()) for (const e of list) if (e[0] > 0) done.set(e[0], Math.max(done.get(e[0]) || 0, e[1]));
-  guestOf = { code, host: hostPresence, lostAt: performance.now() };
+  guestOf = { code, host: hostPresence, hostPeer, lostAt: performance.now() };
   played.add(gameId);
   room.presence({ role: "guest", v: NET.PROTOCOL, token: myToken, playing: gameId });
   room.on("start", onStart);
   room.onPeers(onGuestPeers);
   const client = new Client(slot, room, myToken, mpHooks, endMultiplayer);
-  client.hostToken = host;
+  client.hostToken = host; client.hostPeer = hostPeer;
   client.live = T + 1; client.final = client.got = T;
   client.seq = seq0; client.doneSeq = done;
   for (let s = 1; s <= W.n_players(); s++) if (s !== slot && W.is_ai(s)) client.leftSeen.add(s); // old news

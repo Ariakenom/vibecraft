@@ -561,6 +561,7 @@ impl Game {
             let owner = i as u8 + 1;
             let cap = g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
             g.ents[cap as usize].starting = true;
+            #[allow(clippy::reversed_empty_ranges)] // START_WORKERS is a tuning knob, 0 for now
             for _ in 0..START_WORKERS {
                 g.spawn_worker(owner, None);
             }
@@ -1192,9 +1193,11 @@ impl Game {
     }
 
     fn check_victory(&mut self) {
+        let mut fell = Vec::new();
         for p in self.seat_ids() {
             if !self.players[p as usize].defeated && self.home_capitol(p).is_none() {
                 self.players[p as usize].defeated = true;
+                fell.push(p);
                 for e in self.ents.iter_mut().filter(|e| e.alive && e.owner == p) {
                     e.hp = 0.0;
                 }
@@ -1204,7 +1207,10 @@ impl Game {
         let standing: Vec<u8> = self.seat_ids().filter(|&p| !self.players[p as usize].defeated).collect();
         let w = match standing.as_slice() {
             [only] => *only,
-            [] => self.local, // everyone fell at once: call it a draw, kindly
+            // The last ones fell on the same tick: the first of them (by
+            // number) has it. Never `local`: every computer must name the
+            // same winner (rule 5).
+            [] => fell.first().copied().unwrap_or(PLAYER),
             _ => 0,
         };
         if w != 0 {
