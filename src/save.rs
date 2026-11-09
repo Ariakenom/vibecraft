@@ -407,7 +407,7 @@ impl Game {
         let bld_at = (0..n).map(|_| r.i32()).collect::<Option<Vec<_>>>()?;
         let fog = r.take(n)?.to_vec();
         let explored = r.take(n)?.to_vec();
-        let map = Map { w: mw, h: mh, terrain, shade, blocked, dep_at, bld_at };
+        let map = Map::new(mw, mh, terrain, shade, blocked, dep_at, bld_at);
 
         let ndeps = r.len(9)?;
         let mut deps = Vec::with_capacity(ndeps);

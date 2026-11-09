@@ -2164,3 +2164,26 @@ fn diag_save_time() {
     }
     crate::prof::set(false);
 }
+
+/// Playtest: workers from the first base were sent to a foundation on
+/// another island, and stood at the shore for good. Nobody is sent across
+/// the sea; once the land joins, they come.
+#[test]
+fn no_worker_is_sent_across_the_sea() {
+    let mut g = town(5, 1, 2);
+    let (x, y) = spot_away(&g, Kind::Barracks, 12);
+    let b = g.spawn_foundation(Kind::Barracks, 1, x, y);
+    // Make the foundation's ground a piece of land of its own.
+    let s = Kind::Barracks.stats().size as i32;
+    for ty in y - 2..y + s + 2 {
+        for tx in x - 2..x + s + 2 {
+            let i = g.map.idx(tx, ty);
+            g.map.land[i] = u32::MAX;
+        }
+    }
+    run(&mut g, 5.0);
+    assert!(g.ents.iter().all(|e| !e.alive || e.order != Order::Build(b)), "nobody sent to the island");
+    g.map.relabel_land();
+    run(&mut g, 2.0);
+    assert!(g.ents.iter().any(|e| e.alive && e.order == Order::Build(b)), "on the same land, builders come");
+}

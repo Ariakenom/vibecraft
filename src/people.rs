@@ -127,10 +127,15 @@ impl Game {
         e.alive && e.kind == Kind::Worker && e.order == Order::Idle && e.aboard == 0 && fires.get(e.owner as usize).is_some_and(|f| f.iter().any(|&(cx, cy)| (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA))
     }
 
-    /// Send a worker back to stand at the campfire nearest them.
+    /// Send a worker back to stand at the campfire nearest them, one they
+    /// can walk to if there is one.
     pub(crate) fn go_home(&mut self, i: usize) {
         let (owner, id, x, y) = (self.ents[i].owner, self.ents[i].id, self.ents[i].x, self.ents[i].y);
-        match self.nearest_capitol(owner, x, y) {
+        let walk = self.capitols(owner).filter(|&c| self.map.same_land((x, y), (self.ents[c].x, self.ents[c].y))).min_by(|&a, &b| {
+            let d = |c: usize| (self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
+            d(a).total_cmp(&d(b)).then(a.cmp(&b))
+        });
+        match walk.or_else(|| self.nearest_capitol(owner, x, y)) {
             Some(c) => {
                 let (x, y) = self.campfire_spot_at(c, id);
                 self.ents[i].set_order(Order::Move { x, y });
@@ -778,17 +783,26 @@ impl Game {
                     jobs.extend((0..need).map(|_| (i, Order::Work(i as u32))));
                 }
             }
+            // Which piece of land each free worker stands on: nobody is sent
+            // across the sea (playtest: workers from the first base walked
+            // to a second one on another island, stood at the shore for
+            // good, and searched for a way every few seconds).
+            let mut land: Vec<u32> = free.iter().map(|&w| self.map.land_at(self.ents[w].x, self.ents[w].y)).collect();
             for (b, order) in jobs {
                 if free.is_empty() {
                     break;
                 }
-                // The nearest free worker; ties go to the lower id.
+                // The nearest free worker on the same land; ties go to the
+                // lower id.
                 let t = &self.ents[b];
-                let k = (0..free.len()).min_by(|&a, &c| {
+                let lb = self.map.land_at(t.x, t.y);
+                let k = (0..free.len()).filter(|&j| lb == 0 || land[j] == 0 || land[j] == lb).min_by(|&a, &c| {
                     let d = |j: usize| t.edge_dist(self.ents[free[j]].x, self.ents[free[j]].y);
                     d(a).total_cmp(&d(c)).then(free[a].cmp(&free[c]))
                 });
-                let w = free.remove(k.unwrap_or(0));
+                let Some(k) = k else { continue };
+                land.remove(k);
+                let w = free.remove(k);
                 self.ents[w].set_order(order);
                 self.ents[w].resume = None;
                 if let Order::Work(_) = order {

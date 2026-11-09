@@ -71,9 +71,70 @@ pub struct Map {
     pub dep_at: Vec<i32>,
     /// Building entity id on this tile, or -1.
     pub bld_at: Vec<i32>,
+    /// Which piece of land each tile is on, 0 for none (deep water,
+    /// craters): people can't walk from one piece to another. Worked out
+    /// from the terrain (`with_land`), not saved.
+    pub land: Vec<u32>,
 }
 
 impl Map {
+    pub fn new(w: i32, h: i32, terrain: Vec<u8>, shade: Vec<u8>, blocked: Vec<bool>, dep_at: Vec<i32>, bld_at: Vec<i32>) -> Map {
+        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new() };
+        m.relabel_land();
+        m
+    }
+    /// Number the pieces of land (`land`) again: after the ground changed.
+    /// Diagonal steps count (a little more joined than walking is, which
+    /// only means a long way round now and then, never a worker left out).
+    pub fn relabel_land(&mut self) {
+        let n = (self.w * self.h) as usize;
+        let ground = |t: u8| t != WATER && t != CRATER;
+        self.land = vec![0; n];
+        let mut next = 0;
+        let mut stack = Vec::new();
+        for s in 0..n {
+            if self.land[s] != 0 || !ground(self.terrain[s]) {
+                continue;
+            }
+            next += 1;
+            self.land[s] = next;
+            stack.push(s);
+            while let Some(i) = stack.pop() {
+                let (x, y) = ((i as i32) % self.w, (i as i32) / self.w);
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if !self.inside(nx, ny) {
+                        continue;
+                    }
+                    let j = self.idx(nx, ny);
+                    if self.land[j] == 0 && ground(self.terrain[j]) {
+                        self.land[j] = next;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+    }
+    /// The piece of land at (x, y), or next to it (someone at the water's
+    /// edge); 0 if there's none.
+    pub fn land_at(&self, x: f32, y: f32) -> u32 {
+        let (tx, ty) = (x.floor() as i32, y.floor() as i32);
+        for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+            if self.inside(tx + dx, ty + dy) {
+                let l = self.land[self.idx(tx + dx, ty + dy)];
+                if l != 0 {
+                    return l;
+                }
+            }
+        }
+        0
+    }
+    /// Can people walk between these two points? (Unknown, 0, counts as yes.)
+    pub fn same_land(&self, a: (f32, f32), b: (f32, f32)) -> bool {
+        let (la, lb) = (self.land_at(a.0, a.1), self.land_at(b.0, b.1));
+        la == 0 || lb == 0 || la == lb
+    }
+
     pub fn idx(&self, x: i32, y: i32) -> usize {
         (y * self.w + x) as usize
     }
@@ -784,7 +845,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
 
-    let map = Map { w, h, terrain, shade, blocked, dep_at, bld_at: vec![-1; n] };
+    let map = Map::new(w, h, terrain, shade, blocked, dep_at, vec![-1; n]);
     (map, deps, bases)
 }
 
