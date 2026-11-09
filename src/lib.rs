@@ -443,7 +443,7 @@ pub extern "C" fn can_place_ignoring_deposit(kind: u32, tx: i32, ty: i32) -> u32
     game(|g| g.spot_free(kind, tx, ty, g.local, 0) as u32)
 }
 
-/// Make this a two-player game seen through player `local`'s eyes (1 or 2).
+/// Make this a multiplayer game seen through player `local`'s eyes (1 to the number of players).
 #[unsafe(no_mangle)]
 pub extern "C" fn setup_multiplayer(local: u32) {
     game(|g| g.setup_multiplayer(local.clamp(1, g.n_players as u32) as u8))
@@ -997,6 +997,25 @@ mod tests {
         command(1, 8, 0, 0.0, 0.0, 0);
         tick();
         assert_eq!((state_of(1), state_of(2), winner_player()), (2, 1, 2));
+    }
+
+    /// When the last players fall on the same tick, every computer names
+    /// the same winner, whoever's eyes it looks through.
+    #[test]
+    fn a_shared_last_tick_has_one_winner_for_everyone() {
+        let mut winners = Vec::new();
+        for view in [1, 2] {
+            init(3, 1, 2);
+            setup_multiplayer(view);
+            for _ in 0..40 {
+                tick();
+            }
+            command(1, 8, 0, 0.0, 0.0, 0);
+            command(2, 8, 0, 0.0, 0.0, 0);
+            tick();
+            winners.push(winner_player());
+        }
+        assert_eq!(winners, [1, 1]);
     }
 
     /// The host hands a seat back and forth between the computer and a person.
