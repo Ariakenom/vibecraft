@@ -17,7 +17,7 @@ for (const mode of ["skirmish", "frontier", "frontier-large"]) {
       for (let i = 0; i < 25; i++) {
         const sx = view._w * ((i % 5) + 0.5) / 5, sy = view._h * (Math.floor(i / 5) + 0.5) / 5;
         R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
-        const mesh = R3.raycaster.intersectObject(R3.terrain, false)[0];
+        const mesh = R3.raycaster.intersectObject(R3.terrain, true)[0];
         const w = screenToGround(sx, sy);
         if (!mesh) continue;
         out.n++;

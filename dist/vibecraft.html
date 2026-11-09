@@ -2804,8 +2804,9 @@ function buildWorld() {
   R3.objs.clear();
   for (const d of R3.dying) scene.remove(d.root);
   R3.dying = [];
-  for (const k of ["terrain", "shore", "water", "tufts", "flowers", "pebbles"]) if (R3[k]) { scene.remove(R3[k]); R3[k].geometry.dispose(); R3[k] = null; }
-  if (R3.res) for (const m of Object.values(R3.res)) scene.remove(m);
+  for (const k of ["terrain", "shore", "water", "tufts", "flowers", "pebbles"]) if (R3[k]) { disposeTree(R3[k]); R3[k] = null; }
+  if (R3.terrainGeo) { R3.terrainGeo.dispose(); R3.terrainGeo = null; }
+  if (R3.res) for (const m of R3.res.values()) { scene.remove(m); m.dispose(); }
   R3.resKey = "";
   R3.flattened = new Set();
   R3.flatBase = new Map(); // ground height under each levelled site, by "x0,y0,size"
@@ -2823,10 +2824,24 @@ function buildWorld() {
   const tex = new THREE.CanvasTexture(terrainCanvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = R3.renderer.capabilities.getMaxAnisotropy();
-  const terrain = new THREE.Mesh(geo, withFow(new THREE.MeshLambertMaterial({ map: tex }), groundPatch));
-  terrain.receiveShadow = true;
+  // The whole ground is worked on in `geo` (levelling, shading), which isn't
+  // drawn; what's drawn is copies of it in blocks (`terrainToBlocks`).
+  R3.terrainGeo = geo;
+  const mat = withFow(new THREE.MeshLambertMaterial({ map: tex }), groundPatch);
+  const terrain = new THREE.Group();
+  for (let by = 0; by < MH; by += BLOCK) for (let bx = 0; bx < MW; bx += BLOCK) {
+    const w = Math.min(BLOCK, MW - bx), d = Math.min(BLOCK, MH - by);
+    const g = new THREE.PlaneGeometry(w, d, w, d);
+    g.rotateX(-Math.PI / 2);
+    g.translate(bx + w / 2, 0, by + d / 2);
+    const m = new THREE.Mesh(g, mat);
+    m.receiveShadow = true;
+    m.userData.block = [bx, by, w, d];
+    terrain.add(m);
+  }
   scene.add(terrain);
   R3.terrain = terrain;
+  terrainToBlocks(0, 0, MW, MH);
 
   buildShore();
   buildWater();
@@ -2847,20 +2862,34 @@ function buildWorld() {
   fowUniforms.uFow.value = R3.fowTex;
   fowUniforms.uMapSize.value = new THREE.Vector2(MW, MH);
 
-  // Resource instanced meshes, sized for the most there could be.
-  // Room for every resource on the map. (Sizing this from the resources
-  // explored so far was a bug: trees discovered later had no room and vanished.)
-  const n = W.res_total() + 16;
-  const mk = (g, cnt, sways, mat) => {
+  // Resources: one instanced mesh per kind and block (`BLOCK`), made when
+  // the first of that kind in that block comes into view (`updateResources`).
+  // How each kind is drawn:
+  const look = (sways, mat) => ({
     // (Each its own material where none is given: instanced meshes with and
     // without their own colours want different shaders; see entMatSkin.)
-    const m = new THREE.InstancedMesh(g, mat || (sways ? treeMat : withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), flagPatch)), cnt);
-    m.customDepthMaterial = sways ? treeDepthMat : depthMat();
-    m.castShadow = true; m.receiveShadow = true; m.count = 0; scene.add(m); return m;
-  };
-  R3.res = { pine: mk(R3.resGeo.pine, n, true), oak: mk(R3.resGeo.oak, n, true), bush: mk(R3.resGeo.bush, n, true), stone: mk(R3.resGeo.stone, n, false, stoneMat), gold: mk(R3.resGeo.gold, n, false, goldMat),
-    horse: mk(R3.resGeo.horse, n, false), deer: mk(R3.resGeo.deer, n, false),
-    iron: mk(R3.resGeo.iron, n, false), clay: mk(R3.resGeo.clay, n, false), sheep: mk(R3.resGeo.sheep, n, false), fish: mk(R3.resGeo.fish, n, false), nitrate: mk(R3.resGeo.nitrate, n, false), coal: mk(R3.resGeo.coal, n, false), oil: mk(R3.resGeo.oil, n, false), bauxite: mk(R3.resGeo.bauxite, n, false), uranium: mk(R3.resGeo.uranium, n, false) };
+    mat: mat || (sways ? treeMat : withFow(new THREE.MeshLambertMaterial({ vertexColors: true }), flagPatch)),
+    depth: sways ? treeDepthMat : depthMat(),
+  });
+  R3.resLook = { pine: look(true), oak: look(true), bush: look(true), stone: look(false, stoneMat), gold: look(false, goldMat) };
+  for (const k of ["horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium"]) R3.resLook[k] = look(false);
+  R3.res = new Map(); // "kind block" -> its mesh
+}
+
+// The instanced mesh for this kind of resource in block b, with room for n.
+function resMesh(kind, b, n) {
+  const key = kind + " " + b;
+  let m = R3.res.get(key);
+  if (m && m.instanceMatrix.count >= n) return m;
+  if (m) { R3.scene.remove(m); m.dispose(); }
+  const l = R3.resLook[kind];
+  m = new THREE.InstancedMesh(R3.resGeo[kind], l.mat, Math.max(4, 2 ** Math.ceil(Math.log2(n))));
+  m.customDepthMaterial = l.depth;
+  m.castShadow = true; m.receiveShadow = true; m.count = 0;
+  m.userData.res = [];
+  R3.scene.add(m);
+  R3.res.set(key, m);
+  return m;
 }
 
 // --- The coast around the map ---------------------------------------------------
@@ -2920,18 +2949,43 @@ function buildShore() {
 // shaders: clear shallows with caustics on the sand, rolling waves made of
 // several wave trains and noise (`waterSlope`), the sky and its clouds
 // mirrored by Fresnel, and a sharp sun glint off the waves.
+// Big things that cover the whole map (water, ground, grass, trees) are cut
+// into blocks this many tiles wide, so the graphics card is only handed the
+// blocks on screen. (As one piece each, every frame drew the whole map:
+// over 5 million triangles on a large Frontier map, at any zoom.)
+const BLOCK = 32;
+
+// Remove something from the scene and free its geometry, its children's too.
+function disposeTree(o) {
+  if (o.parent) o.parent.remove(o);
+  o.traverse(c => { if (c.geometry) c.geometry.dispose(); });
+}
+
 function buildWater() {
-  const pad = 40, res = 2;
-  const geo = new THREE.PlaneGeometry(MW + pad * 2, MH + pad * 2, (MW + pad * 2) * res, (MH + pad * 2) * res);
-  geo.rotateX(-Math.PI / 2);
-  geo.translate(MW / 2, WATER_Y, MH / 2);
-  const pos = geo.attributes.position, depth = new Float32Array(pos.count);
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i);
-    // Outside the map, the sea floor keeps sloping down from the map's edge.
-    depth[i] = Math.max(-0.2, WATER_Y - heightAnywhere(x, z));
+  // One point per tile: the swell is 0.018 high and several tiles long,
+  // and ripples, foam and shine are worked out per pixel anyway. (Two per
+  // tile drew 2.6 million triangles of water.)
+  const pad = 40;
+  const water = new THREE.Group();
+  const blocks = [];
+  for (let bz = -pad; bz < MH + pad; bz += BLOCK) for (let bx = -pad; bx < MW + pad; bx += BLOCK) {
+    const w = Math.min(BLOCK, MW + pad - bx), d = Math.min(BLOCK, MH + pad - bz);
+    const geo = new THREE.PlaneGeometry(w, d, w, d);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(bx + w / 2, WATER_Y, bz + d / 2);
+    const pos = geo.attributes.position, depth = new Float32Array(pos.count);
+    let wet = false;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      // Outside the map, the sea floor keeps sloping down from the map's edge.
+      depth[i] = Math.max(-0.2, WATER_Y - heightAnywhere(x, z));
+      if (depth[i] > -0.05) wet = true;
+    }
+    // A block of dry land, well above the water everywhere: no water there.
+    if (!wet) { geo.dispose(); continue; }
+    geo.setAttribute("aDepth", new THREE.BufferAttribute(depth, 1));
+    blocks.push(geo);
   }
-  geo.setAttribute("aDepth", new THREE.BufferAttribute(depth, 1));
   // The ground's height under the water, 4 samples per tile, so the shader
   // knows the depth at every pixel: the foam line then follows the real
   // shoreline crisply instead of smearing across the mesh's coarse vertices.
@@ -3028,9 +3082,12 @@ function buildWater() {
         }`);
     sh.fragmentShader = NOISE_GLSL + SKY_GLSL + sh.fragmentShader;
   });
-  const water = new THREE.Mesh(geo, mat);
-  water.renderOrder = 1;
-  water.receiveShadow = true;
+  for (const geo of blocks) {
+    const m = new THREE.Mesh(geo, mat);
+    m.renderOrder = 1;
+    m.receiveShadow = true;
+    water.add(m);
+  }
   // Open sea out to the horizon: four big flat quads around the detailed
   // water, with the same material (the height texture reads as deep there).
   const far = 1500, x0 = -pad, x1 = MW + pad, z0 = -pad, z1 = MH + pad;
@@ -3094,34 +3151,52 @@ function buildTufts() {
     for (let k = 0; k < 3; k++) spots.push([tx + 0.1 + hash2(tx * 7 + k, ty) * 0.8, ty + 0.1 + hash2(ty * 11 + k, tx * 3) * 0.8, hash2(tx + k * 13, ty * 17), hash2(tx * 5 + k * 29, ty * 3 + 11)]);
   }
   spots.sort((a, b) => a[3] - b[3]);
-  R3.tuftSpots = spots;
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
   withFow(mat, swayPatch);
-  R3.tufts = new THREE.InstancedMesh(tuftGeometry(), mat, spots.length);
-  R3.tufts.receiveShadow = true;
-  const fl = spots.filter(s => s[2] < 0.12);
-  R3.flowerSpots = fl;
+  R3.tufts = inBlocks(spots, tuftGeometry(), mat);
   const fmat = new THREE.MeshLambertMaterial({ color: "#ffffff" });
   withFow(fmat, swayPatch);
-  R3.flowers = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.05, 0).scale(1, 0.6, 1).translate(0.02, 0.26, 0), fmat, Math.max(1, fl.length));
+  // (8 triangles each, as small as they are: a 20-sided ball drew 0.2
+  // million triangles of flowers.)
+  R3.flowers = inBlocks(spots.filter(s => s[2] < 0.12), new THREE.OctahedronGeometry(0.05, 0).scale(1, 0.6, 1).translate(0.02, 0.26, 0), fmat);
   const palette = ["#f2efe4", "#f3d55b", "#c58ad8", "#e98a5e"].map(c => new THREE.Color(c));
-  fl.forEach((s, i) => R3.flowers.setColorAt(i, palette[Math.floor(s[2] * 33) % 4]));
-  // A few pebbles in the grass, with the stone surface.
-  R3.pebbleSpots = spots.filter(s => s[2] > 0.95);
-  const pg = new THREE.DodecahedronGeometry(0.06, 0).scale(1, 0.55, 0.8).translate(0, 0.015, 0);
+  for (const m of R3.flowers.children) m.userData.spots.forEach((s, i) => m.setColorAt(i, palette[Math.floor(s[2] * 33) % 4]));
+  // A few pebbles in the grass, with the stone surface (8 triangles: a
+  // 12-sided one drew 0.4 million triangles of pebbles).
+  const pg = new THREE.OctahedronGeometry(0.06, 0).scale(1, 0.55, 0.8).translate(0, 0.015, 0);
   pg.setAttribute("color", new THREE.Float32BufferAttribute(new Array(pg.attributes.position.count * 3).fill(0.3), 3));
-  R3.pebbles = new THREE.InstancedMesh(pg, stoneMat, Math.max(1, R3.pebbleSpots.length));
-  R3.pebbles.receiveShadow = true;
+  R3.pebbles = inBlocks(spots.filter(s => s[2] > 0.95), pg, stoneMat);
+  R3.pebbles.userData.pebbles = true;
   placeTufts();
   applyGrass();
   R3.scene.add(R3.tufts, R3.flowers, R3.pebbles);
+}
+// Spots ([x, y, ...]) drawn as one instanced mesh per block (`BLOCK`), in
+// a group. Each keeps its spots, in their order, in userData.spots.
+function inBlocks(spots, geo, mat) {
+  const bw = Math.ceil(MW / BLOCK), lists = new Map();
+  for (const s of spots) {
+    const b = Math.floor(s[1] / BLOCK) * bw + Math.floor(s[0] / BLOCK);
+    if (!lists.has(b)) lists.set(b, []);
+    lists.get(b).push(s);
+  }
+  const g = new THREE.Group();
+  for (const [b, list] of [...lists].sort((a, c) => a[0] - c[0])) {
+    const m = new THREE.InstancedMesh(geo, mat, list.length);
+    m.receiveShadow = true;
+    const bx = (b % bw) * BLOCK, by = Math.floor(b / bw) * BLOCK;
+    m.userData.spots = list;
+    m.userData.box = [bx, by, bx + BLOCK, by + BLOCK];
+    g.add(m);
+  }
+  return g;
 }
 // (Re)position all tufts: called after the ground under a building is levelled.
 // With a region (corners ax..bx, ay..by), only the tufts in it.
 function placeTufts(ax = -1e9, ay = -1e9, bx = 1e9, by = 1e9) {
   const blocked = t => { const b = R3.flattened; return b && b.has(t); };
   const all = ax === -1e9;
-  const put = (mesh, spots) => {
+  const put = (mesh, spots, pebbles) => {
     let lo = Infinity, hi = -1;
     spots.forEach((s, i) => {
       if (s[0] < ax || s[0] > bx || s[1] < ay || s[1] > by) return;
@@ -3130,7 +3205,7 @@ function placeTufts(ax = -1e9, ay = -1e9, bx = 1e9, by = 1e9) {
       const hidden = blocked((Math.floor(s[1]) * MW + Math.floor(s[0]))) || hAt(s[0], s[1]) < 0.24;
       _p.set(s[0], hAt(s[0], s[1]) - 0.01, s[1]);
       _q.setFromAxisAngle(_up, s[2] * 40);
-      _s.setScalar(hidden ? 0 : (mesh === R3.pebbles ? 0.7 : 1.0) + s[2] * 0.6);
+      _s.setScalar(hidden ? 0 : (pebbles ? 0.7 : 1.0) + s[2] * 0.6);
       _m4.compose(_p, _q, _s);
       mesh.setMatrixAt(i, _m4);
     });
@@ -3143,12 +3218,17 @@ function placeTufts(ax = -1e9, ay = -1e9, bx = 1e9, by = 1e9) {
       else { const e = Math.max(r.offset + r.count, end); r.offset = Math.min(r.offset, from); r.count = e - r.offset; }
     }
     mesh.instanceMatrix.needsUpdate = true;
-    // (A few tufts moving a little doesn't change the map-wide bounds.)
+    // (A few tufts moving a little doesn't change the block's bounds.)
     if (all) mesh.computeBoundingSphere();
   };
-  put(R3.tufts, R3.tuftSpots);
-  put(R3.flowers, R3.flowerSpots);
-  if (R3.pebbles) put(R3.pebbles, R3.pebbleSpots);
+  for (const g of [R3.tufts, R3.flowers, R3.pebbles]) {
+    if (!g) continue;
+    for (const m of g.children) {
+      const [x0, y0, x1, y1] = m.userData.box;
+      if (x1 < ax || x0 > bx || y1 < ay || y0 > by) continue;
+      put(m, m.userData.spots, g.userData.pebbles);
+    }
+  }
 }
 
 // Level the ground under a building so it sits flat instead of hovering on a
@@ -3168,7 +3248,7 @@ function flattenUnder(cx, cy, s) {
   let sum = 0, n = 0;
   for (let y = y0; y <= y0 + s; y++) for (let x = x0; x <= x0 + s; x++) if (!wet || !wet[y * cw + x]) { sum += h[y * cw + x]; n++; }
   const base = Math.max(0.02, n ? sum / n : 0.02);
-  const pos = R3.terrain.geometry.attributes.position;
+  const pos = R3.terrainGeo.attributes.position;
   const set = (x, y, v) => {
     if (x < 0 || y < 0 || x > MW || y > MH || (wet && wet[y * cw + x])) return;
     h[y * cw + x] = v;
@@ -3195,7 +3275,7 @@ function flattenUnder(cx, cy, s) {
 // triangles' unnormalised normals, summed), and upload just those rows.
 const _na = new THREE.Vector3(), _nb = new THREE.Vector3(), _nc = new THREE.Vector3(), _cb = new THREE.Vector3(), _ab = new THREE.Vector3();
 function terrainNormals(ax, ay, bx, by) {
-  const geo = R3.terrain.geometry, cw = MW + 1;
+  const geo = R3.terrainGeo, cw = MW + 1;
   const pos = geo.attributes.position, nor = geo.attributes.normal, idx = geo.index.array;
   ax = Math.max(0, ax); ay = Math.max(0, ay); bx = Math.min(MW, bx); by = Math.min(MH, by);
   const inside = v => { const x = v % cw, y = (v - x) / cw; return x >= ax && x <= bx && y >= ay && y <= by; };
@@ -3215,14 +3295,25 @@ function terrainNormals(ax, ay, bx, by) {
     _na.fromBufferAttribute(nor, v).normalize();
     nor.setXYZ(v, _na.x, _na.y, _na.z);
   }
-  // One range per attribute (three r158; it goes back to -1, "all", once
-  // sent): the rows from ay to by, joined with any not sent yet.
-  const from = ay * cw * 3, count = (by - ay + 1) * cw * 3;
-  for (const a of [pos, nor]) {
-    const r = a.updateRange;
-    if (r.count === -1) { r.offset = from; r.count = count; }
-    else { const end = Math.max(r.offset + r.count, from + count); r.offset = Math.min(r.offset, from); r.count = end - r.offset; }
-    a.needsUpdate = true;
+  terrainToBlocks(ax, ay, bx, by);
+}
+
+// Copy the ground's corners from ax..bx, ay..by (heights, normals, texture
+// places) into the blocks that are drawn, and send just those blocks.
+function terrainToBlocks(ax, ay, bx, by) {
+  const src = R3.terrainGeo.attributes, cw = MW + 1;
+  for (const m of R3.terrain.children) {
+    const [x0, y0, w, d] = m.userData.block;
+    if (x0 + w < ax || x0 > bx || y0 + d < ay || y0 > by) continue;
+    const a = m.geometry.attributes;
+    for (let y = 0; y <= d; y++) for (let x = 0; x <= w; x++) {
+      const i = y * (w + 1) + x, v = (y0 + y) * cw + x0 + x;
+      a.position.array[i * 3 + 1] = src.position.array[v * 3 + 1];
+      for (let k = 0; k < 3; k++) a.normal.array[i * 3 + k] = src.normal.array[v * 3 + k];
+      a.uv.array[i * 2] = src.uv.array[v * 2]; a.uv.array[i * 2 + 1] = src.uv.array[v * 2 + 1];
+    }
+    a.position.needsUpdate = a.normal.needsUpdate = a.uv.needsUpdate = true;
+    m.geometry.computeBoundingSphere();
   }
 }
 
@@ -3342,7 +3433,7 @@ function pickAt(sx, sy) {
   const targets = _pickTargets;
   targets.length = 0;
   for (const o of R3.objs.values()) if (isBld(o.kind)) targets.push(o.body);
-  if (R3.res) for (const m of Object.values(R3.res)) targets.push(m);
+  if (R3.res) for (const m of R3.res.values()) if (m.visible) targets.push(m);
   // The ground: walked over the height grid (`groundHit`), not tested
   // against the terrain mesh; a building or resource in front of it wins.
   const ray = R3.raycaster.ray, tg = R3.terrain ? groundHit(ray) : -1;
@@ -4130,7 +4221,18 @@ function updateResources() {
   // in one array reused from change to change.
   // (Written over in place, then cut to length: emptying an array lets
   // the browser drop its storage, to be made again straight after.)
-  for (const k in R3.res) { const m = R3.res[k]; m.count = 0; m.userData.res ??= []; }
+  // First which kind goes where, and how many of each in each block.
+  const bw = Math.ceil(MW / BLOCK), place = R3.resPlace ??= [], need = new Map();
+  for (const m of R3.res.values()) m.count = 0;
+  for (let i = 0; i < resCount; i++) {
+    const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2];
+    const h = hash2(tx, ty);
+    const mesh = kind === 1 ? (h < 0.4 ? "pine" : "oak") : kind === 0 ? "bush" : kind === 3 ? "horse" : kind === 4 ? "deer" : kind === 6 ? "iron" : kind === 7 ? "clay" : kind === 8 ? "sheep" : kind === 9 ? "nitrate" : kind === 10 ? "coal" : kind === 11 ? "oil" : kind === 12 ? "bauxite" : kind === 13 ? "uranium" : kind === 14 ? "fish" : "stone";
+    const b = Math.floor(ty / BLOCK) * bw + Math.floor(tx / BLOCK), key = mesh + " " + b;
+    place[i] = key;
+    need.set(key, (need.get(key) || 0) + 1);
+  }
+  for (const [key, n] of need) { const [kind, b] = key.split(" "); resMesh(kind, b, n); }
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
@@ -4152,8 +4254,7 @@ function updateResources() {
     else if (kind === 13) { mesh = "uranium"; scale = 0.8 + 0.3 * h2; }
     else if (kind === 14) { mesh = "fish"; scale = 0.9 + 0.3 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
-    const m = R3.res[mesh];
-    if (m.count >= m.instanceMatrix.count) continue;
+    const m = R3.res.get(place[i]);
     const x = tx + 0.5 + (h - 0.5) * 0.25, y = ty + 0.5 + (h2 - 0.5) * 0.25;
     // Turned round the vertical by h and scaled, written straight into the
     // instance arrays (passing numbers to three.js's setters boxes each).
@@ -4169,8 +4270,8 @@ function updateResources() {
     m.userData.res[m.count * 2] = tx; m.userData.res[m.count * 2 + 1] = ty;
     m.count++;
   }
-  for (const k in R3.res) {
-    const m = R3.res[k];
+  for (const m of R3.res.values()) {
+    m.visible = m.count > 0;
     if (m.userData.res.length > m.count * 2) m.userData.res.length = m.count * 2;
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
@@ -4358,9 +4459,11 @@ function applyGraphics() {
 }
 
 function applyGrass() {
-  if (R3.tufts) R3.tufts.count = Math.round(R3.tuftSpots.length * GFX.grass);
-  if (R3.flowers) R3.flowers.count = Math.max(0, Math.round(R3.flowerSpots.length * GFX.grass));
-  if (R3.pebbles) R3.pebbles.count = Math.round(R3.pebbleSpots.length * Math.min(1, GFX.grass * 2.5));
+  // (Each block draws that share of its own spots, which are shuffled.)
+  const share = (g, f) => { if (g) for (const m of g.children) { m.count = Math.round(m.userData.spots.length * f); m.visible = m.count > 0; } };
+  share(R3.tufts, GFX.grass);
+  share(R3.flowers, GFX.grass);
+  share(R3.pebbles, Math.min(1, GFX.grass * 2.5));
 }
 
 // The setting appears on the start screen and in the in-game menu.
@@ -4735,7 +4838,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "8758c7cb9172", "base": "b0ccc2106c"};
+const BUILD_INFO = {"sim": "8758c7cb9172", "base": "a908e40c0f"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -7702,7 +7805,7 @@ function stepMultiplayer(now) {
     Trace.event("resume", { ms });
     stalledSince = 0;
   }
-  if (Trace.due(now) && Trace.roll(now, Object.assign(mp.snapshot(), partsSnapshot()))) renderTrace();
+  if (Trace.due(now) && Trace.roll(now, Object.assign(mp.snapshot(), drawSnapshot(), partsSnapshot()))) renderTrace();
   if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
@@ -7770,13 +7873,19 @@ function partsSnapshot() {
 
 // What the game and the drawing look like this second, for the trace.
 function perfSnapshot() {
-  const r = R3.drawn, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
   return {
     role: "single player", gameTime: Math.round(W.game_time()), speed, paused,
-    ents: entCount, drawCalls: r.calls, triangles: r.triangles,
+    ...drawSnapshot(), ...partsSnapshot(),
+  };
+}
+// What the last frame drew (multiplayer too): draw calls and triangles,
+// the picture's size and the graphics setting.
+function drawSnapshot() {
+  const r = R3.drawn || {}, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  return {
+    ents: entCount, drawCalls: r.calls, triangles: r.triangles, graphics: gfxName,
     heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
     view: [R3.renderer.domElement.width, R3.renderer.domElement.height],
-    ...partsSnapshot(),
   };
 }
 // Chrome and Edge report tasks that block the page for over 50 ms.

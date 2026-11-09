@@ -2017,7 +2017,7 @@ function stepMultiplayer(now) {
     Trace.event("resume", { ms });
     stalledSince = 0;
   }
-  if (Trace.due(now) && Trace.roll(now, Object.assign(mp.snapshot(), partsSnapshot()))) renderTrace();
+  if (Trace.due(now) && Trace.roll(now, Object.assign(mp.snapshot(), drawSnapshot(), partsSnapshot()))) renderTrace();
   if (!mp) return;
   // Say so if we've been waiting a while; give up if they're gone.
   const h = $("netWait");
@@ -2085,13 +2085,19 @@ function partsSnapshot() {
 
 // What the game and the drawing look like this second, for the trace.
 function perfSnapshot() {
-  const r = R3.drawn, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
   return {
     role: "single player", gameTime: Math.round(W.game_time()), speed, paused,
-    ents: entCount, drawCalls: r.calls, triangles: r.triangles,
+    ...drawSnapshot(), ...partsSnapshot(),
+  };
+}
+// What the last frame drew (multiplayer too): draw calls and triangles,
+// the picture's size and the graphics setting.
+function drawSnapshot() {
+  const r = R3.drawn || {}, heap = performance.memory ? performance.memory.usedJSHeapSize : 0;
+  return {
+    ents: entCount, drawCalls: r.calls, triangles: r.triangles, graphics: gfxName,
     heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
     view: [R3.renderer.domElement.width, R3.renderer.domElement.height],
-    ...partsSnapshot(),
   };
 }
 // Chrome and Edge report tasks that block the page for over 50 ms.
