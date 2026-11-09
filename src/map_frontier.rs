@@ -569,7 +569,7 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
             }
         }
     }
-    let map = Map { w, h, terrain, shade, blocked, dep_at, bld_at: vec![-1; n] };
+    let map = Map::new(w, h, terrain, shade, blocked, dep_at, vec![-1; n]);
     (map, deps, bases, sites)
 }
 

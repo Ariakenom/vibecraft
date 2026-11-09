@@ -2827,6 +2827,7 @@ impl Game {
                 self.block_gen += 1;
             }
         }
+        self.map.relabel_land();
         self.craters.push((x, y));
         self.push_event(Ev::NukeDetonated, x, y, owner as f32);
     }
