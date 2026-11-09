@@ -24,3 +24,5 @@
 1794257588	2026-11-09	25e6bea7efc048be99790e136f20dc1498b29bcd	Merge pull request #48 from Ariakenom/workers-same-land
 1794255907	2026-11-09	146a1386bf05379032afd5b31a6d71d5041788ad	Faster: enemies near, room for the computer, and the fog
 1794257612	2026-11-09	a908e40c0f8b42862ca2f9406e2f0ec8dd2cd416	Merge pull request #49 from Ariakenom/perf-wins
+1794264140	2026-11-09	b5826b59fc99c20b48ed2c342c31eb8dc885e4ca	Draw only what's on screen: water, ground, grass and resources in blocks
+1794264285	2026-11-09	40335fbb4f71721f00d8830102333da0c4caefb9	Merge pull request #50 from Ariakenom/draw-less
