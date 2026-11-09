@@ -545,6 +545,7 @@ function bakeTerrain() {
   fogCtx = fogCanvas.getContext("2d"); fogImg = fogCtx.createImageData(MW, MH);
 }
 
+let lastFogKey = "";
 function updateFog() {
   const fog = u8(W.fog_ptr(), MW * MH);
   const d = fogImg.data;
@@ -1929,7 +1930,10 @@ function loop(now) {
     let t = f1;
     readWorld();
     t = Prof.add("read the world", t);
-    if (frame % 3 === 0) { updateFog(); t = Prof.add("fog", t); }
+    // The fog: when the game changed it (five times a second, or a new
+    // copy), and now and then anyway.
+    const fogKey = W.fog_gen() + ":" + W.fog_ptr() + ":" + MW;
+    if (fogKey !== lastFogKey || frame % 60 === 0) { lastFogKey = fogKey; updateFog(); t = Prof.add("fog", t); }
     // How far between the last tick and the next one we are. In multiplayer,
     // count the time since the clock last moved, so motion stays smooth.
     const along = mp ? mp.alpha() * SIM_MS : acc;

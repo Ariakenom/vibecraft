@@ -37,6 +37,10 @@ pub fn ai_log_take() -> Vec<String> {
 }
 use crate::game::*;
 
+/// Seconds a computer player waits before looking again for room for a
+/// kind there was none for.
+pub const NO_ROOM_WAIT: f32 = 30.0;
+
 #[derive(Clone)]
 pub struct Ai {
     /// Is the computer playing this slot?
@@ -57,6 +61,8 @@ pub struct Ai {
     /// at the latest, so it arrives together instead of one by one.
     pub gather: Option<(f32, f32)>,
     pub gather_until: f32,
+    /// Kinds there was no room for, and until when not to look again.
+    pub no_room: Vec<(Kind, f32)>,
 }
 
 impl Ai {
@@ -66,7 +72,7 @@ impl Ai {
             1 => (420.0, 6),
             _ => (300.0, 8),
         };
-        Ai { on, timer: 1.0 + phase, difficulty, next_attack: first, wave_size: wave, alarm: None, scout: None, scout_leg: 0, last_grew: false, gather: None, gather_until: 0.0 }
+        Ai { on, timer: 1.0 + phase, difficulty, next_attack: first, wave_size: wave, alarm: None, scout: None, scout_leg: 0, last_grew: false, gather: None, gather_until: 0.0, no_room: Vec::new() }
     }
 }
 
@@ -927,6 +933,19 @@ impl Game {
     /// Find a spot for `kind` on explored ground and place it, with idle
     /// builders if there are any (otherwise they come to it later).
     fn ai_place(&mut self, kind: Kind, c: &mut Census) -> bool {
+        // No room last time: wait a while before looking again (playtest:
+        // barbarian camps hemmed in round their stone and clay searched
+        // for a Stoneworks or a Brickworks every turn, finding nothing, at
+        // a sixth of the whole game's time).
+        let (me, now) = (c.me as usize, self.time);
+        if self.ais[me].no_room.iter().any(|&(k, until)| k == kind && until > now) {
+            return false;
+        }
+        self.ais[me].no_room.retain(|&(k, until)| k != kind && until > now);
+        self.ai_place_now(kind, c)
+    }
+
+    fn ai_place_now(&mut self, kind: Kind, c: &mut Census) -> bool {
         let (me, (bx, by)) = (c.me, c.home);
         let spot = match kind.stats().needs_deposit {
             // Next to a deposit: try the nearest ones we've seen.
@@ -1004,6 +1023,10 @@ impl Game {
                 let all = self.deps.iter().filter(|d| d.kind == dep).count();
                 ailog!("  place {kind:?}: {dep:?} tiles explored {seen} of {all}, none with room");
             }
+            // (Not when it made way, nor when it couldn't pay, below: then
+            // it tries again next turn.)
+            let until = self.time + NO_ROOM_WAIT;
+            self.ais[me as usize].no_room.push((kind, until));
             return false;
         };
         // Builders come from the campfire by themselves.
