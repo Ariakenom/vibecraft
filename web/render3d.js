@@ -2569,7 +2569,7 @@ const Fx = {
       return m;
     };
     this.meshes = [
-      mk(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.55, depthWrite: false, flatShading: true }))),
+      mk(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial())), // (opaque, like the powder smoke)
       mk(new THREE.BoxGeometry(1, 1, 1), withFow(new THREE.MeshLambertMaterial())),
       mk(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })),
     ];
@@ -2668,6 +2668,39 @@ function fxHit(x, y, building, metal) {
   if (metal) for (let k = 0; k < 3; k++) Fx.add(2, x + fxRnd(-0.1, 0.1), h + 0.1, y + fxRnd(-0.1, 0.1), fxRnd(-2, 2), fxRnd(0.8, 2.5), fxRnd(-2, 2), fxRnd(150, 280), 0.035, 0.015, FX_SPARK, 6, 1);
   Fx.add(0, x, groundAt(x, y) + 0.1, y, fxRnd(-0.2, 0.2), 0.3, fxRnd(-0.2, 0.2), 500, 0.06, 0.18, FX_DUST, 0, 2);
 }
+// A shell, cannonball or rocket lands: a flash, a burst of dark smoke and
+// earth (or a tall splash on water), clods flying out. Rockets are biggest.
+function fxBlast(x, y, kind) {
+  if (!fxSeen(x, y)) return;
+  const big = kind === K.RocketArtillery ? 1.4 : kind === K.Trebuchet ? 0.8 : 1;
+  const h = groundAt(x, y);
+  if (fxOnWater(x, y)) {
+    for (let k = 0; k < 16; k++) Fx.add(0, x + fxRnd(-0.25, 0.25) * big, WATER_Y + 0.05, y + fxRnd(-0.25, 0.25) * big, fxRnd(-0.8, 0.8), fxRnd(3, 5.5) * big, fxRnd(-0.8, 0.8), fxRnd(700, 1100), 0.1 * big, 0.06, FX_FOAM, 9.8, 0.3);
+    fxDustRing(x, y, 0.3 * big, 10, FX_FOAM);
+    return;
+  }
+  if (kind !== K.Trebuchet) for (let k = 0; k < 5; k++) Fx.add(2, x + fxRnd(-0.2, 0.2), h + fxRnd(0.1, 0.4), y + fxRnd(-0.2, 0.2), fxRnd(-1, 1), fxRnd(0.5, 1.5), fxRnd(-1, 1), fxRnd(120, 220), 0.35 * big, 0.6 * big, FX_SPARK, 0, 4);
+  for (let k = 0; k < 9; k++) {
+    const a = fxRnd(0, 6.283), sp = fxRnd(0.3, 1.1) * big;
+    Fx.add(0, x + Math.cos(a) * 0.15, h + fxRnd(0.1, 0.4), y + Math.sin(a) * 0.15, Math.cos(a) * sp, fxRnd(1, 2.2) * big, Math.sin(a) * sp, fxRnd(900, 1500), 0.12 * big, fxRnd(0.3, 0.5) * big, k < 5 ? FX_DUST2 : [0.3, 0.29, 0.28], -0.3, 2.2);
+  }
+  for (let k = 0; k < 8; k++) {
+    const a = fxRnd(0, 6.283), sp = fxRnd(1.5, 3.5) * big;
+    Fx.add(1, x, h + 0.15, y, Math.cos(a) * sp, fxRnd(2.5, 5) * big, Math.sin(a) * sp, fxRnd(900, 1400), fxRnd(0.06, 0.12), fxRnd(0.06, 0.12), k % 2 ? FX_DUST2 : [0.35, 0.3, 0.22], 9.8, 0.3);
+  }
+  fxDustRing(x, y, 0.35 * big, 10);
+}
+// Which kind of gun fired the shot that just landed at (x, y): the event
+// doesn't say, so it's the projectile (drawn last frame) aimed nearest there.
+function shooterAt(x, y) {
+  let best = -1, bd = 1.5;
+  for (let i = 0; i < Math.min(projCount, 256); i++) {
+    const b = i * PROJ_STRIDE, d = Math.hypot(projBuf[b + 8] - x, projBuf[b + 9] - y) + Math.hypot(projBuf[b] - x, projBuf[b + 1] - y) * 0.5;
+    if (d < bd) { bd = d; best = projBuf[b + 6]; }
+  }
+  return best;
+}
+
 // Kinds that throw up dust as they go, and how much (0..1).
 function fxDustOf(kind) {
   if (isMounted(kind)) return 1;
@@ -3242,7 +3275,7 @@ function updateSmoke() {
 // first, and one last full-screen pass finishes it:
 // - ambient occlusion ("contact shadows"): creases and contact points
 //   darken, worked out from the depth image;
-// - tilt-shift: what's nearer or farther than the point the camera looks at
+// - tilt-shift: ground nearer or farther than the point the camera looks at
 //   is mixed with blurred copies of the image (a half down to a sixteenth
 //   of the size), more the farther it is, so the land looks like a model;
 // - bloom ("glow"): bright things (sunlit roofs, glints on water, the forge,
@@ -3261,7 +3294,7 @@ function buildPost() {
       tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
       uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
       uRadius: { value: 0.55 }, uBloom: { value: 0 },
-      tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, tBlur4: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 },
+      tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, tBlur4: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 }, uPlaneN: { value: new THREE.Vector3() }, uPlaneD: { value: 0 },
     },
     defines: { USE_AO: 0, USE_TILT: 0 },
     depthTest: false, depthWrite: false,
@@ -3269,7 +3302,7 @@ function buildPost() {
     fragmentShader: `
       uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
       uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
-      uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform sampler2D tBlur4; uniform float uTilt; uniform float uFocus;
+      uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform sampler2D tBlur4; uniform float uTilt; uniform float uFocus; uniform vec3 uPlaneN; uniform float uPlaneD;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
         float d = texture2D(tDepth, uv).x;
@@ -3301,13 +3334,15 @@ function buildPost() {
         #endif
         #if USE_TILT
         {
-          // How far from the focus this pixel is, as a share of the focus
-          // distance (the sky counts as far away).
-          float dt = texture2D(tDepth, vUv).x;
-          float dist = dt >= 1.0 ? uFocus * 4.0 : -viewPos(vUv).z;
-          // (A steep camera sees little depth, so also by height on the
-          // screen: the classic tilt-shift band.)
-          float off = max(smoothstep(0.03, 0.3, abs(dist - uFocus) / uFocus), smoothstep(0.12, 0.48, abs(vUv.y - 0.5)));
+          // How far the ground seen through this pixel is from the focus, as
+          // a share of the focus distance: the plane of the ground, not what
+          // the pixel shows, so things standing up (a tower, a plane in the
+          // air) are as sharp as the ground under them. The sky is far away.
+          vec4 fp = uProjInv * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+          vec3 dir = normalize(fp.xyz / fp.w);
+          float dn = dot(dir, uPlaneN);
+          float dist = dn < -1e-4 ? -(dir * (uPlaneD / dn)).z : uFocus * 4.0;
+          float off = smoothstep(0.03, 0.3, abs(dist - uFocus) / uFocus);
           float b = off * uTilt * 4.0;
           col = mix(col, texture2D(tBlur1, vUv).rgb, clamp(b, 0.0, 1.0));
           col = mix(col, texture2D(tBlur2, vUv).rgb, clamp(b - 1.0, 0.0, 1.0));
@@ -3428,6 +3463,10 @@ function renderScene() {
   const tilt = GFX.tilt * Math.max(0, Math.min(1, (48 - cam.dist) / 24)) * 0.5;
   if (tilt > 0) renderTiltBlur(r, sz);
   u.uTilt.value = tilt; u.uFocus.value = cam.dist;
+  // The ground's plane, as the camera sees it (see placeCamera).
+  const V = R3.camera.matrixWorldInverse;
+  u.uPlaneN.value.set(0, 1, 0).transformDirection(V);
+  u.uPlaneD.value = _v3.set(cam.x, Math.max(0, hAt(cam.x, cam.y)), cam.y).applyMatrix4(V).dot(u.uPlaneN.value);
   r.setRenderTarget(null);
   const ao = GFX.ao ? 1 : 0, tl = tilt > 0 ? 1 : 0;
   if (Post.mat.defines.USE_AO !== ao || Post.mat.defines.USE_TILT !== tl) { Post.mat.defines.USE_AO = ao; Post.mat.defines.USE_TILT = tl; Post.mat.needsUpdate = true; }
