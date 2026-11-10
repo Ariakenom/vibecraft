@@ -41,7 +41,7 @@ screen. Friends on your network use your computer's address, e.g.
 | src/lib.rs           | The Rust/JavaScript boundary: exported functions, render buffers, the two multiplayer copies |
 | web/index.html       | Page layout and styles; lists the scripts below                 |
 | web/main.js          | Game loop, camera, input, HUD, lobby, saving, multiplayer glue, the trace panel |
-| web/render3d.js      | three.js scene: terrain, water, models, effects, fog of war, picking, icons, graphics setting |
+| web/render3d.js      | three.js scene: terrain, water, models, effects (smoke, dust, splashes, sparks), fog of war, picking, icons, graphics settings |
 | web/audio.js         | Synthesized sound effects (Web Audio), volume                   |
 | web/net.js           | Multiplayer: transports, the trace, `Server` and `Client`       |
 | web/watch.js         | Recording games, replays, spectators, and watching after you're out |
@@ -706,6 +706,7 @@ versions don't play together.
   - H home, `.` free workers (in the town square)
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, Shift+1–9 add the selection to it, 1–9 recall it (twice to centre the camera)
+  - Esc cancel, deselect, then the menu
   - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, save a replay (any game, online too), copy a watch link for spectators, and
     (the host) give a computer's seat to a spectator
