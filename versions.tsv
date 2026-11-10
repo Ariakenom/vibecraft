@@ -29,3 +29,5 @@
 1794265331	2026-11-10	5a73189efbfeb7a202a8bd3f7a850a7737a1ad16	Merge origin/main (draw only what's on screen); rebuild the page
 1794331641	2026-11-10	59b8e8a371870e58168e8ffa03cebe9a57408a92	Graphics settings: Fast/Fancy with every setting adjustable; tilt-shift; small effects; Esc for the menu
 1794332233	2026-11-10	f35181f6671832db0c83ebd143a908a4a2c01bd8	Merge pull request #52 from Ariakenom/graphics-settings
+1794334936	2026-11-10	fb68e272ca14a3eae3b9e063f95aeba692162231	The hit event says what fired; a Models setting (Detailed / Simple)
+1794335483	2026-11-10	0b8538320829acdc7ae5b4554957fe4010f84eee	Merge pull request #53 from Ariakenom/graphics-fast
