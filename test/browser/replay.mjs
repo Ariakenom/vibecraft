@@ -27,7 +27,7 @@ check(await p.evaluate(() => Rec.keys.length === 4 && Rec.ticks === simTick), "t
 // Surrender from the menu: two clicks.
 await p.click("#menuBtn");
 await p.click("#surrenderBtn");
-check(await p.textContent("#surrenderBtn") === "Really surrender?", "surrender asks to be sure");
+check(await p.textContent("#surrenderBtn .on") === "Really surrender?", "surrender asks to be sure");
 await p.click("#surrenderBtn");
 await p.waitForSelector("#outScreen:not([hidden])", { timeout: 5000 });
 check(await p.evaluate(() => W.defeated(1) === 1 && W.state_of(1) === 5 && W.player_units(1, 0) === 0), "surrendered: out, nothing left, the others play on");

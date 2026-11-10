@@ -1732,7 +1732,16 @@ window.addEventListener("keydown", e => {
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
   if (!$("loadScreen").hidden) { if (e.key === "Escape") closeLoadScreen(); return; }
   if (!$("outScreen").hidden) return; // choose first: watch or leave
-  if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
+  // Esc: close the menu; else cancel placing or attack-move; else drop the
+  // selection; with nothing selected, open the menu.
+  if (e.key === "Escape") {
+    if (!$("menuScreen").hidden) $("resumeBtn").click();
+    else if (placing != null || amode) { placing = null; setAmode(false); }
+    else if (selection().length) { W.clear_selection(); selKey = ""; }
+    else $("menuBtn").click();
+    return;
+  }
+  if (!$("menuScreen").hidden) return; // the menu is open: no game keys behind it
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
     if (e.ctrlKey || e.metaKey) {
@@ -1844,8 +1853,8 @@ function handleEvents() {
         break; }
       case EV.Melee:
         // A bomber's bombs: a boom and a cloud where they land.
-        if (d === K.Bomber) { Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon); }
-        else Sfx.at("melee", x, y, 45, d);
+        if (d === K.Bomber) { Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon); fxDustRing(x, y, 0.4, 10, FX_DUST2); }
+        else { Sfx.at("melee", x, y, 45, d); fxHit(x, y, false, d !== K.Worker); }
         break;
       case EV.Shoot:
         shotFired(x, y, d); // recoil, the trebuchet's throw, muzzle flash (render3d.js)
@@ -1853,8 +1862,12 @@ function handleEvents() {
         else if (d === K.Submarine) Sfx.at("cannon", x, y, 25); // a muffled thump under the water
         else Sfx.at("bow", x, y, 60, isBld(d));
         break;
-      case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;
-      case EV.Hammer: Sfx.at("hammer", x, y, 90); break;
+      case EV.ArrowHit: { // (data: 1 if it hit a building, + 2 x the kind that fired)
+        const bld = (d & 1) === 1, by = d >> 1;
+        Sfx.at("arrowHit", x, y, 50, bld);
+        if (by !== K.AirDefense && (isBigGun(by) || by === K.Trebuchet)) fxBlast(x, y, by); else fxHit(x, y, bld, false);
+        break; }
+      case EV.Hammer: Sfx.at("hammer", x, y, 90); fxHammer(x, y); break;
       case EV.Eliminated:
         if (d !== ME) toast(`${pnc(d)} has been eliminated.`, "good");
         break;
@@ -3198,11 +3211,25 @@ function cheatsToast(on) {
 }
 // The cheat switch: a system command from the host (owner 0), recorded for
 // replays and sent to everyone online like a seat changing hands.
+// A button whose text changes keeps the width of its longest text, so
+// nothing next to it moves (all the texts sit in one grid cell; only the
+// current one is visible). See CLAUDE.md: the UI shouldn't move.
+function stableLabels(btn, texts) {
+  btn.textContent = "";
+  const stack = document.createElement("span");
+  stack.className = "stack";
+  for (const t of texts) { const sp = document.createElement("span"); sp.textContent = t; stack.append(sp); }
+  btn.append(stack);
+}
+function showLabel(btn, i) { [...btn.querySelector(".stack").children].forEach((sp, k) => sp.classList.toggle("on", k === i)); }
+stableLabels($("cheatBtn"), ["Cheat mode: off", "Cheat mode: on"]);
+stableLabels($("surrenderBtn"), ["Surrender", "Really surrender?"]);
+showLabel($("cheatBtn"), 0); showLabel($("surrenderBtn"), 0);
 $("cheatBtn").onclick = () => {
   const cmd = [15, W.cheats_on() ? 0 : 1, 0, 0];
   if (mp && mp.server) mp.server.system(cmd);
   else if (!mp) { applyCmd(0, cmd); Rec.add(simTick, [0, ++Rec.seq, ...cmd]); handleEvents(); }
-  $("cheatBtn").textContent = `Cheat mode: ${cmd[1] ? "on" : "off"}`;
+  showLabel($("cheatBtn"), cmd[1] ? 1 : 0);
   selKey = "";
 };
 $("menuBtn").onclick = () => {
@@ -3216,8 +3243,8 @@ $("menuBtn").onclick = () => {
   $("surrenderBtn").hidden = !playing;
   // The host (or a single player) can switch cheat mode for every person.
   $("cheatBtn").hidden = !!observe || !!(mp && !mp.server);
-  $("cheatBtn").textContent = `Cheat mode: ${W.cheats_on() ? "on" : "off"}`;
-  delete $("surrenderBtn").dataset.sure; $("surrenderBtn").textContent = "Surrender";
+  showLabel($("cheatBtn"), W.cheats_on() ? 1 : 0);
+  delete $("surrenderBtn").dataset.sure; showLabel($("surrenderBtn"), 0);
   $("watchLinkBtn").hidden = !watchLink() || !!observe && observe.kind !== "out";
   $("quitBtn").textContent = watcher ? "Stop watching" : Replay.on ? "Exit replay" : mp ? "Leave game" : "New game";
   renderGameSeats(true);
@@ -3226,7 +3253,7 @@ $("menuBtn").onclick = () => {
 // Two clicks, so a slip doesn't end your game.
 $("surrenderBtn").onclick = e => {
   const b = e.currentTarget;
-  if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Really surrender?"; return; }
+  if (!b.dataset.sure) { b.dataset.sure = "1"; showLabel(b, 1); return; }
   $("menuScreen").hidden = true;
   if (paused) togglePause();
   surrendered = true;
