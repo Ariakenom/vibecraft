@@ -1728,7 +1728,16 @@ window.addEventListener("keydown", e => {
   if (e.key === "Escape" && !$("techScreen").hidden) { $("techScreen").hidden = true; return; }
   if (!$("loadScreen").hidden) { if (e.key === "Escape") closeLoadScreen(); return; }
   if (!$("outScreen").hidden) return; // choose first: watch or leave
-  if (e.key === "Escape") { if (placing != null || amode) { placing = null; setAmode(false); } else { W.clear_selection(); selKey = ""; } return; }
+  // Esc: close the menu; else cancel placing or attack-move; else drop the
+  // selection; with nothing selected, open the menu.
+  if (e.key === "Escape") {
+    if (!$("menuScreen").hidden) $("resumeBtn").click();
+    else if (placing != null || amode) { placing = null; setAmode(false); }
+    else if (selection().length) { W.clear_selection(); selKey = ""; }
+    else $("menuBtn").click();
+    return;
+  }
+  if (!$("menuScreen").hidden) return; // the menu is open: no game keys behind it
   if (/^Digit[1-9]$/.test(e.code)) {
     const g = e.code.slice(5);
     if (e.ctrlKey || e.metaKey) {
@@ -1840,8 +1849,8 @@ function handleEvents() {
         break; }
       case EV.Melee:
         // A bomber's bombs: a boom and a cloud where they land.
-        if (d === K.Bomber) { Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon); }
-        else Sfx.at("melee", x, y, 45, d);
+        if (d === K.Bomber) { Sfx.at("cannon", x, y, 40); gunSmoke(x, y, K.Cannon); fxDustRing(x, y, 0.4, 10, FX_DUST2); }
+        else { Sfx.at("melee", x, y, 45, d); fxHit(x, y, false, d !== K.Worker); }
         break;
       case EV.Shoot:
         shotFired(x, y, d); // recoil, the trebuchet's throw, muzzle flash (render3d.js)
@@ -1849,8 +1858,8 @@ function handleEvents() {
         else if (d === K.Submarine) Sfx.at("cannon", x, y, 25); // a muffled thump under the water
         else Sfx.at("bow", x, y, 60, isBld(d));
         break;
-      case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); break;
-      case EV.Hammer: Sfx.at("hammer", x, y, 90); break;
+      case EV.ArrowHit: Sfx.at("arrowHit", x, y, 50, d === 1); fxHit(x, y, d === 1, false); break;
+      case EV.Hammer: Sfx.at("hammer", x, y, 90); fxHammer(x, y); break;
       case EV.Eliminated:
         if (d !== ME) toast(`${pnc(d)} has been eliminated.`, "good");
         break;

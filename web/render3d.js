@@ -36,7 +36,7 @@ const R3 = {
 const fowUniforms = { uFow: { value: null }, uMapSize: { value: null } };
 // Time in seconds, shared by the water and the swaying grass, trees and flags.
 const timeUniform = { value: 0 };
-// How much things move in the wind (0 on the Low graphics setting).
+// How much things move in the wind (0 with the Wind setting off).
 const swayUniform = { value: 1 };
 function withFow(mat, extra) {
   // three.js reuses a compiled shader for any material whose onBeforeCompile
@@ -966,6 +966,7 @@ function initRenderer() {
   R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
   scene.add(R3.puffMesh);
   R3.puffs = [];
+  Fx.build(scene);
   // Bullets: thin bright tracers, too fast to be anything else.
   R3.tracers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.016, 0.016), new THREE.MeshBasicMaterial({ color: "#ffe9a6", transparent: true, opacity: 0.85, depthWrite: false }), 128);
   R3.tracers.frustumCulled = false; R3.tracers.count = 0;
@@ -1088,6 +1089,8 @@ function buildWorld() {
   R3.objs.clear();
   for (const d of R3.dying) scene.remove(d.root);
   R3.dying = [];
+  Fx.clear();
+  R3.popFrom = performance.now() + 1500; // (no popping in for what's there from the start)
   for (const k of ["terrain", "shore", "water", "tufts", "flowers", "pebbles"]) if (R3[k]) { disposeTree(R3[k]); R3[k] = null; }
   if (R3.terrainGeo) { R3.terrainGeo.dispose(); R3.terrainGeo = null; }
   if (R3.res) for (const m of R3.res.values()) { scene.remove(m); m.dispose(); }
@@ -2069,9 +2072,14 @@ function render3d(alpha, now, dt) {
 
   for (let i = 0; i < entCount; i++) {
     const id = E(i, F.id), kind = E(i, F.kind);
-    let o = R3.objs.get(id);
-    if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; }
-    if (!o) o = makeObj(i);
+    let o = R3.objs.get(id), changed = false;
+    if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; changed = true; }
+    if (!o) {
+      o = makeObj(i);
+      // A new unit of yours, or one that changed (a worker who became a
+      // soldier) pops in; anything else just came into view.
+      if (!isBld(kind) && GFX.effects && now > R3.popFrom && (changed || o.owner === ME)) o.pop = now;
+    }
     o.mark = mark;
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
@@ -2091,6 +2099,9 @@ function render3d(alpha, now, dt) {
         o.root.add(o.plan);
       }
       if (o.plan) o.plan.visible = planned;
+      // Finished: a ring of dust rolls out from its foot.
+      if (o.wasBuilding && !building && !planned) fxDustRing(o.x, o.y, stat(kind, 6) * 0.5, 14);
+      o.wasBuilding = !!building;
       o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
       o.body.material = (flags & 8) ? hitMat : entMat;
       setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
@@ -2114,6 +2125,18 @@ function render3d(alpha, now, dt) {
     o.root.rotation.y = o.face;
     const anim = E(i, F.anim);
     const ph = t + id * 0.37;
+    if (GFX.effects) {
+      // Dust kicked up, or a wake, for the distance it went this frame.
+      const mv = o.fxX === undefined ? 0 : Math.hypot(x - o.fxX, y - o.fxY);
+      if (mv > 0.001 && mv < 1) fxTrail(o, kind, mv);
+      if (o.pop === now) fxDustRing(x, y, 0.25, 6);
+    }
+    o.fxX = x; o.fxY = y;
+    if (o.pop) {
+      const p = (now - o.pop) / POP_MS;
+      if (p >= 1) { o.root.scale.setScalar(1); o.pop = 0; }
+      else o.root.scale.setScalar(Math.max(0.001, popScale(p)));
+    }
     if (o.bones) {
       // Out of sight (with room for a shadow falling into it): no walk
       // cycle, which was the most garbage the page made after three.js.
@@ -2164,6 +2187,7 @@ function render3d(alpha, now, dt) {
     if (o.mark === mark) continue;
     R3.objs.delete(o.id);
     if (o.ring) o.ring.visible = false;
+    if (isBld(o.kind) && o.lastHp < 0.3) fxCollapse(o.x, o.y, stat(o.kind, 6));
     if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: isBld(o.kind), o, dir: hash2(o.id, 3) < 0.5 ? 1 : -1 });
     else R3.scene.remove(o.root);
   }
@@ -2189,6 +2213,7 @@ function render3d(alpha, now, dt) {
   updateSmoke();
   updateCampfires(performance.now());
   updatePuffs(performance.now());
+  Fx.update(Math.min(0.1, dt));
   updateFlashes(performance.now());
   updateNukes(performance.now(), alpha);
   updateAimRings();
@@ -2475,6 +2500,153 @@ function updatePuffs(now) {
   m.instanceMatrix.needsUpdate = true;
 }
 
+// --- Small effects ---------------------------------------------------------------
+// Dust, wood chips, debris, splashes, wakes and sparks: short-lived bits that
+// fly, fall and shrink away. Three instanced meshes draw all of them: soft
+// round puffs, hard little blocks (chips, debris) and glowing sparks. Only
+// drawing: nothing here touches the game, so it can use Math.random.
+// Each spawns only where the player can see (the "Small effects" setting).
+const FX_MAX = 700;
+const Fx = {
+  list: [], meshes: null,
+  build(scene) {
+    const mk = (geo, mat) => {
+      const m = new THREE.InstancedMesh(geo, mat, FX_MAX);
+      m.frustumCulled = false; m.count = 0;
+      m.setColorAt(0, _c.set(1, 1, 1)); // (makes the colour buffer before the first draw)
+      scene.add(m);
+      return m;
+    };
+    this.meshes = [
+      mk(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.55, depthWrite: false, flatShading: true }))),
+      mk(new THREE.BoxGeometry(1, 1, 1), withFow(new THREE.MeshLambertMaterial())),
+      mk(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })),
+    ];
+    this.meshes[1].castShadow = true;
+  },
+  clear() { this.list.length = 0; if (this.meshes) for (const m of this.meshes) m.count = 0; },
+  // kind: 0 soft, 1 hard, 2 glow. Sizes s0 -> s1 over the life (ms).
+  add(kind, x, y, z, vx, vy, vz, life, s0, s1, color, g = 0, drag = 0) {
+    if (this.list.length >= FX_MAX) this.list.shift();
+    this.list.push({ kind, x, y, z, vx, vy, vz, life, s0, s1, r: color[0], gr: color[1], b: color[2], g, drag, t: 0,
+      rx: Math.random() * 6, ry: Math.random() * 6, spin: (Math.random() - 0.5) * 14, floor: kind === 2 ? -99 : groundAt(x, z) });
+  },
+  update(dt) {
+    if (!this.meshes) return;
+    const n = [0, 0, 0];
+    let keep = 0;
+    for (const p of this.list) {
+      p.t += dt * 1000;
+      if (p.t >= p.life) continue;
+      const k = Math.exp(-p.drag * dt);
+      p.vx *= k; p.vz *= k; p.vy = p.vy * k - p.g * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      // Hard bits land and lie there; the others just stop at the ground.
+      if (p.y < p.floor) { p.y = p.floor; p.vy = p.kind === 1 ? -p.vy * 0.25 : 0; p.vx *= 0.5; p.vz *= 0.5; p.spin *= 0.5; }
+      p.rx += p.spin * dt; p.ry += p.spin * 0.7 * dt;
+      const f = p.t / p.life, m = this.meshes[p.kind];
+      // Soft things swell then fade by shrinking; hard ones keep their size till the end.
+      const size = p.s0 + (p.s1 - p.s0) * f;
+      const s = p.kind === 1 ? size * Math.min(1, (1 - f) * 4) : size * Math.sin(Math.min(1, f * 3 + 0.15) * Math.PI / 2) * (1 - f * f);
+      _p.set(p.x, p.y, p.z);
+      _q.setFromEuler(_fxEul.set(p.rx, p.ry, 0));
+      _s.set(s, p.kind === 1 ? s * 0.45 : s, s);
+      _m4.compose(_p, _q, _s);
+      m.setMatrixAt(n[p.kind], _m4);
+      m.setColorAt(n[p.kind]++, _c.setRGB(p.r, p.gr, p.b));
+      this.list[keep++] = p;
+    }
+    this.list.length = keep;
+    this.meshes.forEach((m, i) => { m.count = n[i]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; });
+  },
+};
+const _fxEul = new THREE.Euler();
+const fxRnd = (a, b) => a + Math.random() * (b - a);
+const FX_DUST = [0.62, 0.53, 0.40], FX_DUST2 = [0.40, 0.35, 0.29], FX_WOOD = [0.62, 0.45, 0.25], FX_FOAM = [0.92, 0.96, 0.97], FX_SPARK = [3.0, 2.1, 0.8];
+// Is (x, y) in sight of the player now? Effects only happen where you can see.
+function fxSeen(x, y) {
+  if (!GFX.effects || !R3.fowData) return false;
+  const tx = Math.floor(x), ty = Math.floor(y);
+  return tx >= 0 && ty >= 0 && tx < MW && ty < MH && R3.fowData[(ty * MW + tx) * 4] === 255;
+}
+function fxOnWater(x, y) {
+  const tx = Math.floor(x), ty = Math.floor(y);
+  if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) return true;
+  const t = u8(W.terrain_ptr(), MW * MH)[ty * MW + tx];
+  return t === 1 || t === 5;
+}
+// A ring of dust rolling outward along the ground: a building finished, a unit appearing.
+function fxDustRing(x, y, r, n, col = FX_DUST) {
+  if (!fxSeen(x, y)) return;
+  const h = groundAt(x, y);
+  for (let k = 0; k < n; k++) {
+    const a = (k + fxRnd(-0.4, 0.4)) / n * 6.283, d = r * fxRnd(0.7, 1.1), sp = fxRnd(1, 2.4) * (0.6 + r * 0.25);
+    Fx.add(0, x + Math.cos(a) * d, h + fxRnd(0, 0.15), y + Math.sin(a) * d, Math.cos(a) * sp, fxRnd(0.1, 0.6), Math.sin(a) * sp, fxRnd(600, 1200), fxRnd(0.1, 0.2), fxRnd(0.25, 0.6) * (0.7 + r * 0.15), col, 0, 3);
+  }
+}
+// A building comes down: a big cloud and tumbling pieces.
+function fxCollapse(x, y, size) {
+  if (!fxSeen(x, y)) return;
+  const h = groundAt(x, y), r = size * 0.45;
+  for (let k = 0; k < 14; k++) {
+    const a = fxRnd(0, 6.283), d = fxRnd(0, r);
+    Fx.add(0, x + Math.cos(a) * d, h + fxRnd(0.2, 1.2), y + Math.sin(a) * d, Math.cos(a) * fxRnd(0.3, 1.2), fxRnd(0.3, 1.0), Math.sin(a) * fxRnd(0.3, 1.2), fxRnd(1300, 2200), fxRnd(0.25, 0.4), fxRnd(0.7, 1.1), Math.random() < 0.5 ? FX_DUST : FX_DUST2, -0.15, 1.2);
+  }
+  for (let k = 0; k < 12; k++) {
+    const a = fxRnd(0, 6.283), sp = fxRnd(1, 3);
+    Fx.add(1, x + Math.cos(a) * r * 0.5, h + fxRnd(0.4, 1.2), y + Math.sin(a) * r * 0.5, Math.cos(a) * sp, fxRnd(2, 4.5), Math.sin(a) * sp, fxRnd(1600, 2400), fxRnd(0.08, 0.16), fxRnd(0.08, 0.16), Math.random() < 0.5 ? FX_WOOD : [0.55, 0.53, 0.5], 9.8, 0.4);
+  }
+  fxDustRing(x, y, r, 12, FX_DUST2);
+}
+// A hammer blow on a building site: a few wood chips fly off its edge.
+function fxHammer(x, y, size = 2) {
+  if (!fxSeen(x, y)) return;
+  const a = fxRnd(0, 6.283), r = size * 0.4, cx = x + Math.cos(a) * r, cy = y + Math.sin(a) * r, h = groundAt(cx, cy) + fxRnd(0.2, 0.6);
+  for (let k = 0; k < 3; k++) Fx.add(1, cx, h, cy, Math.cos(a) * fxRnd(0.4, 1.4) + fxRnd(-0.5, 0.5), fxRnd(1.5, 3), Math.sin(a) * fxRnd(0.4, 1.4) + fxRnd(-0.5, 0.5), fxRnd(700, 1100), 0.06, 0.05, FX_WOOD, 9.8, 0.5);
+  Fx.add(0, cx, h - 0.1, cy, 0, 0.3, 0, 600, 0.08, 0.2, FX_DUST, 0, 2);
+}
+// Something was hit: a splash on water, chips off a building, sparks and a little dust on the ground.
+function fxHit(x, y, building, metal) {
+  if (!fxSeen(x, y)) return;
+  if (fxOnWater(x, y)) {
+    for (let k = 0; k < 6; k++) Fx.add(0, x + fxRnd(-0.15, 0.15), WATER_Y + 0.05, y + fxRnd(-0.15, 0.15), fxRnd(-0.6, 0.6), fxRnd(1.8, 3.2), fxRnd(-0.6, 0.6), fxRnd(500, 800), 0.07, 0.04, FX_FOAM, 9.8, 0.3);
+    return;
+  }
+  const h = groundAt(x, y) + (building ? fxRnd(0.4, 1.2) : 0.35);
+  if (building) for (let k = 0; k < 2; k++) Fx.add(1, x + fxRnd(-0.3, 0.3), h, y + fxRnd(-0.3, 0.3), fxRnd(-1, 1), fxRnd(1, 2.4), fxRnd(-1, 1), fxRnd(600, 900), 0.06, 0.05, FX_WOOD, 9.8, 0.5);
+  if (metal) for (let k = 0; k < 3; k++) Fx.add(2, x + fxRnd(-0.1, 0.1), h + 0.1, y + fxRnd(-0.1, 0.1), fxRnd(-2, 2), fxRnd(0.8, 2.5), fxRnd(-2, 2), fxRnd(150, 280), 0.035, 0.015, FX_SPARK, 6, 1);
+  Fx.add(0, x, groundAt(x, y) + 0.1, y, fxRnd(-0.2, 0.2), 0.3, fxRnd(-0.2, 0.2), 500, 0.06, 0.18, FX_DUST, 0, 2);
+}
+// Kinds that throw up dust as they go, and how much (0..1).
+function fxDustOf(kind) {
+  if (isMounted(kind)) return 1;
+  if (kind === K.Tank || kind === K.Cannon || kind === K.FieldGun || kind === K.RocketArtillery || kind === K.Trebuchet) return 0.8;
+  return 0.12;
+}
+// Called for each moving unit with how far it went this frame.
+function fxTrail(o, kind, dist) {
+  o.fxGone = (o.fxGone || 0) + dist;
+  if (isAir(kind)) return;
+  const naval = isNaval(kind), step = naval ? 0.35 : 0.5;
+  if (o.fxGone < step) return;
+  o.fxGone = 0;
+  if (!fxSeen(o.x, o.y)) return;
+  const back = o.face, bx = -Math.cos(-back), by = -Math.sin(-back); // behind it
+  if (naval) {
+    // A wake: foam to both sides of the stern, spreading out.
+    for (const side of [-1, 1]) {
+      const px = o.x + bx * 0.35 - by * side * 0.12, py = o.y + by * 0.35 + bx * side * 0.12;
+      Fx.add(0, px, WATER_Y + 0.03, py, -by * side * 0.4, 0, bx * side * 0.4, 1400, 0.1, 0.22, FX_FOAM, 0, 1.5);
+    }
+    return;
+  }
+  if (Math.random() > fxDustOf(kind) || fxOnWater(o.x, o.y)) return;
+  Fx.add(0, o.x + bx * 0.2 + fxRnd(-0.1, 0.1), groundAt(o.x, o.y) + 0.08, o.y + by * 0.2 + fxRnd(-0.1, 0.1), bx * 0.3, fxRnd(0.2, 0.5), by * 0.3, fxRnd(600, 900), 0.06, fxRnd(0.2, 0.3), FX_DUST, 0, 2);
+}
+// A new unit pops into the world: grows from nothing, overshoots a little, settles.
+const POP_MS = 380;
+function popScale(p) { const c = 2.2; return 1 + (c + 1) * (p - 1) ** 3 + c * (p - 1) ** 2; }
+
 // Rebuild the resource instances when anything about them changed.
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _v3 = new THREE.Vector3(), _c = new THREE.Color();
 // Which way the water is from a building's middle: the angle that turns
@@ -2696,34 +2868,87 @@ function entScreen(i, atTop) {
   return worldToScreen(o.root.position.x, o.root.position.z, o.root.position.y + (atTop ? top : o.height * 0.5));
 }
 
-// --- Graphics quality ------------------------------------------------------------
-// One setting trades looks for speed. It only changes how things are drawn,
-// never the simulation, so players in one multiplayer game can each pick
-// their own. Saved per browser.
-const GFX_LEVELS = {
-  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, post: false, bloom: false, ao: false },
-  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  post: true,  bloom: false, ao: false },
-  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  post: true,  bloom: true,  ao: false },
-  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  post: true,  bloom: true,  ao: true },
-};
-let gfxName = (() => {
-  try { const v = localStorage.getItem("vibecraftGraphics"); if (GFX_LEVELS[v]) return v; } catch (e) {}
-  // Phones and tablets start a notch lower: small GPUs and very dense screens.
-  return matchMedia("(pointer: coarse)").matches ? "medium" : "high";
-})();
-let GFX = GFX_LEVELS[gfxName];
+// --- Graphics settings -----------------------------------------------------------
+// Settings only change how things are drawn, never the simulation, so players
+// in one multiplayer game can each pick their own. Saved per browser.
+// Two presets, Fast and Fancy; any setting can then be changed on its own.
+// A changed setting stays changed when switching preset, and shows a button
+// to put it back to the preset's value.
+const gfxPct = v => Math.round(v * 100) + "%";
+const GFX_SETTINGS = [
+  { key: "pixelRatio", label: "Sharpness", type: "choice", options: [[1, "Normal"], [1.5, "Sharp"], [2, "Sharpest"]], fast: 1, fancy: 2,
+    hint: "How many pixels are drawn on high-resolution screens. The biggest cost on a weak graphics card." },
+  { key: "shadows", label: "Shadows", type: "choice", options: [[0, "Off"], [1024, "Low"], [2048, "High"], [4096, "Highest"]], fast: 0, fancy: 2048,
+    hint: "Shadows from the sun. Higher is sharper." },
+  { key: "ao", label: "Contact shadows", type: "toggle", fast: false, fancy: false,
+    hint: "Darkens creases and where things meet the ground. Needs a strong graphics card." },
+  { key: "grading", label: "Colour grading", type: "toggle", fast: false, fancy: true,
+    hint: "Warm light, cool shade and a soft darkening at the screen's edges." },
+  { key: "bloom", label: "Glow", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
+    hint: "Bright things glow: fire, sunlit roofs, glints on the water." },
+  { key: "tilt", label: "Tilt-shift", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
+    hint: "Blurs what's nearer and farther than where you look, like a model town. Strongest zoomed in; gone zoomed out." },
+  { key: "grass", label: "Grass and flowers", type: "slider", min: 0, max: 1, step: 0.05, fast: 0.3, fancy: 0.75, fmt: gfxPct,
+    hint: "How much grass, flowers and pebbles cover the ground." },
+  { key: "sway", label: "Wind", type: "toggle", fast: false, fancy: true, hint: "Trees, bushes and grass sway." },
+  { key: "smoke", label: "Chimney smoke", type: "toggle", fast: false, fancy: true, hint: "Smoke from chimneys, campfires and burning buildings." },
+  { key: "effects", label: "Small effects", type: "toggle", fast: true, fancy: true,
+    hint: "Dust, wood chips, splashes, sparks, boat wakes, and new units popping in." },
+];
+const GFX_PRESETS = { fast: "Fast", fancy: "Fancy" };
+const gfxDef = key => GFX_SETTINGS.find(s => s.key === key);
 
-function setGraphicsQuality(name) {
-  if (!GFX_LEVELS[name]) return;
-  gfxName = name; GFX = GFX_LEVELS[name];
-  try { localStorage.setItem("vibecraftGraphics", name); } catch (e) {}
-  for (const seg of document.querySelectorAll(".gfx-seg")) for (const b of seg.children) b.setAttribute("aria-pressed", b.dataset.q === name);
-  applyGraphics();
+let gfxPreset = "fancy", gfxOver = {};
+(() => {
+  try {
+    const v = JSON.parse(localStorage.getItem("vibecraftGfx") || "null");
+    if (v && GFX_PRESETS[v.preset]) {
+      gfxPreset = v.preset;
+      for (const [k, x] of Object.entries(v.over || {})) if (gfxDef(k) && typeof x === typeof gfxDef(k).fast) gfxOver[k] = x;
+      return;
+    }
+    // The old four levels: Low is Fast; the rest are Fancy, changed to match.
+    const old = localStorage.getItem("vibecraftGraphics");
+    if (old === "low") { gfxPreset = "fast"; return; }
+    if (old === "medium") { gfxOver = { pixelRatio: 1.5, shadows: 1024, bloom: 0, grass: 0.5 }; return; }
+    if (old === "ultra") { gfxOver = { shadows: 4096, ao: true, grass: 1 }; return; }
+    if (old === "high") return;
+  } catch (e) {}
+  // Phones and tablets start on Fast: small graphics cards and very dense screens.
+  if (matchMedia("(pointer: coarse)").matches) gfxPreset = "fast";
+})();
+
+let GFX = {}, gfxName = "";
+function computeGfx() {
+  for (const s of GFX_SETTINGS) GFX[s.key] = s.key in gfxOver ? gfxOver[s.key] : s[gfxPreset];
+  // The finishing pass is needed for any of these (see renderScene).
+  GFX.post = GFX.grading || GFX.bloom > 0 || GFX.ao || GFX.tilt > 0;
+  // (For the trace.)
+  gfxName = gfxPreset + (Object.keys(gfxOver).length ? " " + JSON.stringify(gfxOver) : "");
+}
+computeGfx();
+
+function saveGfx() {
+  try { localStorage.setItem("vibecraftGfx", JSON.stringify({ preset: gfxPreset, over: gfxOver })); } catch (e) {}
+}
+function setGfxPreset(name) {
+  if (!GFX_PRESETS[name]) return;
+  gfxPreset = name;
+  // A changed setting stays; one that now matches the preset is no longer a change.
+  for (const k of Object.keys(gfxOver)) if (gfxOver[k] === gfxDef(k)[name]) delete gfxOver[k];
+  gfxChanged();
+}
+function setGfx(key, value) {
+  if (value === gfxDef(key)[gfxPreset]) delete gfxOver[key]; else gfxOver[key] = value;
+  gfxChanged();
+}
+function gfxChanged() {
+  computeGfx(); saveGfx(); applyGraphics(); refreshGfxControls();
 }
 
 function applyGraphics() {
   const r = R3.renderer; if (!r) return;
-  swayUniform.value = GFX.sway;
+  swayUniform.value = GFX.sway ? 1 : 0;
   // Shadows: turning them on or off, or a new map size, means rebuilding the shaders.
   const sun = R3.sun, on = GFX.shadows > 0;
   if (r.shadowMap.enabled !== on || (on && sun.shadow.mapSize.x !== GFX.shadows)) {
@@ -2739,41 +2964,121 @@ function applyGraphics() {
   }
   applyGrass();
   if (R3.smoke) R3.smoke.visible = GFX.smoke;
+  if (!GFX.effects) Fx.clear();
   if (view._w) resizeRenderer();
 }
 
 function applyGrass() {
   // (Each block draws that share of its own spots, which are shuffled.)
   const share = (g, f) => { if (g) for (const m of g.children) { m.count = Math.round(m.userData.spots.length * f); m.visible = m.count > 0; } };
-  share(R3.tufts, GFX.grass);
-  share(R3.flowers, GFX.grass);
-  share(R3.pebbles, Math.min(1, GFX.grass * 2.5));
+  const g = GFX.grass * 0.42; // (all of it was too much: 42% of the spots at most)
+  share(R3.tufts, g);
+  share(R3.flowers, g);
+  share(R3.pebbles, Math.min(1, g * 2.5));
 }
 
-// The setting appears on the start screen and in the in-game menu.
+// The controls appear on the start screen and in the in-game menu: the two
+// presets, "Hold to look" (hides the menu while held, to see the game behind
+// it), and every setting on its own under "More". While a setting is being
+// changed, the rest of the menu fades so the game shows through.
+const gfxPanels = [];
 function addGraphicsControls() {
   const make = () => {
-    const row = document.createElement("div");
-    row.className = "row gfx-row";
-    row.innerHTML = `<span class="note" id="gfxLabel${document.querySelectorAll(".gfx-row").length}">Graphics</span>`;
-    const seg = document.createElement("div");
-    seg.className = "seg gfx-seg";
-    seg.setAttribute("aria-labelledby", row.firstChild.id);
-    for (const [k, v] of Object.entries(GFX_LEVELS)) {
+    const box = document.createElement("div");
+    box.className = "gfx";
+    const n = gfxPanels.length;
+    box.innerHTML = `
+      <div class="row gfx-head">
+        <span class="note" id="gfxLabel${n}">Graphics</span>
+        <div class="seg gfx-seg" aria-labelledby="gfxLabel${n}"></div>
+        <button class="ghost gfx-more" aria-expanded="false" aria-controls="gfxList${n}">More settings</button>
+        <button class="ghost gfx-show" title="Hide the menu while held, to see the game behind it">Hold to look</button>
+      </div>
+      <div class="gfx-list" id="gfxList${n}" hidden></div>`;
+    const seg = box.querySelector(".gfx-seg");
+    for (const [k, label] of Object.entries(GFX_PRESETS)) {
       const b = document.createElement("button");
-      b.dataset.q = k; b.textContent = v.label;
-      b.title = k === "ultra" ? "Adds soft contact shadows; needs a strong graphics card" : k === "low" ? "No shadows or wind: for slow computers" : "";
-      b.setAttribute("aria-pressed", k === gfxName);
-      b.onclick = () => setGraphicsQuality(k);
+      b.dataset.q = k; b.textContent = label;
+      b.title = k === "fast" ? "No shadows, glow or blur: for slow computers and phones" : "Everything but contact shadows";
+      b.onclick = () => setGfxPreset(k);
       seg.append(b);
     }
-    row.append(seg);
-    return row;
+    const more = box.querySelector(".gfx-more"), list = box.querySelector(".gfx-list");
+    more.onclick = () => { list.hidden = !list.hidden; more.setAttribute("aria-expanded", !list.hidden); };
+    for (const s of GFX_SETTINGS) {
+      const item = document.createElement("div");
+      item.className = "gfx-item"; item.dataset.key = s.key; item.title = s.hint || "";
+      const id = `gfx${n}-${s.key}`;
+      item.innerHTML = `<label for="${id}">${s.label}</label><div class="gfx-ctl"></div><span class="gfx-val"></span>`
+        + `<button class="gfx-reset" aria-label="Back to the preset's ${s.label.toLowerCase()}">↺</button>`;
+      const ctl = item.querySelector(".gfx-ctl");
+      if (s.type === "slider") {
+        const inp = document.createElement("input");
+        Object.assign(inp, { type: "range", id, min: s.min, max: s.max, step: s.step });
+        inp.oninput = () => setGfx(s.key, +inp.value);
+        ctl.append(inp);
+      } else {
+        const opts = s.type === "toggle" ? [[false, "Off"], [true, "On"]] : s.options;
+        const sg = document.createElement("div"); sg.className = "seg small"; sg.id = id; sg.setAttribute("role", "group");
+        for (const [v, label] of opts) {
+          const b = document.createElement("button");
+          b.textContent = label; b.dataset.v = JSON.stringify(v);
+          b.onclick = () => setGfx(s.key, v);
+          sg.append(b);
+        }
+        ctl.append(sg);
+      }
+      item.querySelector(".gfx-reset").onclick = () => setGfx(s.key, s[gfxPreset]);
+      // Fade the menu while the pointer is held on this setting.
+      item.querySelector(".gfx-ctl").addEventListener("pointerdown", () => {
+        const ov = box.closest(".overlay"); if (!ov) return;
+        item.classList.add("active"); ov.classList.add("gfx-fade");
+        const up = () => { item.classList.remove("active"); ov.classList.remove("gfx-fade"); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); };
+        addEventListener("pointerup", up); addEventListener("pointercancel", up);
+      });
+      list.append(item);
+    }
+    // Hold to look: the whole menu goes while the button is held.
+    const show = box.querySelector(".gfx-show");
+    show.addEventListener("pointerdown", e => {
+      const ov = box.closest(".overlay"); if (!ov) return;
+      e.preventDefault();
+      show.setPointerCapture(e.pointerId);
+      ov.classList.add("gfx-peek");
+      const up = () => { ov.classList.remove("gfx-peek"); show.removeEventListener("pointerup", up); show.removeEventListener("pointercancel", up); show.removeEventListener("lostpointercapture", up); };
+      show.addEventListener("pointerup", up); show.addEventListener("pointercancel", up); show.addEventListener("lostpointercapture", up);
+    });
+    show.addEventListener("contextmenu", e => e.preventDefault()); // (a long press on a phone)
+    gfxPanels.push(box);
+    return box;
   };
   const start = document.querySelector("#startScreen .keys");
   if (start) start.before(make());
   const menu = document.querySelector("#menuScreen .card");
   if (menu) menu.append(make());
+  refreshGfxControls();
+}
+
+function refreshGfxControls() {
+  const presetName = GFX_PRESETS[gfxPreset];
+  for (const box of gfxPanels) {
+    for (const b of box.querySelector(".gfx-seg").children) b.setAttribute("aria-pressed", b.dataset.q === gfxPreset);
+    for (const item of box.querySelectorAll(".gfx-item")) {
+      const s = gfxDef(item.dataset.key), v = GFX[s.key], changed = s.key in gfxOver;
+      if (s.type === "slider") {
+        const inp = item.querySelector("input");
+        if (+inp.value !== v) inp.value = v;
+        item.querySelector(".gfx-val").textContent = s.fmt(v);
+      } else {
+        for (const b of item.querySelector(".seg").children) b.setAttribute("aria-pressed", b.dataset.v === JSON.stringify(v));
+      }
+      item.classList.toggle("changed", changed);
+      const reset = item.querySelector(".gfx-reset");
+      reset.hidden = !changed;
+      const d = s[gfxPreset];
+      reset.title = `Back to ${presetName}: ${s.type === "slider" ? s.fmt(d) : s.type === "toggle" ? (d ? "on" : "off") : s.options.find(o => o[0] === d)[1].toLowerCase()}`;
+    }
+  }
 }
 
 // --- Chimney smoke ------------------------------------------------------------------
@@ -2869,17 +3174,20 @@ function updateSmoke() {
   R3.smoke.material.uniforms.uScale.value = view._h * R3.renderer.getPixelRatio() * 0.5 * R3.camera.projectionMatrix.elements[5];
 }
 
-// --- After the scene is drawn: grading, bloom, ambient occlusion ---------------------
-// From Medium up, the scene is drawn into an off-screen image first, and one
-// last full-screen pass finishes it:
+// --- After the scene is drawn: grading, bloom, ambient occlusion, tilt-shift --------
+// With any of these settings on, the scene is drawn into an off-screen image
+// first, and one last full-screen pass finishes it:
+// - ambient occlusion ("contact shadows"): creases and contact points
+//   darken, worked out from the depth image;
+// - tilt-shift: what's nearer or farther than the point the camera looks at
+//   is mixed with blurred copies of the image (half, a quarter and an eighth
+//   of the size), more the farther it is, so the land looks like a model;
+// - bloom ("glow"): bright things (sunlit roofs, glints on water, the forge,
+//   gold veins) glow softly;
 // - colour grading: warm light, cool slightly teal shade, a touch more
-//   colour, and a soft vignette (Medium and up);
-// - bloom: bright things (sunlit roofs, glints on water, the forge, gold
-//   veins) glow softly (High and up);
-// - ambient occlusion: creases and contact points darken, worked out from
-//   the depth image (Ultra).
+//   colour, and a soft vignette.
 // That pass also applies the tone mapping, which three.js skips when drawing
-// into an image. On Low the scene goes straight to the screen.
+// into an image. With all of them off the scene goes straight to the screen.
 const Post = { rt: null, scene: null, cam: null, mat: null, bloom: null, quad: null };
 const FULLSCREEN_VS = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -2890,14 +3198,16 @@ function buildPost() {
     uniforms: {
       tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
       uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
-      uRadius: { value: 0.55 }, uBloom: { value: 0 },
+      uRadius: { value: 0.55 }, uBloom: { value: 0 }, uGrade: { value: 1 },
+      tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 },
     },
-    defines: { USE_AO: 0 },
+    defines: { USE_AO: 0, USE_TILT: 0 },
     depthTest: false, depthWrite: false,
     vertexShader: FULLSCREEN_VS,
     fragmentShader: `
       uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
-      uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
+      uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom; uniform float uGrade;
+      uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform float uTilt; uniform float uFocus;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
         float d = texture2D(tDepth, uv).x;
@@ -2927,17 +3237,30 @@ function buildPost() {
           col *= clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
         }
         #endif
+        #if USE_TILT
+        {
+          // How far from the focus this pixel is, as a share of the focus
+          // distance (the sky counts as far away).
+          float dt = texture2D(tDepth, vUv).x;
+          float dist = dt >= 1.0 ? uFocus * 4.0 : -viewPos(vUv).z;
+          float b = smoothstep(0.04, 0.35, abs(dist - uFocus) / uFocus) * uTilt * 3.0;
+          col = mix(col, texture2D(tBlur1, vUv).rgb, clamp(b, 0.0, 1.0));
+          col = mix(col, texture2D(tBlur2, vUv).rgb, clamp(b - 1.0, 0.0, 1.0));
+          col = mix(col, texture2D(tBlur3, vUv).rgb, clamp(b - 2.0, 0.0, 1.0));
+        }
+        #endif
         col += texture2D(tBloom, vUv).rgb * uBloom;
         // Grading, in linear light before tone mapping: cool the shade, warm the light.
         float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-        col *= mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
-        col = max(mix(vec3(lum), col, 1.12), 0.0);
+        vec3 graded = col * mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
+        graded = max(mix(vec3(lum), graded, 1.12), 0.0);
+        col = mix(col, graded, uGrade);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
         // A soft vignette pulls the eye to the middle of the view.
         vec2 q = vUv - 0.5;
-        gl_FragColor.rgb *= 1.0 - 0.28 * smoothstep(0.25, 0.85, dot(q, q) * 2.2);
+        gl_FragColor.rgb *= 1.0 - 0.28 * uGrade * smoothstep(0.25, 0.85, dot(q, q) * 2.2);
       }`,
   });
   Post.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat);
@@ -3004,6 +3327,20 @@ function renderBloom(r, sz) {
   return levels[0].texture;
 }
 
+// Tilt-shift's blurred copies: the image shrunk to a half, a quarter and an
+// eighth, each step a soft five-tap filter (bloom's), so the smallest is the
+// blurriest. The finishing pass mixes them in by distance from the focus.
+function renderTiltBlur(r, sz) {
+  if (!Post.bloom) buildBloom();
+  if (!Post.blur) Post.blur = [0, 1, 2].map(() => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+  Post.blur.forEach((t, i) => { const w = Math.max(1, sz.x >> (i + 1)), h = Math.max(1, sz.y >> (i + 1)); if (t.width !== w || t.height !== h) t.setSize(w, h); });
+  blit(r, Post.bloom.shrink, Post.rt, Post.blur[0]);
+  blit(r, Post.bloom.shrink, Post.blur[0], Post.blur[1]);
+  blit(r, Post.bloom.shrink, Post.blur[1], Post.blur[2]);
+  const u = Post.mat.uniforms;
+  u.tBlur1.value = Post.blur[0].texture; u.tBlur2.value = Post.blur[1].texture; u.tBlur3.value = Post.blur[2].texture;
+}
+
 const _black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
 _black.needsUpdate = true;
 
@@ -3020,11 +3357,17 @@ function renderScene() {
   r.render(R3.scene, R3.camera);
   note();
   const u = Post.mat.uniforms;
-  u.tBloom.value = GFX.bloom ? renderBloom(r, sz) : _black;
-  u.uBloom.value = GFX.bloom ? 0.32 : 0;
+  u.tBloom.value = GFX.bloom > 0 ? renderBloom(r, sz) : _black;
+  u.uBloom.value = GFX.bloom * 0.32;
+  u.uGrade.value = GFX.grading ? 1 : 0;
+  // Tilt-shift fades out as the camera zooms out (cam.dist 9 to 48): from
+  // high up, a blurred edge only hides the overview.
+  const tilt = GFX.tilt * Math.max(0, Math.min(1, (40 - cam.dist) / 26)) * 0.6;
+  if (tilt > 0) renderTiltBlur(r, sz);
+  u.uTilt.value = tilt; u.uFocus.value = cam.dist;
   r.setRenderTarget(null);
-  const ao = GFX.ao ? 1 : 0;
-  if (Post.mat.defines.USE_AO !== ao) { Post.mat.defines.USE_AO = ao; Post.mat.needsUpdate = true; }
+  const ao = GFX.ao ? 1 : 0, tl = tilt > 0 ? 1 : 0;
+  if (Post.mat.defines.USE_AO !== ao || Post.mat.defines.USE_TILT !== tl) { Post.mat.defines.USE_AO = ao; Post.mat.defines.USE_TILT = tl; Post.mat.needsUpdate = true; }
   u.tColor.value = Post.rt.texture; u.tDepth.value = Post.rt.depthTexture;
   u.uProj.value.copy(R3.camera.projectionMatrix); u.uProjInv.value.copy(R3.camera.projectionMatrixInverse);
   u.uRes.value.set(sz.x, sz.y);
