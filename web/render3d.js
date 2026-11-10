@@ -2983,8 +2983,8 @@ const GFX_SETTINGS = [
     hint: "How much grass, flowers and pebbles cover the ground." },
   { key: "sway", label: "Wind", type: "toggle", fast: false, fancy: true, hint: "Trees, bushes and grass sway." },
   { key: "smoke", label: "Chimney smoke", type: "toggle", fast: false, fancy: true, hint: "Smoke from chimneys, campfires and burning buildings." },
-  { key: "models", label: "Models", type: "choice", options: [["detailed", "Detailed"], ["simple", "Simple"]], fast: "detailed", fancy: "detailed",
-    hint: "Detailed: the models made in Blender. Simple: the older ones built in code." },
+  { key: "models", label: "Models", type: "choice", options: [["simple", "Simple"], ["detailed", "Detailed"]], fast: "detailed", fancy: "detailed",
+    hint: "Simple: the older models built in code. Detailed: the ones made in Blender." },
   { key: "effects", label: "Small effects", type: "toggle", fast: true, fancy: true,
     hint: "Dust, wood chips, splashes, sparks, boat wakes, and new units popping in." },
 ];
