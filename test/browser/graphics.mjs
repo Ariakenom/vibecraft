@@ -10,15 +10,15 @@ let r = await pg.evaluate(() => {
   const out = {};
   setGfxPreset("fancy");
   setGfx("tilt", 0.5);                 // a change of its own
-  setGfx("shadows", 0);                // the same as Fast's
+  setGfx("shadows", -1);               // the same as Fast's (blobs)
   setGfxPreset("fast");
   out.keptTilt = GFX.tilt === 0.5 && "tilt" in gfxOver;
-  out.droppedSame = !("shadows" in gfxOver) && GFX.shadows === 0;
+  out.droppedSame = !("shadows" in gfxOver) && GFX.shadows === -1;
   out.fastBloom = GFX.bloom === 0;
   const item = document.querySelector("#menuScreen .gfx-item[data-key=tilt]");
-  out.resetShown = !item.querySelector(".gfx-reset").hidden;
+  out.resetShown = !item.querySelector(".gfx-reset").classList.contains("off");
   item.querySelector(".gfx-reset").click();
-  out.resetDone = GFX.tilt === 0 && !("tilt" in gfxOver) && item.querySelector(".gfx-reset").hidden;
+  out.resetDone = GFX.tilt === 0 && !("tilt" in gfxOver) && item.querySelector(".gfx-reset").classList.contains("off");
   out.saved = JSON.parse(localStorage.getItem("vibecraftGfx")).preset === "fast";
   // Every setting's controls work: click each choice, drag each slider.
   for (const it of document.querySelectorAll("#menuScreen .gfx-item")) {
@@ -34,6 +34,26 @@ check(r.fastBloom, "Fast turns glow off");
 check(r.resetShown && r.resetDone, "the reset button shows on a change and puts it back");
 check(r.saved, "the choice is saved");
 check(r.allChanged, "every control changes its setting");
+
+// Nothing moves: a row keeps its height when its reset button shows, and
+// buttons whose text changes keep their width (CLAUDE.md).
+r = await pg.evaluate(() => {
+  document.querySelector("#menuScreen .gfx-more").click();
+  $("menuScreen").hidden = false;
+  const row = document.querySelector("#menuScreen .gfx-item[data-key=grass]");
+  setGfxPreset("fancy"); delete gfxOver.grass; gfxChanged();
+  const h0 = row.getBoundingClientRect().height;
+  setGfx("grass", 0.2);
+  const h1 = row.getBoundingClientRect().height;
+  setGfx("grass", GFX_SETTINGS.find(s => s.key === "grass").fancy);
+  const w = [0, 1].map(i => { showLabel($("cheatBtn"), i); return $("cheatBtn").getBoundingClientRect().width; });
+  const v = [0, 1].map(i => { showLabel($("surrenderBtn"), i); return $("surrenderBtn").getBoundingClientRect().width; });
+  showLabel($("cheatBtn"), 0); showLabel($("surrenderBtn"), 0);
+  $("menuScreen").hidden = true;
+  return { h0, h1, w, v };
+});
+check(r.h0 > 0 && r.h0 === r.h1, `a setting's row keeps its height when changed (${r.h0}, ${r.h1})`);
+check(r.w[0] === r.w[1] && r.v[0] === r.v[1], "the cheat and surrender buttons keep their width");
 
 // The effects, with a game on (drawing is off in tests, so step them by hand).
 r = await pg.evaluate(() => {

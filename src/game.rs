@@ -73,7 +73,7 @@ pub enum Ev {
     Melee = 6,    // a melee blow landed (data = attacker kind)
     Shoot = 7,    // an arrow was loosed (data = shooter kind)
     Hammer = 9,   // a construction stroke
-    ArrowHit = 11, // an arrow struck (data = 1 if it hit a building)
+    ArrowHit = 11, // a shot struck (data = 1 if it hit a building, + 2 x the shooter's kind)
     Short = 12,   // the player holds more than they make, and units suffer (data = resource)
     // 13 was WonderBegun (the Wonder is gone).
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
@@ -2344,7 +2344,7 @@ impl Game {
                 let owner = self.ents[at as usize].owner;
                 self.damage(tg, dm, at);
                 self.splash(shooter, owner, at, tg, tx, ty);
-                self.push_event(Ev::ArrowHit, tx, ty, bld as u32 as f32);
+                self.push_event(Ev::ArrowHit, tx, ty, (bld as u32 + 2 * shooter as u32) as f32);
             } else {
                 p.x += dx / d * step;
                 p.y += dy / d * step;
