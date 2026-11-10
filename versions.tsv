@@ -32,3 +32,5 @@
 1794334936	2026-11-10	fb68e272ca14a3eae3b9e063f95aeba692162231	The hit event says what fired; a Models setting (Detailed / Simple)
 1794335483	2026-11-10	0b8538320829acdc7ae5b4554957fe4010f84eee	Merge pull request #53 from Ariakenom/graphics-fast
 1794337598	2026-11-10	67f8d08823a89fb264082180fc4bce8475759831	Merge remote-tracking branch 'origin/main'
+1794352440	2026-11-11	e39a5234b59363a950c4d8515b4194a7ffe568e1	Models setting: Simple first, Detailed second (the more demanding choice is on the right, as in the other settings)
+1794352446	2026-11-11	c933bb52346511403d4ee640f4ffcff02b576762	Merge pull request #54 from Ariakenom/models-order
