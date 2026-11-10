@@ -3243,7 +3243,7 @@ function updateSmoke() {
 // - ambient occlusion ("contact shadows"): creases and contact points
 //   darken, worked out from the depth image;
 // - tilt-shift: what's nearer or farther than the point the camera looks at
-//   is mixed with blurred copies of the image (half, a quarter and an eighth
+//   is mixed with blurred copies of the image (a half down to a sixteenth
 //   of the size), more the farther it is, so the land looks like a model;
 // - bloom ("glow"): bright things (sunlit roofs, glints on water, the forge,
 //   gold veins) glow softly;
@@ -3261,7 +3261,7 @@ function buildPost() {
       tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
       uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
       uRadius: { value: 0.55 }, uBloom: { value: 0 },
-      tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 },
+      tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, tBlur4: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 },
     },
     defines: { USE_AO: 0, USE_TILT: 0 },
     depthTest: false, depthWrite: false,
@@ -3269,7 +3269,7 @@ function buildPost() {
     fragmentShader: `
       uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
       uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
-      uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform float uTilt; uniform float uFocus;
+      uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform sampler2D tBlur4; uniform float uTilt; uniform float uFocus;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
         float d = texture2D(tDepth, uv).x;
@@ -3305,10 +3305,17 @@ function buildPost() {
           // distance (the sky counts as far away).
           float dt = texture2D(tDepth, vUv).x;
           float dist = dt >= 1.0 ? uFocus * 4.0 : -viewPos(vUv).z;
-          float b = smoothstep(0.04, 0.35, abs(dist - uFocus) / uFocus) * uTilt * 3.0;
+          // (A steep camera sees little depth, so also by height on the
+          // screen: the classic tilt-shift band.)
+          float off = max(smoothstep(0.03, 0.3, abs(dist - uFocus) / uFocus), smoothstep(0.12, 0.48, abs(vUv.y - 0.5)));
+          float b = off * uTilt * 4.0;
           col = mix(col, texture2D(tBlur1, vUv).rgb, clamp(b, 0.0, 1.0));
           col = mix(col, texture2D(tBlur2, vUv).rgb, clamp(b - 1.0, 0.0, 1.0));
           col = mix(col, texture2D(tBlur3, vUv).rgb, clamp(b - 2.0, 0.0, 1.0));
+          col = mix(col, texture2D(tBlur4, vUv).rgb, clamp(b - 3.0, 0.0, 1.0));
+          // A model looks brighter and more colourful than the real thing.
+          float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+          col = max(mix(vec3(l), col, 1.0 + 0.15 * min(uTilt, 1.0)), 0.0);
         }
         #endif
         col += texture2D(tBloom, vUv).rgb * uBloom;
@@ -3344,7 +3351,7 @@ function buildBloom() {
       float l = max(c.r, max(c.g, c.b));
       float k = smoothstep(uThreshold, uThreshold * 1.6, l);   // a soft knee, so the glow fades in
       gl_FragColor = vec4(min(c * k, vec3(8.0)), 1.0);
-    }`, { uThreshold: { value: 1.05 } });
+    }`, { uThreshold: { value: 0.8 } }); // (1.05 was too high: little but the sun on water glowed)
   const shrink = mk(down + `
     void main() {
       vec3 c = tap(vec2(0.0)) * 4.0 + tap(vec2(-1.0)) + tap(vec2(1.0)) + tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, -1.0));
@@ -3381,18 +3388,20 @@ function renderBloom(r, sz) {
   return levels[0].texture;
 }
 
-// Tilt-shift's blurred copies: the image shrunk to a half, a quarter and an
-// eighth, each step a soft five-tap filter (bloom's), so the smallest is the
-// blurriest. The finishing pass mixes them in by distance from the focus.
+// Tilt-shift's blurred copies: the image shrunk to a half, a quarter, an
+// eighth and a sixteenth, each step a soft five-tap filter (bloom's), so the
+// smallest is the blurriest. The finishing pass mixes them in by distance
+// from the focus.
 function renderTiltBlur(r, sz) {
   if (!Post.bloom) buildBloom();
-  if (!Post.blur) Post.blur = [0, 1, 2].map(() => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+  if (!Post.blur) Post.blur = [0, 1, 2, 3].map(() => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
   Post.blur.forEach((t, i) => { const w = Math.max(1, sz.x >> (i + 1)), h = Math.max(1, sz.y >> (i + 1)); if (t.width !== w || t.height !== h) t.setSize(w, h); });
   blit(r, Post.bloom.shrink, Post.rt, Post.blur[0]);
   blit(r, Post.bloom.shrink, Post.blur[0], Post.blur[1]);
   blit(r, Post.bloom.shrink, Post.blur[1], Post.blur[2]);
+  blit(r, Post.bloom.shrink, Post.blur[2], Post.blur[3]);
   const u = Post.mat.uniforms;
-  u.tBlur1.value = Post.blur[0].texture; u.tBlur2.value = Post.blur[1].texture; u.tBlur3.value = Post.blur[2].texture;
+  u.tBlur1.value = Post.blur[0].texture; u.tBlur2.value = Post.blur[1].texture; u.tBlur3.value = Post.blur[2].texture; u.tBlur4.value = Post.blur[3].texture;
 }
 
 const _black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
@@ -3412,10 +3421,11 @@ function renderScene() {
   note();
   const u = Post.mat.uniforms;
   u.tBloom.value = GFX.bloom > 0 ? renderBloom(r, sz) : _black;
-  u.uBloom.value = GFX.bloom * 0.32;
-  // Tilt-shift fades out as the camera zooms out (cam.dist 9 to 48): from
-  // high up, a blurred edge only hides the overview.
-  const tilt = GFX.tilt * Math.max(0, Math.min(1, (40 - cam.dist) / 26)) * 0.6;
+  u.uBloom.value = GFX.bloom * 0.6;
+  // Tilt-shift fades out as the camera zooms out past the usual height
+  // (cam.dist 24; it goes from 9 to 48): from high up, a blurred edge only
+  // hides the overview. 100% blurs the edges fully at the usual height.
+  const tilt = GFX.tilt * Math.max(0, Math.min(1, (48 - cam.dist) / 24)) * 0.5;
   if (tilt > 0) renderTiltBlur(r, sz);
   u.uTilt.value = tilt; u.uFocus.value = cam.dist;
   r.setRenderTarget(null);
