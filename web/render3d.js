@@ -889,6 +889,21 @@ function cachedModel(kind, owner) {
   return modelCache.get(key);
 }
 
+// Colour grading happens inside the tone mapping, which every material does
+// as it draws: warm the light, cool the shade, a touch more colour, then the
+// filmic curve. That costs nothing extra (no second pass), so Fast has it
+// too. With grading off the renderer uses plain filmic tone mapping instead
+// (a different tone mapping is a different shader, so switching recompiles).
+// The vignette is a CSS gradient over the canvas (#vignette).
+THREE.ShaderChunk.tonemapping_pars_fragment = THREE.ShaderChunk.tonemapping_pars_fragment.replace(
+  "vec3 CustomToneMapping( vec3 color ) { return color; }",
+  `vec3 CustomToneMapping( vec3 color ) {
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color *= mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
+    color = max(mix(vec3(lum), color, 1.12), 0.0);
+    return ACESFilmicToneMapping(color);
+  }`);
+
 function initRenderer() {
   const r = new THREE.WebGLRenderer({ canvas: view, antialias: true });
   r.outputColorSpace = THREE.SRGBColorSpace;
@@ -967,6 +982,7 @@ function initRenderer() {
   scene.add(R3.puffMesh);
   R3.puffs = [];
   Fx.build(scene);
+  buildBlobs(scene);
   // Bullets: thin bright tracers, too fast to be anything else.
   R3.tracers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.016, 0.016), new THREE.MeshBasicMaterial({ color: "#ffe9a6", transparent: true, opacity: 0.85, depthWrite: false }), 128);
   R3.tracers.frustumCulled = false; R3.tracers.count = 0;
@@ -2068,6 +2084,8 @@ function render3d(alpha, now, dt) {
   // What the camera sees, for skipping the walk cycles of units out of it.
   _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(R3.camera.projectionMatrix, R3.camera.matrixWorldInverse));
   const mark = ++R3.mark; // objects still in the world this frame get this mark
+  const blobs = GFX.shadows === -1 && R3.blobs;
+  blobN = 0;
   let pt = performance.now(); // (timing for the trace: `Prof`, net.js)
 
   for (let i = 0; i < entCount; i++) {
@@ -2102,6 +2120,7 @@ function render3d(alpha, now, dt) {
       // Finished: a ring of dust rolls out from its foot.
       if (o.wasBuilding && !building && !planned) fxDustRing(o.x, o.y, stat(kind, 6) * 0.5, 14);
       o.wasBuilding = !!building;
+      if (blobs && !planned && kind !== K.Farm) { const s = stat(kind, 6) * 1.25; addBlob(o.x, o.baseY, o.y, s, s, o.root.rotation.y); }
       o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
       o.body.material = (flags & 8) ? hitMat : entMat;
       setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
@@ -2123,6 +2142,12 @@ function render3d(alpha, now, dt) {
     d = Math.atan2(Math.sin(d), Math.cos(d));
     o.face += d * Math.min(1, dt * 12);
     o.root.rotation.y = o.face;
+    if (blobs) {
+      const r = W.kind_radius(kind) * (isNaval(kind) ? BOAT_SCALE * 2.2 : 2.6), sc = o.pop ? o.root.scale.x : 1;
+      // Long things (horses, boats, guns) get a longer blob, turned with them.
+      const long = isMounted(kind) || isNaval(kind) || kind === K.Cannon || kind === K.FieldGun || kind === K.Tank ? 1.5 : 1;
+      addBlob(x, isNaval(kind) ? WATER_Y : groundAt(x, y), y, r * long * sc, r * sc, o.face); // (+x is its front)
+    }
     const anim = E(i, F.anim);
     const ph = t + id * 0.37;
     if (GFX.effects) {
@@ -2202,6 +2227,7 @@ function render3d(alpha, now, dt) {
     R3.dying[keep++] = d;
   }
   R3.dying.length = keep;
+  if (R3.blobs) { R3.blobs.count = blobN; R3.blobs.instanceMatrix.needsUpdate = true; }
   pt = Prof.add("draw: units and buildings", pt);
 
   updateResources();
@@ -2498,6 +2524,31 @@ function updatePuffs(now) {
   }
   m.count = n;
   m.instanceMatrix.needsUpdate = true;
+}
+
+// --- Blob shadows ------------------------------------------------------------------
+// The cheap kind of shadow (Shadows: Blobs): a soft dark disc on the ground
+// under every unit and building, all in one instanced mesh. Without any
+// shadow, things look pasted onto the ground instead of standing on it.
+const BLOB_MAX = 2048;
+function buildBlobs(scene) {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d"), grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, "rgba(0,0,0,1)"); grd.addColorStop(0.45, "rgba(0,0,0,0.8)"); grd.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  const mat = withFow(new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0.5, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  R3.blobs = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat, BLOB_MAX);
+  R3.blobs.frustumCulled = false; R3.blobs.count = 0; R3.blobs.renderOrder = 1;
+  scene.add(R3.blobs);
+}
+let blobN = 0;
+// (Called while drawing each thing: `w` is its size along its +x, `d` across.)
+function addBlob(x, h, y, w, d = w, turn = 0) {
+  if (blobN >= BLOB_MAX) return;
+  _p.set(x, h + 0.04, y); _q.setFromAxisAngle(_up, turn); _s.set(w, 1, d);
+  _m4.compose(_p, _q, _s);
+  R3.blobs.setMatrixAt(blobN++, _m4);
 }
 
 // --- Small effects ---------------------------------------------------------------
@@ -2878,17 +2929,17 @@ const gfxPct = v => Math.round(v * 100) + "%";
 const GFX_SETTINGS = [
   { key: "pixelRatio", label: "Sharpness", type: "choice", options: [[1, "Normal"], [1.5, "Sharp"], [2, "Sharpest"]], fast: 1, fancy: 2,
     hint: "How many pixels are drawn on high-resolution screens. The biggest cost on a weak graphics card." },
-  { key: "shadows", label: "Shadows", type: "choice", options: [[0, "Off"], [1024, "Low"], [2048, "High"], [4096, "Highest"]], fast: 0, fancy: 2048,
-    hint: "Shadows from the sun. Higher is sharper." },
+  { key: "shadows", label: "Shadows", type: "choice", options: [[0, "Off"], [-1, "Blobs"], [1024, "Low"], [2048, "High"], [4096, "Highest"]], fast: -1, fancy: 2048,
+    hint: "Shadows from the sun; higher is sharper. Blobs: a soft dark patch under each unit and building, almost free." },
   { key: "ao", label: "Contact shadows", type: "toggle", fast: false, fancy: false,
     hint: "Darkens creases and where things meet the ground. Needs a strong graphics card." },
-  { key: "grading", label: "Colour grading", type: "toggle", fast: false, fancy: true,
-    hint: "Warm light, cool shade and a soft darkening at the screen's edges." },
+  { key: "grading", label: "Colour grading", type: "toggle", fast: true, fancy: true,
+    hint: "Warm light, cool shade, a touch more colour and darker screen edges. Almost free." },
   { key: "bloom", label: "Glow", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
     hint: "Bright things glow: fire, sunlit roofs, glints on the water." },
   { key: "tilt", label: "Tilt-shift", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
     hint: "Blurs what's nearer and farther than where you look, like a model town. Strongest zoomed in; gone zoomed out." },
-  { key: "grass", label: "Grass and flowers", type: "slider", min: 0, max: 1, step: 0.05, fast: 0.3, fancy: 0.75, fmt: gfxPct,
+  { key: "grass", label: "Grass and flowers", type: "slider", min: 0, max: 1, step: 0.05, fast: 0.75, fancy: 0.75, fmt: gfxPct,
     hint: "How much grass, flowers and pebbles cover the ground." },
   { key: "sway", label: "Wind", type: "toggle", fast: false, fancy: true, hint: "Trees, bushes and grass sway." },
   { key: "smoke", label: "Chimney smoke", type: "toggle", fast: false, fancy: true, hint: "Smoke from chimneys, campfires and burning buildings." },
@@ -2922,7 +2973,7 @@ let GFX = {}, gfxName = "";
 function computeGfx() {
   for (const s of GFX_SETTINGS) GFX[s.key] = s.key in gfxOver ? gfxOver[s.key] : s[gfxPreset];
   // The finishing pass is needed for any of these (see renderScene).
-  GFX.post = GFX.grading || GFX.bloom > 0 || GFX.ao || GFX.tilt > 0;
+  GFX.post = GFX.bloom > 0 || GFX.ao || GFX.tilt > 0;
   // (For the trace.)
   gfxName = gfxPreset + (Object.keys(gfxOver).length ? " " + JSON.stringify(gfxOver) : "");
 }
@@ -2949,8 +3000,16 @@ function gfxChanged() {
 function applyGraphics() {
   const r = R3.renderer; if (!r) return;
   swayUniform.value = GFX.sway ? 1 : 0;
-  // Shadows: turning them on or off, or a new map size, means rebuilding the shaders.
+  // Shadows: turning them on or off, or a new map size, means rebuilding the
+  // shaders; so does a new tone mapping (colour grading on or off).
   const sun = R3.sun, on = GFX.shadows > 0;
+  const tm = GFX.grading ? THREE.CustomToneMapping : THREE.ACESFilmicToneMapping;
+  document.getElementById("vignette").hidden = !GFX.grading;
+  if (r.toneMapping !== tm) {
+    r.toneMapping = tm;
+    if (Post.mat) Post.mat.needsUpdate = true;
+    R3.scene.traverse(o => { if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true; });
+  }
   if (r.shadowMap.enabled !== on || (on && sun.shadow.mapSize.x !== GFX.shadows)) {
     r.shadowMap.enabled = on;
     sun.castShadow = on;
@@ -3023,6 +3082,9 @@ function addGraphicsControls() {
         for (const [v, label] of opts) {
           const b = document.createElement("button");
           b.textContent = label; b.dataset.v = JSON.stringify(v);
+          // On press, not release: the faded menu then shows the new value
+          // while the button is held. (Click still covers the keyboard.)
+          b.addEventListener("pointerdown", () => setGfx(s.key, v));
           b.onclick = () => setGfx(s.key, v);
           sg.append(b);
         }
@@ -3074,7 +3136,8 @@ function refreshGfxControls() {
       }
       item.classList.toggle("changed", changed);
       const reset = item.querySelector(".gfx-reset");
-      reset.hidden = !changed;
+      reset.classList.toggle("off", !changed); // (kept in place, invisible: hiding it would change the row's height)
+      reset.tabIndex = changed ? 0 : -1;
       const d = s[gfxPreset];
       reset.title = `Back to ${presetName}: ${s.type === "slider" ? s.fmt(d) : s.type === "toggle" ? (d ? "on" : "off") : s.options.find(o => o[0] === d)[1].toLowerCase()}`;
     }
@@ -3184,10 +3247,9 @@ function updateSmoke() {
 //   of the size), more the farther it is, so the land looks like a model;
 // - bloom ("glow"): bright things (sunlit roofs, glints on water, the forge,
 //   gold veins) glow softly;
-// - colour grading: warm light, cool slightly teal shade, a touch more
-//   colour, and a soft vignette.
-// That pass also applies the tone mapping, which three.js skips when drawing
-// into an image. With all of them off the scene goes straight to the screen.
+// That pass also applies the tone mapping (and with it the colour grading),
+// which three.js skips when drawing into an image. With all of them off the
+// scene goes straight to the screen.
 const Post = { rt: null, scene: null, cam: null, mat: null, bloom: null, quad: null };
 const FULLSCREEN_VS = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -3198,7 +3260,7 @@ function buildPost() {
     uniforms: {
       tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
       uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
-      uRadius: { value: 0.55 }, uBloom: { value: 0 }, uGrade: { value: 1 },
+      uRadius: { value: 0.55 }, uBloom: { value: 0 },
       tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 },
     },
     defines: { USE_AO: 0, USE_TILT: 0 },
@@ -3206,7 +3268,7 @@ function buildPost() {
     vertexShader: FULLSCREEN_VS,
     fragmentShader: `
       uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
-      uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom; uniform float uGrade;
+      uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
       uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform float uTilt; uniform float uFocus;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
@@ -3250,17 +3312,9 @@ function buildPost() {
         }
         #endif
         col += texture2D(tBloom, vUv).rgb * uBloom;
-        // Grading, in linear light before tone mapping: cool the shade, warm the light.
-        float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-        vec3 graded = col * mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
-        graded = max(mix(vec3(lum), graded, 1.12), 0.0);
-        col = mix(col, graded, uGrade);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
-        // A soft vignette pulls the eye to the middle of the view.
-        vec2 q = vUv - 0.5;
-        gl_FragColor.rgb *= 1.0 - 0.28 * uGrade * smoothstep(0.25, 0.85, dot(q, q) * 2.2);
       }`,
   });
   Post.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat);
@@ -3359,7 +3413,6 @@ function renderScene() {
   const u = Post.mat.uniforms;
   u.tBloom.value = GFX.bloom > 0 ? renderBloom(r, sz) : _black;
   u.uBloom.value = GFX.bloom * 0.32;
-  u.uGrade.value = GFX.grading ? 1 : 0;
   // Tilt-shift fades out as the camera zooms out (cam.dist 9 to 48): from
   // high up, a blurred edge only hides the overview.
   const tilt = GFX.tilt * Math.max(0, Math.min(1, (40 - cam.dist) / 26)) * 0.6;

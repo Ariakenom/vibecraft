@@ -3203,11 +3203,25 @@ function cheatsToast(on) {
 }
 // The cheat switch: a system command from the host (owner 0), recorded for
 // replays and sent to everyone online like a seat changing hands.
+// A button whose text changes keeps the width of its longest text, so
+// nothing next to it moves (all the texts sit in one grid cell; only the
+// current one is visible). See CLAUDE.md: the UI shouldn't move.
+function stableLabels(btn, texts) {
+  btn.textContent = "";
+  const stack = document.createElement("span");
+  stack.className = "stack";
+  for (const t of texts) { const sp = document.createElement("span"); sp.textContent = t; stack.append(sp); }
+  btn.append(stack);
+}
+function showLabel(btn, i) { [...btn.querySelector(".stack").children].forEach((sp, k) => sp.classList.toggle("on", k === i)); }
+stableLabels($("cheatBtn"), ["Cheat mode: off", "Cheat mode: on"]);
+stableLabels($("surrenderBtn"), ["Surrender", "Really surrender?"]);
+showLabel($("cheatBtn"), 0); showLabel($("surrenderBtn"), 0);
 $("cheatBtn").onclick = () => {
   const cmd = [15, W.cheats_on() ? 0 : 1, 0, 0];
   if (mp && mp.server) mp.server.system(cmd);
   else if (!mp) { applyCmd(0, cmd); Rec.add(simTick, [0, ++Rec.seq, ...cmd]); handleEvents(); }
-  $("cheatBtn").textContent = `Cheat mode: ${cmd[1] ? "on" : "off"}`;
+  showLabel($("cheatBtn"), cmd[1] ? 1 : 0);
   selKey = "";
 };
 $("menuBtn").onclick = () => {
@@ -3221,8 +3235,8 @@ $("menuBtn").onclick = () => {
   $("surrenderBtn").hidden = !playing;
   // The host (or a single player) can switch cheat mode for every person.
   $("cheatBtn").hidden = !!observe || !!(mp && !mp.server);
-  $("cheatBtn").textContent = `Cheat mode: ${W.cheats_on() ? "on" : "off"}`;
-  delete $("surrenderBtn").dataset.sure; $("surrenderBtn").textContent = "Surrender";
+  showLabel($("cheatBtn"), W.cheats_on() ? 1 : 0);
+  delete $("surrenderBtn").dataset.sure; showLabel($("surrenderBtn"), 0);
   $("watchLinkBtn").hidden = !watchLink() || !!observe && observe.kind !== "out";
   $("quitBtn").textContent = watcher ? "Stop watching" : Replay.on ? "Exit replay" : mp ? "Leave game" : "New game";
   renderGameSeats(true);
@@ -3231,7 +3245,7 @@ $("menuBtn").onclick = () => {
 // Two clicks, so a slip doesn't end your game.
 $("surrenderBtn").onclick = e => {
   const b = e.currentTarget;
-  if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Really surrender?"; return; }
+  if (!b.dataset.sure) { b.dataset.sure = "1"; showLabel(b, 1); return; }
   $("menuScreen").hidden = true;
   if (paused) togglePause();
   surrendered = true;
