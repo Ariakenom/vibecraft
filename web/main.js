@@ -1858,10 +1858,10 @@ function handleEvents() {
         else if (d === K.Submarine) Sfx.at("cannon", x, y, 25); // a muffled thump under the water
         else Sfx.at("bow", x, y, 60, isBld(d));
         break;
-      case EV.ArrowHit: {
-        Sfx.at("arrowHit", x, y, 50, d === 1);
-        const by = shooterAt(x, y);
-        if (by >= 0 && by !== K.AirDefense && (isBigGun(by) || by === K.Trebuchet)) fxBlast(x, y, by); else fxHit(x, y, d === 1, false);
+      case EV.ArrowHit: { // (data: 1 if it hit a building, + 2 x the kind that fired)
+        const bld = (d & 1) === 1, by = d >> 1;
+        Sfx.at("arrowHit", x, y, 50, bld);
+        if (by !== K.AirDefense && (isBigGun(by) || by === K.Trebuchet)) fxBlast(x, y, by); else fxHit(x, y, bld, false);
         break; }
       case EV.Hammer: Sfx.at("hammer", x, y, 90); fxHammer(x, y); break;
       case EV.Eliminated:

@@ -759,18 +759,44 @@ function glbName(kind) {
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
-let glbModels = null; // name -> { geo, team, ao, tool, pivot }
+// The Blender models, and the ones in use: none with the Models setting on
+// Simple, which draws the models built in code (unitModel, buildingModel,
+// resourceModels) that are otherwise only the fallback.
+let glbAll = null, glbModels = null; // name -> { geo, team, ao, tool, pivot }
 
 function loadGlbModels() {
   if (MODELS_B64.startsWith("/*")) return; // not built in
   try {
     const raw = atob(MODELS_B64), bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    glbModels = parseGlb(bytes.buffer);
+    glbAll = parseGlb(bytes.buffer);
   } catch (e) {
     console.warn("Couldn't load models.glb; using the built-in models.", e);
-    glbModels = null;
+    glbAll = null;
   }
+  glbModels = GFX.models === "simple" ? null : glbAll;
+}
+
+function setResourceGeos() {
+  R3.resGeo = resourceModels();
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"]]) {
+    if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
+  }
+}
+
+// Switching models: everything is made again with the other set (units and
+// buildings on the next frame, resources when they're next drawn, icons
+// when next shown).
+function applyModels() {
+  const want = GFX.models === "simple" ? null : glbAll;
+  if (want === glbModels || !R3.resGeo) return;
+  glbModels = want;
+  modelCache.clear(); iconCache.clear();
+  setResourceGeos();
+  if (R3.res) { for (const m of R3.res.values()) { R3.scene.remove(m); m.dispose(); } R3.res.clear(); R3.resKey = ""; }
+  for (const o of R3.objs.values()) R3.scene.remove(o.root);
+  R3.objs.clear();
+  R3.popFrom = performance.now() + 500; // (they're not new: no popping in)
 }
 
 // A small reader for the glTF Binary files Blender writes: meshes with
@@ -1003,10 +1029,7 @@ function initRenderer() {
   scene.add(R3.rally);
 
   loadGlbModels();
-  R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"]]) {
-    if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
-  }
+  setResourceGeos();
   buildSmoke();
   addGraphicsControls();
   applyGraphics();
@@ -2690,16 +2713,6 @@ function fxBlast(x, y, kind) {
   }
   fxDustRing(x, y, 0.35 * big, 10);
 }
-// Which kind of gun fired the shot that just landed at (x, y): the event
-// doesn't say, so it's the projectile (drawn last frame) aimed nearest there.
-function shooterAt(x, y) {
-  let best = -1, bd = 1.5;
-  for (let i = 0; i < Math.min(projCount, 256); i++) {
-    const b = i * PROJ_STRIDE, d = Math.hypot(projBuf[b + 8] - x, projBuf[b + 9] - y) + Math.hypot(projBuf[b] - x, projBuf[b + 1] - y) * 0.5;
-    if (d < bd) { bd = d; best = projBuf[b + 6]; }
-  }
-  return best;
-}
 
 // Kinds that throw up dust as they go, and how much (0..1).
 function fxDustOf(kind) {
@@ -2976,6 +2989,8 @@ const GFX_SETTINGS = [
     hint: "How much grass, flowers and pebbles cover the ground." },
   { key: "sway", label: "Wind", type: "toggle", fast: false, fancy: true, hint: "Trees, bushes and grass sway." },
   { key: "smoke", label: "Chimney smoke", type: "toggle", fast: false, fancy: true, hint: "Smoke from chimneys, campfires and burning buildings." },
+  { key: "models", label: "Models", type: "choice", options: [["detailed", "Detailed"], ["simple", "Simple"]], fast: "detailed", fancy: "detailed",
+    hint: "Detailed: the models made in Blender. Simple: the older ones built in code." },
   { key: "effects", label: "Small effects", type: "toggle", fast: true, fancy: true,
     hint: "Dust, wood chips, splashes, sparks, boat wakes, and new units popping in." },
 ];
@@ -3055,6 +3070,7 @@ function applyGraphics() {
     R3.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   }
   applyGrass();
+  applyModels();
   if (R3.smoke) R3.smoke.visible = GFX.smoke;
   if (!GFX.effects) Fx.clear();
   if (view._w) resizeRenderer();
