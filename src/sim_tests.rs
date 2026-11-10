@@ -11,7 +11,7 @@ pub fn town(seed: u32, difficulty: u32, players: u8) -> Game {
     let mut g = Game::new(seed, difficulty, players);
     for p in 1..=g.n_players {
         let c = g.find_first(p, Kind::Capitol).unwrap();
-        let (bx, by) = (g.ents[c].tx + 1, g.ents[c].ty + 1);
+        let (bx, by) = (g.ents[c].tx, g.ents[c].ty);
         for (hx, hy) in [(bx - 4, by + 1), (bx + 2, by - 4)] {
             g.spawn_building(Kind::Hut, p, hx, hy, 1.0);
         }
@@ -173,7 +173,7 @@ fn extractors_need_their_deposit() {
     let mut g = town(5, 1, 2);
     // A quarry right beside the Capitol is nowhere near stone.
     let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
-    let (x, y) = (cap.tx - 3, cap.ty - 3);
+    let (x, y) = (cap.tx - 5, cap.ty - 5);
     assert!(!g.near_deposit(Kind::Quarry, x, y));
     let r = g.apply(1, Command::Place { ids: vec![], kind: Kind::Quarry, tx: x, ty: y });
     assert_eq!(r.err(), Some(CmdError::NoDeposit(Dep::Stone)));
@@ -286,7 +286,11 @@ fn losing_a_farm_empties_the_furthest_houses_first() {
 fn a_free_worker_walks_over_and_becomes_the_soldier() {
     let mut g = town(5, 1, 2);
     build(&mut g, Kind::LumberCamp);
-    let barracks = build(&mut g, Kind::Barracks);
+    // A walk away from the square, so they're seen on the way.
+    let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+    let (x, y) = spot_near(&g, Kind::Barracks, cap.tx + 6, cap.ty);
+    let barracks = g.spawn_building(Kind::Barracks, 1, x, y, 1.0);
+    g.resolve();
     g.tick();
     let (people, free_before) = (g.players[1].people, g.players[1].free);
     g.apply(1, Command::Train { ids: vec![barracks], kind: Kind::Spearman }).unwrap();

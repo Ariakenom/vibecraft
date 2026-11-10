@@ -526,8 +526,9 @@ versions don't play together.
 - **Winning:** destroy every rival Capitol. From the Medieval era a player
   can found as many as they like (8 wood, 8 stone, 6 brick, 4 builders; the
   first holds nothing). Losing one costs only that one; lose the last (a
-  foundation doesn't count) and you're out. Every Capitol has a town
-  square, with its statue, in front of it: newcomers turn up at the one
+  foundation doesn't count) and you're out. A Capitol is a town square:
+  a statue on one tile in the middle of 5x5 tiles of paving, where nothing
+  else can be built. Newcomers turn up at the one
   nearest the house whose bed is free, free workers wait at the nearest,
   and a job takes the nearest free worker. So a second Capitol grows its
   own town.

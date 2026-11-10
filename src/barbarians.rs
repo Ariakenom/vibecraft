@@ -73,7 +73,7 @@ impl Game {
         }
         g.set_frontier(front);
         for (i, &(bx, by)) in bases.iter().enumerate() {
-            let cap = g.spawn_building(Kind::Capitol, i as u8 + 1, bx - 1, by - 1, 1.0);
+            let cap = g.spawn_building(Kind::Capitol, i as u8 + 1, bx, by, 1.0);
             g.ents[cap as usize].starting = true;
         }
         for _ in 0..FIRST_CAMPS {
@@ -164,7 +164,7 @@ impl Game {
             let (sx, sy) = (site.x as f32 + 0.5, site.y as f32 + 0.5);
             !held.contains(&(s as u16))
                 && !self.ents.iter().any(|e| e.alive && e.owner != GAIA && !self.is_barb(e.owner) && (e.x - sx).hypot(e.y - sy) < UNSEEN)
-                && (site.y - 2..site.y + 2).all(|y| (site.x - 2..site.x + 2).all(|x| self.map.passable(x, y) && self.map.bld_at[self.map.idx(x, y)] < 0))
+                && (site.y - 2..=site.y + 2).all(|y| (site.x - 2..=site.x + 2).all(|x| self.map.passable(x, y) && self.map.bld_at[self.map.idx(x, y)] < 0))
         });
         let Some(s) = free else { return };
         let site = self.frontier.as_ref().unwrap().sites[s];
@@ -175,7 +175,7 @@ impl Game {
         let (diff, phase) = (self.ais[owner as usize].difficulty, owner as f32 * 0.13);
         self.players[owner as usize] = Player::new(handicap(diff));
         self.ais[owner as usize] = Ai::new(diff, true, phase);
-        let cap = self.spawn_building(Kind::Capitol, owner, site.x - 1, site.y - 1, 1.0);
+        let cap = self.spawn_building(Kind::Capitol, owner, site.x, site.y, 1.0);
         // Like a start's: it holds no slots.
         self.ents[cap as usize].starting = true;
     }

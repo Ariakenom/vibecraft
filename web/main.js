@@ -77,7 +77,7 @@ const DESC = {
   [K.Jet]: "A faster, tougher fighter. Owns the air. Fuel for 50 seconds away from an airfield or carrier, then it's slow until it gets back, and 14 bursts of fire. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against foot soldiers, weak against riders.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
-  [K.Capitol]: "Your seat of power: it makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
+  [K.Capitol]: "Your seat of power, a town square round a statue: free workers wait on it, newcomers turn up there, and nothing else can be built on it. It makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
   [K.Barracks]: "Trains spearmen; swordsmen, musketeers, riflemen and infantry as the eras come.",
   [K.Range]: "Trains archers; crossbowmen from the Medieval era and machine gunners from the Industrial.",
   [K.Stable]: "Trains horsemen and knights, and dragoons from the Gunpowder era.",
@@ -421,6 +421,10 @@ function fmtTime(s) { s = Math.floor(s); return `${Math.floor(s / 60)}:${String(
 // A kind's slot lists as [[resource, amount], ...]: which 0 cost, 1 makes, 2 consumes.
 function slotsOf(k, which = 0) { const out = []; for (let n = 0; n < W.kind_slots_n(k, which); n++) out.push([W.kind_slots_res(k, which, n), W.kind_slots_amt(k, which, n)]); return out; }
 function stat(k, i) { return W.kind_stat(k, i); }
+// The ground a building covers, in tiles a side: its footprint, or a
+// Capitol's whole town square (its statue stands on one tile in the middle
+// of 5x5: SQUARE_HALF in people.rs).
+function groundSize(k) { return k === K.Capitol ? 5 : stat(k, 6); }
 function free(r) { return W.supply(r) - W.used(r); }
 function canAfford(k) { return W.short_of(k) < 0; }
 // The building that makes each resource (for "build a lumber camp" hints).
@@ -683,7 +687,7 @@ function drawMinimap() {
   for (let i = 0; i < entCount; i++) {
     const k = E(i, F.kind), o = E(i, F.owner);
     mctx.fillStyle = (E(i, F.flags) & 1) ? "#fff" : PLIGHT[o];
-    if (isBld(k)) { const z = stat(k, 6) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
+    if (isBld(k)) { const z = groundSize(k) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
     else mctx.fillRect(E(i, F.x) * s - 1.5, E(i, F.y) * s - 1.5, 3, 3);
   }
   // Warnings: a red ring that pulses for the first seconds, then fades.

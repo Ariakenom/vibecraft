@@ -511,17 +511,28 @@ function buildingModel(kind, owner) {
   };
   switch (kind) {
     case K.Capitol: {
-      m.add(box(2.85, 0.3, 2.85), STONE2, 0, 0.15, 0);
-      m.add(box(1.8, 1.1, 1.8), STONE, 0, 0.85, 0);
-      const pyr = cone(1.4, 1.0, 4); pyr.rotateY(Math.PI / 4); m.add(pyr, team, 0, 1.9, 0);
-      for (const [x, z] of [[1.15, 1.15], [-1.15, 1.15], [1.15, -1.15], [-1.15, -1.15]]) {
-        m.add(cyl(0.25, 0.28, 1.4, 10), STONE, x, 0.7, z);
-        m.add(cone(0.32, 0.45, 10), dark, x, 1.62, z);
+      // (As `capitol` in assets/models.py, which is drawn when the models
+      // are built in.) Just the statue in the middle of its town square (the paving is
+      // `campfire`, drawn round it): a stepped plinth with team-coloured
+      // drapes, and a bronze robed figure with one arm up holding a torch
+      // (its flame flickers: `updateCampfires`). Team flags at the square's
+      // corners say whose it is from afar.
+      m.add(box(1.0, 0.1, 1.0), "#b5ab98", 0, 0.14, 0);
+      m.add(box(0.8, 0.12, 0.8), "#a89f8c", 0, 0.25, 0);
+      m.add(box(0.56, 0.62, 0.56), "#d8cfbb", 0, 0.62, 0);
+      for (const [x, z, r] of [[0, 0.285, 0], [0, -0.285, 0], [0.285, 0, Math.PI / 2], [-0.285, 0, Math.PI / 2]]) m.add(box(0.26, 0.4, 0.02), team, x, 0.68, z, r);
+      m.add(box(0.7, 0.1, 0.7), "#bfb6a2", 0, 0.98, 0);
+      m.add(cone(0.28, 0.8, 10), "#a67c3d", 0, 1.43, 0);
+      m.add(cyl(0.12, 0.17, 0.3, 8), "#b98b45", 0, 1.76, 0);
+      m.add(ball(0.12, 1), "#c29650", 0, 2.01, 0);
+      const arm = box(0.07, 0.34, 0.07); arm.rotateZ(-0.35);
+      m.add(arm, "#b98b45", 0.2, 2.0, 0);
+      m.add(cyl(0.03, 0.03, 0.34, 6), "#6e4a26", 0.3, 2.24, 0);
+      m.add(cyl(0.07, 0.04, 0.08, 8), "#8a6330", 0.3, 2.42, 0);
+      for (const [x, z] of [[2.3, 2.3], [-2.3, 2.3], [2.3, -2.3], [-2.3, -2.3]]) {
+        m.add(cyl(0.025, 0.025, 1.3, 5), DARKWOOD, x, 0.65, z);
+        m.flag(0.4, 0.24, team, x + 0.2, 1.15, z);
       }
-      for (let i = -3; i <= 3; i++) { m.add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, 1.35).add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, -1.35); }
-      m.add(box(0.4, 0.6, 0.04), DARKWOOD, 0, 0.6, 0.91);
-      m.add(cyl(0.025, 0.025, 1.0, 5), DARKWOOD, 0, 2.6, 0);
-      m.flag(0.5, 0.28, team, 0.25, 2.95, 0);
       break;
     }
     case K.Barracks:
@@ -1750,52 +1761,35 @@ function viewQuad() {
 }
 
 // --- Per-frame update --------------------------------------------------------
-// The Capitol's gathering spot, where free workers wait and newcomers turn
-// up: a town square in front of its door (+z; CAMPFIRE_AHEAD in people.rs).
-// Paving fills the area (CAMPFIRE_AREA) where a worker counts as free, with
-// a statue on a stepped plinth in the middle, holding a torch whose flame
-// flickers (`updateCampfires`). (Named for the campfire it replaced.)
-const CAMPFIRE = [0, 0.1, 3.2], CAMPFIRE_AREA = 3.0;
+// A Capitol is a town square, where free workers wait and newcomers turn up:
+// 5x5 tiles of paving (SQUARE_HALF in people.rs) round the statue, the
+// Capitol's own model. The paving is apart from that model so a click on
+// the square picks the ground or the workers on it, not the Capitol.
+// (Named for the campfire it replaced.)
+const SQUARE_HALF = 2.5, TORCH = [0.3, 2.6, 0];
 let campfireGeo = null, flameMat = null;
 function campfire() {
   if (!campfireGeo) {
     const m = new Model();
-    // Paving: a dark kerb, light stone inside, a paler inner ring, and
-    // eight spokes between the two.
-    m.add(cyl(CAMPFIRE_AREA, CAMPFIRE_AREA, 0.08, 40), "#7d766a", 0, 0.04, 0);
-    m.add(cyl(CAMPFIRE_AREA - 0.14, CAMPFIRE_AREA - 0.14, 0.1, 40), "#bdb29d", 0, 0.05, 0);
-    m.add(cyl(1.55, 1.55, 0.12, 32), "#a29a88", 0, 0.06, 0);
-    m.add(cyl(1.4, 1.4, 0.14, 32), "#d3c9b4", 0, 0.07, 0);
-    for (let k = 0; k < 8; k++) {
-      const a = k / 8 * Math.PI * 2, r = (1.55 + CAMPFIRE_AREA - 0.14) / 2;
-      m.add(box(0.12, 0.13, CAMPFIRE_AREA - 0.14 - 1.55), "#a29a88", Math.sin(a) * r, 0.065, Math.cos(a) * r, a);
-    }
-    // Stone bollards round the edge, between the spokes.
-    for (let k = 0; k < 8; k++) {
-      const a = (k + 0.5) / 8 * Math.PI * 2;
-      m.add(cyl(0.08, 0.1, 0.3, 8), "#8f887b", Math.sin(a) * (CAMPFIRE_AREA - 0.3), 0.2, Math.cos(a) * (CAMPFIRE_AREA - 0.3));
-    }
-    // The plinth: two round steps, a square block, a cap.
-    m.add(cyl(0.95, 1.0, 0.1, 20), "#b5ab98", 0, 0.19, 0);
-    m.add(cyl(0.7, 0.78, 0.12, 16), "#a89f8c", 0, 0.3, 0);
-    m.add(box(0.62, 0.62, 0.62), "#d8cfbb", 0, 0.66, 0);
-    m.add(box(0.76, 0.1, 0.76), "#bfb6a2", 0, 1.02, 0);
-    // The statue, in bronze: a robed figure with one arm up, holding a torch.
-    m.add(cone(0.3, 0.8, 10), "#a67c3d", 0, 1.47, 0);
-    m.add(cyl(0.12, 0.17, 0.3, 8), "#b98b45", 0, 1.8, 0);
-    m.add(ball(0.12, 1), "#c29650", 0, 2.05, 0);
-    const arm = box(0.07, 0.34, 0.07); arm.rotateZ(-0.35);
-    m.add(arm, "#b98b45", 0.2, 2.04, 0);
-    m.add(cyl(0.03, 0.03, 0.34, 6), "#6e4a26", 0.3, 2.28, 0);
-    m.add(cyl(0.07, 0.04, 0.08, 8), "#8a6330", 0.3, 2.46, 0);
+    const H = SQUARE_HALF, k = 0.14;
+    // A dark kerb that reaches into the ground (so slopes don't show under
+    // it), light stone inside, a paler square round the statue, and paths
+    // of darker stone from it to the middle of each side.
+    m.add(box(H * 2, 0.5, H * 2), "#7d766a", 0, -0.17, 0);
+    m.add(box(H * 2 - k * 2, 0.1, H * 2 - k * 2), "#bdb29d", 0, 0.05, 0);
+    m.add(box(2.2, 0.12, 2.2), "#a29a88", 0, 0.06, 0);
+    m.add(box(1.96, 0.14, 1.96), "#d3c9b4", 0, 0.07, 0);
+    const path = H - k - 1.1;
+    for (const [x, z, w, d] of [[0, 1.1 + path / 2, 0.5, path], [0, -1.1 - path / 2, 0.5, path], [1.1 + path / 2, 0, path, 0.5], [-1.1 - path / 2, 0, path, 0.5]]) m.add(box(w, 0.13, d), "#a29a88", x, 0.065, z);
+    // Stone bollards along the edges, either side of the paths.
+    for (const t of [-1.4, -0.7, 0.7, 1.4]) for (const [x, z] of [[t, H - 0.25], [t, -H + 0.25], [H - 0.25, t], [-H + 0.25, t]]) m.add(cyl(0.08, 0.1, 0.3, 8), "#8f887b", x, 0.2, z);
     campfireGeo = m.build();
     flameMat = new THREE.MeshBasicMaterial({ color: "#ffb347", transparent: true, opacity: 0.9 });
   }
   const g = new THREE.Group();
-  g.position.set(CAMPFIRE[0], 0, CAMPFIRE[2]);
   const square = new THREE.Mesh(campfireGeo, entMat); square.castShadow = true; square.receiveShadow = true; g.add(square);
   const flame = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 7), flameMat);
-  flame.position.set(0.3, 2.65, 0); flame.userData.flame = true; g.add(flame);
+  flame.position.set(TORCH[0], TORCH[1], TORCH[2]); flame.userData.flame = true; g.add(flame);
   (R3.flames ??= []).push(flame);
   return g;
 }
@@ -1816,8 +1810,8 @@ function makeObj(i) {
   body.userData.obj = o;
   if (isBld(kind)) {
     const s = stat(kind, 6);
-    o.baseY = flattenUnder(o.x, o.y, s);
-    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3 }[kind] || 1.6;
+    o.baseY = flattenUnder(o.x, o.y, groundSize(kind));
+    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3, [K.Capitol]: 2.5 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
     // A dock turns its pier (+z) to the water beside it.
@@ -2085,7 +2079,7 @@ function render3d(alpha, now, dt) {
       const planned = !!(flags & 512);
       o.body.visible = !planned;
       if (planned && !o.plan && E(i, F.owner) === ME) {
-        const s = stat(kind, 6);
+        const s = groundSize(kind);
         o.plan = new THREE.Mesh(new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: PCOL[ME], transparent: true, opacity: 0.28, depthWrite: false }));
         o.plan.position.y = 0.05; o.plan.renderOrder = 2;
         o.root.add(o.plan);
@@ -2093,7 +2087,7 @@ function render3d(alpha, now, dt) {
       if (o.plan) o.plan.visible = planned;
       o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
       o.body.material = (flags & 8) ? hitMat : entMat;
-      setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
+      setRing(o, !!(flags & 1), kind === K.Capitol ? 1.2 : stat(kind, 6) * 0.78);
       continue;
     }
     let x = E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha;
@@ -2655,7 +2649,7 @@ function updateGhost() {
     if (R3.ghost) R3.scene.remove(R3.ghost);
     R3.ghost = new THREE.Group();
     R3.ghost.add(new THREE.Mesh(cachedModel(placing, ME).body, ghostMat));
-    const s = stat(placing, 6);
+    const s = groundSize(placing);
     R3.footprint = new THREE.Mesh(new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#7be864", transparent: true, opacity: 0.35, depthWrite: false }));
     R3.footprint.position.y = 0.06;
     R3.ghost.add(R3.footprint);
@@ -2851,8 +2845,8 @@ function setSmokeEmitters(list) {
 }
 // Where smoke comes out, relative to the building's centre.
 function updateSmoke() {
-  // Chimneys, the smoke hole of a hut someone lives in, the Capitol's campfire.
-  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: [CAMPFIRE[0] + 0.3, 2.6, CAMPFIRE[2]],
+  // Chimneys, the smoke hole of a hut someone lives in, the Capitol's torch.
+  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: TORCH,
     [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55],
     [K.Townhouse]: [0.35, 1.75, -0.2], [K.PowderMill]: [-0.45, 1.1, -0.45],
     [K.Tenement]: [0.4, 2.35, -0.2], [K.SteelMill]: [-0.9, 2.65, -0.8], [K.Factory]: [1.0, 2.3, -0.9], [K.Cannery]: [0.55, 1.55, -0.35],

@@ -382,7 +382,7 @@ static DESTROYER: Stats = unit(800.0, 30.0, 9.0, 1.4, 3.6, 11.0, &[(Steel, 2), (
 // a player can found more, as many as they like; those hold their cost like
 // any building, the first one holds nothing. A player is out only when the
 // last one falls.
-static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 2), (Stone, 1), (Grain, 1), (Fruit, 1)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 3) };
+static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 2), (Stone, 1), (Grain, 1), (Fruit, 1)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 1) };
 // Houses: beds depend on how many different goods they get. A hut that's
 // full and has all the goods it can use becomes a cottage by itself, if the
 // cottage's extra wood and stone are free (`Game::upgrade_houses`).

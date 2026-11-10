@@ -559,7 +559,7 @@ impl Game {
         let mut g = Game::from_parts(seed, map, deps, Vec::new(), players, n_players, Vec::new(), vec![0; n], ais, PLAYER);
         for (i, &(bx, by)) in bases.iter().enumerate() {
             let owner = i as u8 + 1;
-            let cap = g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
+            let cap = g.spawn_building(Kind::Capitol, owner, bx, by, 1.0);
             g.ents[cap as usize].starting = true;
             #[allow(clippy::reversed_empty_ranges)] // START_WORKERS is a tuning knob, 0 for now
             for _ in 0..START_WORKERS {
@@ -1383,24 +1383,26 @@ impl Game {
     /// `spot_free`, as if building `except` (an index into `ents`) were gone.
     pub(crate) fn spot_free_but(&self, kind: Kind, tx: i32, ty: i32, owner: u8, margin: i32, except: i32) -> bool {
         let s = kind.stats().size;
-        for y in ty - margin..ty + s + margin {
-            for x in tx - margin..tx + s + margin {
+        // A Capitol needs its whole town square: dry, clear and free.
+        let sq = if kind == Kind::Capitol { SQUARE_HALF as i32 } else { 0 };
+        for y in ty - margin - sq..ty + s + margin + sq {
+            for x in tx - margin - sq..tx + s + margin + sq {
                 if !self.map.inside(x, y) {
                     return false;
                 }
                 let i = self.map.idx(x, y);
-                let inner = x >= tx && y >= ty && x < tx + s && y < ty + s;
+                let inner = x >= tx - sq && y >= ty - sq && x < tx + s + sq && y < ty + s + sq;
                 if (self.map.bld_at[i] >= 0 && self.map.bld_at[i] != except) || (inner && (self.map.wet(x, y) || self.map.dep_at[i] >= 0)) {
                     return false;
                 }
             }
         }
-        // Keep every campfire clear: the free workers stand there.
+        // Keep every town square clear: the free workers stand there.
         let (x0, y0, x1, y1) = (tx as f32, ty as f32, (tx + s) as f32, (ty + s) as f32);
-        // (Everyone's. A campfire is just in front of its Capitol, so only
-        // Capitols standing on the tiles round the footprint can matter:
-        // looking there, not at every entity, keeps the AI's searches cheap.)
-        let pad = (CAMPFIRE_CLEAR + CAMPFIRE_AHEAD).ceil() as i32 + Kind::Capitol.stats().size;
+        // (Everyone's, foundations too. Only Capitols standing on the tiles
+        // round the footprint can matter: looking there, not at every
+        // entity, keeps the AI's searches cheap.)
+        let pad = SQUARE_HALF.ceil() as i32 + Kind::Capitol.stats().size;
         for y in (ty - pad).max(0)..(ty + s + pad).min(self.map.h) {
             for x in (tx - pad).max(0)..(tx + s + pad).min(self.map.w) {
                 let b = self.map.bld_at[self.map.idx(x, y)];
@@ -1408,12 +1410,12 @@ impl Game {
                     continue;
                 }
                 let c = &self.ents[b as usize];
-                if !(c.alive && c.owner != GAIA && c.kind == Kind::Capitol && c.built >= 1.0) {
+                if !(c.alive && c.owner != GAIA && c.kind == Kind::Capitol) {
                     continue;
                 }
                 let (cx, cy) = self.campfire_of(b as usize);
                 let (nx, ny) = (cx.clamp(x0, x1), cy.clamp(y0, y1));
-                if (nx - cx).powi(2) + (ny - cy).powi(2) < CAMPFIRE_CLEAR * CAMPFIRE_CLEAR {
+                if (nx - cx).abs() < SQUARE_HALF && (ny - cy).abs() < SQUARE_HALF {
                     return false;
                 }
             }

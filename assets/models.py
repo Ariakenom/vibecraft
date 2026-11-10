@@ -361,53 +361,36 @@ def stone_bands(m, r, y0, y1, col, seg=10):
 
 # --- Buildings -------------------------------------------------------------------------
 def capitol():
+    """The Capitol is a town square: this is its statue, on the one tile in the
+    middle (the 5x5 paving round it is drawn by the game, `campfire` in
+    render3d.js). A stepped plinth with team drapes, a bronze robed figure
+    holding up a torch (the game puts a flame at (0.3, 2.6, 0)), and team
+    flags at the square's corners.
+
+    It leaves the random numbers as the keep it replaced did (1076 draws), so
+    every model made after it, the trees and boulders among them, keeps its
+    shape."""
+    state = random.getstate()
     m = Model("Capitol")
-    s = 3
-    m.box(2.85, 0.5, 2.85, "#6f6553", 0, -0.2, 0, vary=0.02)
-    m.box(2.8, 0.18, 2.8, STONE2, 0, 0.09, 0, bevel=0.03)
-    m.box(2.5, 0.12, 2.5, STONE, 0, 0.24, 0, bevel=0.02)
-    # the keep
-    m.box(1.8, 1.05, 1.8, STONE, 0, 0.82, 0, bevel=0.03, vary=0.02)
-    for yy in (0.55, 0.95):
-        m.box(1.84, 0.05, 1.84, STONE3, 0, yy, 0, vary=0.02)
-    merlons(m, 1.8, 1.8, 1.35, STONE, size=0.12, gap=0.3)
-    m.cyl(1.32, 0.0, 0.95, TEAM, 0, 1.82, 0, seg=4, ry=math.pi / 4, vary=0.02)
-    m.cyl(0.08, 0.0, 0.3, GOLD, 0, 2.43, 0, seg=6, vary=0)
-    # corner towers
-    for sx in (-1, 1):
-        for sz in (-1, 1):
-            x, z = sx * 1.15, sz * 1.15
-            m.cyl(0.3, 0.26, 1.45, STONE, x, 0.95, z, seg=10, vary=0.02)
-            stone_bands(m, 0.27, 0.3, 1.6, STONE3)
-            for i in range(6):
-                a = i / 6 * math.tau
-                m.box(0.09, 0.1, 0.09, STONE, x + math.cos(a) * 0.27, 1.72, z + math.sin(a) * 0.27, vary=0.05)
-            m.cyl(0.34, 0.0, 0.55, TEAM_DARK, x, 1.98, z, seg=10, vary=0.02)
-            if sz > 0:
-                window(m, x, 1.15, z + 0.27, w=0.07, h=0.14)
-    # walls between the towers
-    for sz in (-1, 1):
-        m.box(2.1, 0.55, 0.18, STONE2, 0, 0.55, sz * 1.15, vary=0.03)
-        for i in range(-3, 4):
-            m.box(0.12, 0.12, 0.2, STONE2, i * 0.3, 0.88, sz * 1.15, vary=0.06)
-    for sx in (-1, 1):
-        m.box(0.18, 0.55, 2.1, STONE2, sx * 1.15, 0.55, 0, vary=0.03)
-        for i in range(-3, 4):
-            m.box(0.2, 0.12, 0.12, STONE2, sx * 1.15, 0.88, i * 0.3, vary=0.06)
-    # gatehouse with an arched door and banners
-    m.box(0.75, 0.95, 0.35, STONE3, 0, 0.6, 1.2, bevel=0.02)
-    merlons(m, 0.75, 0.35, 1.07, STONE3, size=0.1, gap=0.25)
-    m.box(0.36, 0.5, 0.04, DARKWOOD, 0, 0.5, 1.38, vary=0.02)
-    m.cyl(0.18, 0.18, 0.04, DARKWOOD, 0, 0.75, 1.38, seg=10, rx=math.pi / 2, vary=0)
-    for sx in (-1, 1):
-        m.box(0.14, 0.42, 0.02, TEAM, sx * 0.25, 0.68, 1.39, vary=0)
-        m.box(0.14, 0.04, 0.025, GOLD, sx * 0.25, 0.47, 1.395, vary=0)
-    # steps up to the gate
-    for i in range(3):
-        m.box(0.6, 0.06, 0.12, STONE3, 0, 0.27 - i * 0.07, 1.42 + i * 0.1, vary=0.04)
-    for sx in (-1, 1):
-        window(m, sx * 0.5, 1.0, 0.91, w=0.12, h=0.2)
-    m.pole_flag(0, 0, 1.0, w=0.55, fh=0.32, y0=2.45)
+    m.box(1.0, 0.1, 1.0, "#b5ab98", 0, 0.14, 0, bevel=0.01)
+    m.box(0.8, 0.12, 0.8, "#a89f8c", 0, 0.25, 0, bevel=0.01)
+    m.box(0.56, 0.62, 0.56, "#d8cfbb", 0, 0.62, 0, bevel=0.01, vary=0.02)
+    for x, z, r in [(0, 0.285, 0), (0, -0.285, 0), (0.285, 0, math.pi / 2), (-0.285, 0, math.pi / 2)]:
+        m.box(0.26, 0.4, 0.02, TEAM, x, 0.68, z, ry=r, vary=0)
+        m.box(0.26, 0.03, 0.025, GOLD, x, 0.87, z, ry=r, vary=0)
+    m.box(0.7, 0.1, 0.7, "#bfb6a2", 0, 0.98, 0, bevel=0.01)
+    BRONZE, BRONZE2 = "#a67c3d", "#b98b45"
+    m.cyl(0.28, 0.0, 0.8, BRONZE, 0, 1.43, 0, seg=10, vary=0.02)
+    m.cyl(0.17, 0.12, 0.3, BRONZE2, 0, 1.76, 0, seg=8, vary=0.02)
+    m.ball(0.12, "#c29650", 0, 2.01, 0, sub=1, vary=0.02)
+    m.box(0.07, 0.34, 0.07, BRONZE2, 0.2, 2.0, 0, rz=-0.35, vary=0)
+    m.cyl(0.03, 0.03, 0.34, "#6e4a26", 0.3, 2.24, 0, seg=6, vary=0)
+    m.cyl(0.04, 0.07, 0.08, "#8a6330", 0.3, 2.42, 0, seg=8, vary=0)
+    for x, z in [(2.3, 2.3), (-2.3, 2.3), (2.3, -2.3), (-2.3, -2.3)]:
+        m.pole_flag(x, z, 1.3, w=0.4, fh=0.24)
+    random.setstate(state)
+    for _ in range(1076):
+        random.random()
     return m
 
 def barracks():

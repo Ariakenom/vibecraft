@@ -93,7 +93,9 @@ beds; nobody sits inside them.
   more plentiful later rather than scarcer. Total beds = the sum over all
   houses. Everyone alive holds a bed: workers + soldiers ≤ beds.
 - **The campfire.** Each Capitol has a campfire in front of it with a
-  marked circle around it (radius 3) where nothing can be built. Newcomers
+  marked circle around it (radius 3) where nothing can be built. (Since
+  November 2026 the Capitol *is* the square: a statue on one tile in the
+  middle of 5x5 tiles of paving, kept clear.) Newcomers
   appear there, and workers with nothing to do go back there. **A worker
   standing idle in the circle is free**: the top bar's people chip counts
   them. So the number of free people is something you see, not a figure.
