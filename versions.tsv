@@ -34,3 +34,5 @@
 1794337598	2026-11-10	67f8d08823a89fb264082180fc4bce8475759831	Merge remote-tracking branch 'origin/main'
 1794352440	2026-11-11	e39a5234b59363a950c4d8515b4194a7ffe568e1	Models setting: Simple first, Detailed second (the more demanding choice is on the right, as in the other settings)
 1794352446	2026-11-11	c933bb52346511403d4ee640f4ffcff02b576762	Merge pull request #54 from Ariakenom/models-order
+1794435363	2026-11-11	5c17d5c7408935b7d1da5fae0e14cc9feb490ba0	Starving one at a time; drag every seat, mid-game too; speed 1-10x online
+1794439135	2026-11-12	7519608e7cb6de76787d4a901180e599580ba0b2	Merge pull request #55 from Ariakenom/seats-drag
