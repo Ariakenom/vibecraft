@@ -39,7 +39,7 @@ const setSpeed = (pg, v) => pg.evaluate(v => { const s = $("speedSlider"); s.val
 await setSpeed(host, 2);
 await guest.waitForFunction(() => mp.pace() === 2, null, { timeout: 5000 });
 check(await guest.evaluate(() => !$("speedBox").hidden && $("speedSlider").disabled && $("speedLabel").textContent === "2×") && await told(guest, "speed to 2×"), "the host sets 2×: the guest sees it");
-check(await host.evaluate(() => $("speedSlider").max === "2"), "online the slider goes up to 2×");
+check(await host.evaluate(() => $("speedSlider").max === "10"), "online the slider goes up to 10×, as alone");
 await sleep(3000);
 const [hr, gr, sr] = await Promise.all([rateOf(host), rateOf(guest), rateOf(spec, 4000)]);
 check(hr > 34 && hr < 46 && gr > 34 && gr < 46, `both run at about 40 ticks a second (host ${hr.toFixed(1)}, guest ${gr.toFixed(1)})`);

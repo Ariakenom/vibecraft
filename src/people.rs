@@ -598,41 +598,52 @@ impl Game {
         }
     }
 
-    /// Step 7: more people than beds. Free workers leave first (newest
-    /// first), then workers at producers that don't make house goods, then
-    /// any worker. Soldiers stay: they hold their beds while they live.
+    /// Step 7: more people than beds. One person at a time starves: they
+    /// lose health over `STARVE_SECS` until they die, then the next. Free
+    /// workers go first (newest first), then workers at producers that
+    /// don't make house goods, then any worker; whoever is weakest (already
+    /// starving) goes before the rest, so it's the same one until they die.
+    /// Soldiers stay: they hold their beds while they live. With beds back,
+    /// the starving stop losing health. Nothing is stored for this: the
+    /// choice comes from health and order alone, so every copy of the game
+    /// (and every save) agrees.
     fn leave(&mut self, owner: u8) {
         let p = self.players[owner as usize];
-        let mut over = p.people.saturating_sub(p.beds);
-        if over == 0 {
+        let over = p.people > p.beds;
+        let was = self.players[owner as usize].starving;
+        self.players[owner as usize].starving = over;
+        if !over {
             return;
         }
         let makes_goods = |g: &Game, e: &Entity| match e.order {
             Order::Work(b) => g.ents.get(b as usize).is_some_and(|t| t.kind.stats().produces.iter().any(|&(r, _)| r.is_house_good())),
             _ => false,
         };
-        for pass in 0..3 {
-            for i in (0..self.ents.len()).rev() {
-                if over == 0 {
-                    break;
-                }
-                let e = &self.ents[i];
-                if !e.alive || e.owner != owner || e.kind != Kind::Worker {
-                    continue;
-                }
-                let go = match pass {
-                    0 => self.is_free_worker(e),
-                    1 => !makes_goods(self, e),
-                    _ => true,
-                };
-                if go {
-                    self.vanish(i);
-                    over -= 1;
-                    let p = &mut self.players[owner as usize];
-                    p.people -= 1;
-                    p.free = p.free.saturating_sub(pass.eq(&0) as u32);
-                }
+        // (pass, health fraction) of the best so far: lower is sooner.
+        let mut pick: Option<(usize, u8, f32)> = None;
+        for i in (0..self.ents.len()).rev() {
+            let e = &self.ents[i];
+            if !e.alive || e.owner != owner || e.kind != Kind::Worker || e.aboard != 0 {
+                continue;
             }
+            let pass = if self.is_free_worker(e) { 0 } else if !makes_goods(self, e) { 1 } else { 2 };
+            let frac = e.hp / e.kind.stats().hp;
+            let better = match pick {
+                None => true,
+                // A starving one (hurt) first, then by pass, then newest.
+                Some((_, bp, bf)) => frac < bf - 1e-6 || ((frac - bf).abs() <= 1e-6 && pass < bp),
+            };
+            if better {
+                pick = Some((i, pass, frac));
+            }
+        }
+        let Some((i, _, _)) = pick else { return };
+        let (x, y) = (self.ents[i].x, self.ents[i].y);
+        let e = &mut self.ents[i];
+        e.hp -= e.kind.stats().hp * DT / STARVE_SECS;
+        e.unsupplied = true; // (drawn as suffering)
+        if !was && owner == self.local {
+            self.push_event(Ev::Starving, x, y, 0.0);
         }
     }
 

@@ -145,12 +145,11 @@ for (const round of [1, 2]) {
   prev = n[0];
 }
 check(pg.errors.filter(e => !/WebSocket/.test(e)).length === 0, "no page errors"); if (pg.errors.length) console.log(pg.errors);
-// The lobby: each computer seat picks its own skill, and the game gets them.
+// The lobby: each computer seat picks its own skill (dragged from the row of computers), and the game gets them.
+await pg.evaluate(() => { seats = ["host", "ai", "ai", "open"]; seatDiff = [1, 1, 1, 1]; renderLobby(); });
+await pg.dragAndDrop('#lobbyAis .chip[data-token="ai:2"]', "#seats li:nth-child(2)");
+await pg.dragAndDrop('#lobbyAis .chip[data-token="ai:0"]', "#seats li:nth-child(3)");
 const skills = await pg.evaluate(() => {
-  seats = ["host", "ai", "ai", "open"]; seatDiff = [1, 1, 1, 1]; renderLobby();
-  const sels = [...document.querySelectorAll("#seats select")];
-  sels[0].value = "ai:2"; sels[0].dispatchEvent(new Event("change"));
-  [...document.querySelectorAll("#seats select")][1].value = "ai:0"; [...document.querySelectorAll("#seats select")][1].dispatchEvent(new Event("change"));
   const shown = [...document.querySelectorAll("#seats .who")].map(e => e.textContent);
   const noGlobal = !document.getElementById("diff");
   beginGame();

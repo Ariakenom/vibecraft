@@ -292,6 +292,13 @@ fn a_free_worker_walks_over_and_becomes_the_soldier() {
     let barracks = g.spawn_building(Kind::Barracks, 1, x, y, 1.0);
     g.resolve();
     g.tick();
+    // (The town starts one over its beds: let that settle first.)
+    for _ in 0..2000 {
+        if g.players[1].people <= g.players[1].beds {
+            break;
+        }
+        g.tick();
+    }
     let (people, free_before) = (g.players[1].people, g.players[1].free);
     g.apply(1, Command::Train { ids: vec![barracks], kind: Kind::Spearman }).unwrap();
     g.tick();
@@ -413,21 +420,56 @@ fn newcomers_fill_free_beds_faster_in_a_bigger_town() {
 }
 
 #[test]
-fn when_beds_run_short_free_workers_leave_first() {
+fn when_beds_run_short_one_person_at_a_time_starves() {
     let mut g = town(5, 1, 2);
     let lodge = build(&mut g, Kind::HuntingLodge); // 12 beds
     let camp = build(&mut g, Kind::LumberCamp);
     run(&mut g, 20.0);
     let soldiers: Vec<u32> = (0..3).map(|k| g.spawn_unit(Kind::Spearman, 1, 28.0 + k as f32, 28.0)).collect();
     g.tick();
-    // The lodge burns: back to 8 beds for 15 people. The free go first.
+    let before = g.players[1].people;
+    let workers = |g: &Game| g.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker).count();
+    let had = workers(&g);
+    // The lodge burns: back to 8 beds for 15 people. Nobody goes at once.
     g.ents[lodge as usize].hp = 0.0;
     g.tick();
     g.tick();
-    let p = g.players[1];
-    assert!(p.people <= p.beds, "{} people, {} beds", p.people, p.beds);
+    assert!(g.players[1].people > g.players[1].beds, "over the beds");
+    assert_eq!(workers(&g), had, "nobody leaves at once");
+    let hurt: Vec<&Entity> = g.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker && e.hp < e.kind.stats().hp).collect();
+    assert_eq!(hurt.len(), 1, "one starves at a time");
+    let first = hurt[0].id;
+    assert!(g.is_free_worker(hurt[0]), "a free worker first");
+    // About five seconds later they're dead, and only they are.
+    run(&mut g, STARVE_SECS + 0.2);
+    assert!(!g.alive(first), "dead within {STARVE_SECS} s");
+    assert_eq!(workers(&g), had - 1, "just one in that time");
     assert!(soldiers.iter().all(|&s| g.alive(s)), "soldiers keep their beds");
+    // In the end the town fits its beds again, the crew still at work.
+    run(&mut g, STARVE_SECS * 8.0);
+    let p = g.players[1];
+    assert!(p.people <= p.beds && p.people < before, "{} people, {} beds", p.people, p.beds);
     assert!(g.ents[camp as usize].crewed, "workers at work stay while the free ones can go");
+}
+
+#[test]
+fn starving_stops_when_beds_come_back() {
+    let mut g = town(5, 1, 2);
+    let lodge = build(&mut g, Kind::HuntingLodge);
+    build(&mut g, Kind::LumberCamp);
+    run(&mut g, 20.0);
+    let had = g.players[1].people;
+    // Take the lodge's crew away (it pauses, its meat is gone, beds drop)...
+    let crew: Vec<u32> = g.ents.iter().filter(|e| e.alive && e.order == Order::Work(lodge)).map(|e| e.id).collect();
+    let (x, y) = (g.ents[lodge as usize].x + 4.0, g.ents[lodge as usize].y);
+    g.apply(1, Command::Smart { ids: crew.clone(), x, y }).unwrap();
+    run(&mut g, 2.0);
+    assert!(g.players[1].people > g.players[1].beds, "too few beds without the lodge");
+    // ...and send them back (Hire turns it on again) before anyone dies.
+    g.apply(1, Command::Hire { ids: vec![lodge], on: true }).unwrap();
+    run(&mut g, 20.0);
+    let p = g.players[1];
+    assert_eq!(p.people, had, "nobody starved: the beds came back in time");
 }
 
 #[test]

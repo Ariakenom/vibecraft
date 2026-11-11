@@ -36,12 +36,12 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 41,   // 41: the Capitol is a town square, one tile with 5x5 kept clear round it; 40: players who fall on the same tick: one winner for everyone; 39: computer players wait 30 s before looking again for room they lacked; 38: workers stay on their own land; 37: no fords between Frontier continents; 36: Frontier map sizes (`mode` 1 small, 2 large); 35: the Frontier mode (barbarian owners after the seats; the start carries `mode`); 34: a foundation takes its tiles only once a builder gets there; rivers and fords, a wider sea; 33: boats, docks, harbours and a wider sea; 32: an air defense fires at a nuke before it lands; 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 42,   // 42: the host can set any speed up to 10x, seats move by drag and drop, one person starves at a time; 41: the Capitol is a town square, one tile with 5x5 kept clear round it; 40: players who fall on the same tick: one winner for everyone; 39: computer players wait 30 s before looking again for room they lacked; 38: workers stay on their own land; 37: no fords between Frontier continents; 36: Frontier map sizes (`mode` 1 small, 2 large); 35: the Frontier mode (barbarian owners after the seats; the start carries `mode`); 34: a foundation takes its tiles only once a builder gets there; rivers and fords, a wider sea; 33: boats, docks, harbours and a wider sea; 32: an air defense fires at a nuke before it lands; 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
   MAX_AHEAD: 60,  // the live copy may run at most 3 s ahead of the confirmed one (ticks, at 1x)
-  SPEEDS: [1, 1.5, 2], // what the host can set
+  SPEEDS: Array.from({ length: 19 }, (_, k) => 1 + k / 2), // what the host can set: 1x to 10x, as alone
   BEHIND: 20,     // ticks a computer may lag behind the clock before it counts as not keeping up
   SUM_EVERY: 20,  // compare checksums every 20 ticks (1 s)
 };
@@ -391,6 +391,19 @@ class Server {
     this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, 0, 0]]);
     this.updateWindow();
   }
+  // The host's menu: the computer takes seat `slot` as `skill` (0 Easy to
+  // 2 Hard). A person playing it is dropped (they go on as a spectator); on
+  // a seat the computer already plays, only its skill changes.
+  toComputer(slot, skill) {
+    this.joining.delete(slot);
+    if (this.active.delete(slot)) {
+      Trace.event("drop", { slot, moved: true });
+      this.left.add(slot);
+      if (this.local.hooks.left) this.local.hooks.left(slot);
+    }
+    this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, skill + 1, 0]]);
+    this.updateWindow();
+  }
   // Hand a seat the computer is playing to a spectator (`token`). On tick T
   // (a second from now) the seat goes back to a person for everyone; the
   // spectator's copy of the game, fed by the recording, stops right after
@@ -666,7 +679,7 @@ class Client {
     // trust the most hopeful of the recent ones, and move there gently.
     // At another speed (or paused) the clock runs at `rate`: a new rate
     // starts the estimate afresh.
-    const rate = typeof d.rate === "number" && d.rate >= 0 && d.rate <= 4 ? d.rate : 1;
+    const rate = typeof d.rate === "number" && d.rate >= 0 && d.rate <= 10 ? d.rate : 1;
     if (rate !== this.rate) {
       this.rate = rate; this.offsets = []; this.offset = null;
       if (this.hooks.pace) this.hooks.pace(rate);
