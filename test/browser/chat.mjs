@@ -5,7 +5,7 @@ const b = await browser();
 const host = await open(b);
 await host.waitForFunction(() => roomCode && room);
 const code = await host.evaluate(() => roomCode);
-check(await host.evaluate(() => $("lobbyChat").hidden), "alone in the lobby: no chat box");
+check(await host.evaluate(() => !$("lobbyChat").hidden && $("lobbyChatInput").disabled && $("lobbyChatLog").getBoundingClientRect().height > 0), "alone in the lobby: the chat box is there at once, at its size, waiting for someone");
 const guest = await open(b, "#" + code);
 // Nobody picked a name: everyone has a random one from history.
 const gname = await guest.evaluate(() => myName);

@@ -2298,7 +2298,9 @@ function updateNukes(now, alpha = 0) {
     const ring = new THREE.Mesh(new THREE.RingGeometry(W.nuke_numbers(2) - 0.25, W.nuke_numbers(2), 48).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: "#ff3b2f", transparent: true, opacity: 0.7, depthWrite: false }));
     R3.scene.add(ring); R3.nukeRings.push(ring);
-    const im = new THREE.Mesh(R3.nukeGeo, entMat); im.receiveShadow = true; im.scale.setScalar(1.0); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
+    // The air defense's missile: the very one it fires at aircraft (R3.missiles), pointing along y.
+    R3.interceptorGeo ??= R3.missiles.geometry.clone().rotateZ(-Math.PI / 2);
+    const im = new THREE.Mesh(R3.interceptorGeo, R3.missiles.material); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
   }
   for (let k = 0; k < R3.nukeMesh.length; k++) {
     const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k], im = R3.interceptors[k];
@@ -2865,7 +2867,7 @@ function updateArrows(alpha) {
       continue;
     }
     const missile = shooter === K.AirDefense;
-    const fromH = torpedo ? 0.02 : missile ? 0.7 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
+    const fromH = torpedo ? 0.02 : missile ? 1.1 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
     const toH = torpedo ? 0.03 : missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
@@ -2977,7 +2979,7 @@ const GFX_SETTINGS = [
     hint: "Warm light, cool shade, a touch more colour and darker screen edges. Almost free." },
   { key: "bloom", label: "Glow", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
     hint: "Bright things glow: fire, sunlit roofs, glints on the water." },
-  { key: "tilt", label: "Tilt-shift", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
+  { key: "tilt", label: "Tilt-shift", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 0, fmt: gfxPct,
     hint: "Blurs what's nearer and farther than where you look, like a model town. Strongest zoomed in; gone zoomed out." },
   { key: "grass", label: "Grass and flowers", type: "slider", min: 0, max: 1, step: 0.05, fast: 0.75, fancy: 0.75, fmt: gfxPct,
     hint: "How much grass, flowers and pebbles cover the ground." },
@@ -3091,22 +3093,20 @@ function addGraphicsControls() {
     const n = gfxPanels.length;
     box.innerHTML = `
       <div class="row gfx-head">
-        <span class="note" id="gfxLabel${n}">Graphics</span>
+        <h2 id="gfxLabel${n}">Graphics</h2>
         <div class="seg gfx-seg" aria-labelledby="gfxLabel${n}"></div>
-        <button class="ghost gfx-more" aria-expanded="false" aria-controls="gfxList${n}">More settings</button>
         <button class="ghost gfx-show" title="Hide the menu while held, to see the game behind it">Hold to look</button>
       </div>
-      <div class="gfx-list" id="gfxList${n}" hidden></div>`;
+      <div class="gfx-list" id="gfxList${n}"></div>`;
     const seg = box.querySelector(".gfx-seg");
     for (const [k, label] of Object.entries(GFX_PRESETS)) {
       const b = document.createElement("button");
       b.dataset.q = k; b.textContent = label;
-      b.title = k === "fast" ? "No shadows, glow or blur: for slow computers and phones" : "Everything but contact shadows";
+      b.title = k === "fast" ? "No shadows, glow or blur: for slow computers and phones" : "Everything but contact shadows and tilt-shift";
       b.onclick = () => setGfxPreset(k);
       seg.append(b);
     }
-    const more = box.querySelector(".gfx-more"), list = box.querySelector(".gfx-list");
-    more.onclick = () => { list.hidden = !list.hidden; more.setAttribute("aria-expanded", !list.hidden); };
+    const list = box.querySelector(".gfx-list");
     for (const s of GFX_SETTINGS) {
       const item = document.createElement("div");
       item.className = "gfx-item"; item.dataset.key = s.key; item.title = s.hint || "";
@@ -3120,22 +3120,20 @@ function addGraphicsControls() {
         inp.oninput = () => setGfx(s.key, +inp.value);
         ctl.append(inp);
       } else {
+        // A drop-down, the more demanding choices further down.
         const opts = s.type === "toggle" ? [[false, "Off"], [true, "On"]] : s.options;
-        const sg = document.createElement("div"); sg.className = "seg small"; sg.id = id; sg.setAttribute("role", "group");
+        const sel = document.createElement("select"); sel.id = id;
         for (const [v, label] of opts) {
-          const b = document.createElement("button");
-          b.textContent = label; b.dataset.v = JSON.stringify(v);
-          // On press, not release: the faded menu then shows the new value
-          // while the button is held. (Click still covers the keyboard.)
-          b.addEventListener("pointerdown", () => setGfx(s.key, v));
-          b.onclick = () => setGfx(s.key, v);
-          sg.append(b);
+          const o = document.createElement("option");
+          o.textContent = label; o.value = JSON.stringify(v);
+          sel.append(o);
         }
-        ctl.append(sg);
+        sel.onchange = () => { setGfx(s.key, JSON.parse(sel.value)); sel.blur(); };
+        ctl.append(sel);
       }
       item.querySelector(".gfx-reset").onclick = () => setGfx(s.key, s[gfxPreset]);
-      // Fade the menu while the pointer is held on this setting.
-      item.querySelector(".gfx-ctl").addEventListener("pointerdown", () => {
+      // Fade the menu while the pointer is held on this setting (a slider).
+      if (s.type === "slider") item.querySelector(".gfx-ctl").addEventListener("pointerdown", () => {
         const ov = box.closest(".overlay"); if (!ov) return;
         item.classList.add("active"); ov.classList.add("gfx-fade");
         const up = () => { item.classList.remove("active"); ov.classList.remove("gfx-fade"); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); };
@@ -3157,10 +3155,8 @@ function addGraphicsControls() {
     gfxPanels.push(box);
     return box;
   };
-  const start = document.querySelector("#startScreen .keys");
-  if (start) start.before(make());
-  const menu = document.querySelector("#menuScreen .card");
-  if (menu) menu.append(make());
+  // In the Settings tab of the start screen and of the menu, before the volume.
+  for (const id of ["startSettings", "menuSettings"]) { const at = document.getElementById(id); if (at) at.prepend(make()); }
   refreshGfxControls();
 }
 
@@ -3175,7 +3171,8 @@ function refreshGfxControls() {
         if (+inp.value !== v) inp.value = v;
         item.querySelector(".gfx-val").textContent = s.fmt(v);
       } else {
-        for (const b of item.querySelector(".seg").children) b.setAttribute("aria-pressed", b.dataset.v === JSON.stringify(v));
+        const sel = item.querySelector("select");
+        if (sel.value !== JSON.stringify(v)) sel.value = JSON.stringify(v);
       }
       item.classList.toggle("changed", changed);
       const reset = item.querySelector(".gfx-reset");

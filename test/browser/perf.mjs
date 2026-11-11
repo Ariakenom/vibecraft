@@ -12,11 +12,15 @@ await pg.keyboard.press("F8");
 await sleep(1500);
 const r = await pg.evaluate(() => ({ shown: !$("netTrace").hidden, text: $("netTraceBody").textContent, dump: JSON.parse(Trace.dump()) }));
 console.log(r.text);
+// The panel keeps its size as the numbers change.
+const sizes = [];
+for (let k = 0; k < 3; k++) { sizes.push(await pg.evaluate(() => { const b = $("netTrace").getBoundingClientRect(); return `${b.width}x${b.height}`; })); await sleep(1100); }
+check(new Set(sizes).size === 1, `the trace panel keeps its size (${sizes[0]})`);
 const s = r.dump.samples[r.dump.samples.length - 1];
-check(r.shown && /Frames \d+\/s/.test(r.text) && /graphics card/.test(r.text) && /draw calls/.test(r.text), "the panel shows frames, their work and the drawing");
+check(r.shown && /Frames\d+\/s/.test(r.text) && /GPU/.test(r.text) && /draw calls/.test(r.text), "the panel shows frames, their work and the drawing");
 check(r.dump.trace === 3 && r.dump.info.role === "single player" && r.dump.info.map[0] > 0 && r.dump.info.startMs > 0, "the copied trace says what game it was and how long it took to start");
 check(s.fps > 0 && s.p50 > 0 && s.avgWork && s.avgWork.draw >= 0 && s.ents > 0 && s.drawCalls > 0 && s.gaps === undefined, "each second has frames, gaps, work by part and the scene");
-check(s.game && s.game.tick && s.game.tick.n > 0 && s.game.units && s.page && s.page["graphics card"] >= 0 && /Game: .* ms\/s for \d+ ticks/.test(r.text), "the game's parts and the page's are timed");
+check(s.game && s.game.tick && s.game.tick.n > 0 && s.game.units && s.page && s.page["graphics card"] >= 0 && /Game[\d.]+ ms\/s, \d+ ticks/.test(r.text), "the game's parts and the page's are timed");
 // Online too: the parts ride along with the lockstep's numbers (checked in
 // the network tests); here, timing a game changes nothing: same checksum
 // with timing on or off.

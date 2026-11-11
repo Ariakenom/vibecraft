@@ -872,8 +872,11 @@ impl Kind {
     }
 
     /// Does this building block movement? Farms can be walked on.
+    /// Does it block movement on its tiles? Not fields, and not a Capitol:
+    /// its statue stands in the town square, and people walk all over the
+    /// square, the middle too.
     pub fn blocks(self) -> bool {
-        self != Kind::Farm
+        !matches!(self, Kind::Farm | Kind::Capitol)
     }
 
     pub fn radius(self) -> f32 {

@@ -2233,3 +2233,16 @@ fn no_worker_is_sent_across_the_sea() {
     run(&mut g, 2.0);
     assert!(g.ents.iter().any(|e| e.alive && e.order == Order::Build(b)), "on the same land, builders come");
 }
+
+/// Playtest (Nov 2026): the whole town square is walkable, the statue's tile too.
+#[test]
+fn the_whole_town_square_is_walkable() {
+    let g = Game::new(9, 1, 2);
+    let c = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+    let half = crate::people::SQUARE_HALF as i32;
+    for y in c.ty - half..=c.ty + half {
+        for x in c.tx - half..=c.tx + half {
+            assert!(g.map.passable(x, y), "({x}, {y}) on the square is blocked");
+        }
+    }
+}

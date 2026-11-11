@@ -26,7 +26,7 @@ const Chat = {
   attach(r) {
     this.log = []; this.seen.clear(); this.others = 0;
     r.on("chat", d => this.receive(d));
-    this.render();
+    this.sync();
   },
   // How many others are in the room (from the room's peer lists).
   setOthers(n) { this.others = n; this.sync(); },
@@ -92,16 +92,20 @@ const Chat = {
     box.classList.toggle("open", this.open);
     box.scrollTop = box.scrollHeight;
     // In the lobby: the whole log.
+    // (Always there, at a fixed size: the lobby doesn't grow when someone talks.)
     const lobby = $("lobbyChatLog");
     lobby.replaceChildren(...this.log.slice(-30).map(m => this.line(m)));
-    lobby.hidden = !this.log.length;
+    if (!this.log.length) { const p = document.createElement("p"); p.className = "note"; p.textContent = this.available() ? "No messages yet." : "Chat opens when someone else is here."; lobby.append(p); }
     lobby.scrollTop = lobby.scrollHeight;
   },
   // Show or hide what depends on there being someone to talk to.
   sync() {
     const ok = this.available();
     $("chatBtn").hidden = !ok;
-    $("lobbyChat").hidden = !ok;
+    // The lobby's box shows as soon as the lobby is online; it can be used once someone else is here.
+    $("lobbyChat").hidden = !room || !!Net.room;
+    $("lobbyChatInput").disabled = $("lobbyChatSend").disabled = !ok;
+    this.render();
     if (!ok && this.open) this.close();
   },
   // Once a second: let old lines fade from the game view.

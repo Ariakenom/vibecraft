@@ -22,7 +22,7 @@ let r = await pg.evaluate(() => {
   out.saved = JSON.parse(localStorage.getItem("vibecraftGfx")).preset === "fast";
   // Every setting's controls work: click each choice, drag each slider.
   for (const it of document.querySelectorAll("#menuScreen .gfx-item")) {
-    for (const bt of it.querySelectorAll("button[data-v]")) bt.click();
+    const sel = it.querySelector("select"); if (sel) { sel.selectedIndex = sel.options.length - 1 - (sel.selectedIndex === sel.options.length - 1 ? 1 : 0); sel.dispatchEvent(new Event("change")); }
     const inp = it.querySelector("input"); if (inp) { inp.value = inp.max; inp.dispatchEvent(new Event("input")); }
   }
   out.allChanged = Object.keys(gfxOver).length >= 8;
@@ -38,8 +38,8 @@ check(r.allChanged, "every control changes its setting");
 // Nothing moves: a row keeps its height when its reset button shows, and
 // buttons whose text changes keep their width (CLAUDE.md).
 r = await pg.evaluate(() => {
-  document.querySelector("#menuScreen .gfx-more").click();
   $("menuScreen").hidden = false;
+  showTab(document.querySelector("#menuScreen .card"), "settings");
   const row = document.querySelector("#menuScreen .gfx-item[data-key=grass]");
   setGfxPreset("fancy"); delete gfxOver.grass; gfxChanged();
   const h0 = row.getBoundingClientRect().height;
@@ -49,11 +49,15 @@ r = await pg.evaluate(() => {
   const w = [0, 1].map(i => { showLabel($("cheatBtn"), i); return $("cheatBtn").getBoundingClientRect().width; });
   const v = [0, 1].map(i => { showLabel($("surrenderBtn"), i); return $("surrenderBtn").getBoundingClientRect().width; });
   showLabel($("cheatBtn"), 0); showLabel($("surrenderBtn"), 0);
+  // The tabs stay where they are, whichever tab is open (the card's top is pinned).
+  const tabsAt = ["game", "players", "settings"].map(t => { showTab(document.querySelector("#menuScreen .card"), t); return document.querySelector("#menuScreen .tabs").getBoundingClientRect().top; });
   $("menuScreen").hidden = true;
+  return { h0, h1, w, v, tabsAt };
   return { h0, h1, w, v };
 });
 check(r.h0 > 0 && r.h0 === r.h1, `a setting's row keeps its height when changed (${r.h0}, ${r.h1})`);
 check(r.w[0] === r.w[1] && r.v[0] === r.v[1], "the cheat and surrender buttons keep their width");
+check(new Set(r.tabsAt).size === 1, `the menu's tabs don't move between tabs (${r.tabsAt})`);
 
 // The effects, with a game on (drawing is off in tests, so step them by hand).
 r = await pg.evaluate(() => {
@@ -77,6 +81,11 @@ const opened = await pg.evaluate(() => !$("menuScreen").hidden);
 await pg.keyboard.press("Escape");
 const closed = await pg.evaluate(() => $("menuScreen").hidden);
 check(opened && closed, "Esc opens and closes the menu");
+
+// The free-workers button: how many, and a click selects them (like ".").
+await pg.evaluate(() => { for (let i = 0; i < 200; i++) { W.tick(); simTick++; } readWorld(); renderTopBar(); });
+r = await pg.evaluate(() => { const n = W.people(0), shown = $("idleCount").textContent; W.clear_selection(); $("idleBtn").click(); readWorld(); return { n, shown, sel: selection().length, visible: !$("idleBtn").classList.contains("gone") }; });
+check(r.n > 0 && r.shown === String(r.n) && r.sel === r.n && r.visible, `the free-workers button shows ${r.shown} and selects them (${r.sel})`);
 check(pg.errors.length === 0, "no page errors");
 
 // The old four levels carry over.
