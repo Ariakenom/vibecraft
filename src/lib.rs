@@ -438,8 +438,15 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 #[unsafe(no_mangle)]
 pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u32) -> i32 {
     with(|w| {
+        // The computer takes over seat `arg`; with x 1 to 3, as Easy, Normal
+        // or Hard (the host dragged a computer of that skill there). On a
+        // seat the computer already plays, that only changes its skill.
         if code == 7 {
-            w.game.set_ai(arg.min(4) as u8, true);
+            let p = arg.min(4) as u8;
+            w.game.set_ai(p, true);
+            if (1.0..=3.0).contains(&x) {
+                w.game.set_skill(p, x as u32 - 1);
+            }
             return 0;
         }
         if code == 13 {

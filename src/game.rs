@@ -89,6 +89,7 @@ pub enum Ev {
     NukeArming = 24, // someone started arming a nuke (data = owner); everyone hears
     Cheats = 25,     // the host turned cheat mode on or off (data = 1 on); everyone hears
     SpotTaken = 26,  // the player's planned building was dropped: its spot was taken (data = kind)
+    Starving = 27,   // the player has more people than beds: one starts starving at (x, y)
 }
 
 /// Why a command was refused. `code()` is the number JavaScript receives.
@@ -377,6 +378,9 @@ pub struct Player {
     /// Some of this player's units were unsupplied last tick. Only used to
     /// tell the player once when it starts.
     pub short: bool,
+    /// More people than beds (someone is starving). Only used to tell the
+    /// player once when it starts.
+    pub starving: bool,
     pub trained: u32,
     pub lost: u32,
     /// Buildings finished, for the end-of-game numbers.
@@ -400,6 +404,7 @@ impl Player {
             defeated: false,
             cheat: false,
             short: false,
+            starving: false,
             trained: 0,
             lost: 0,
             built: 0,
@@ -910,6 +915,20 @@ impl Game {
                 self.players[player as usize].supply_pct = 100;
             }
         }
+    }
+
+    /// A computer's skill changed mid-game (a seat given to the computer
+    /// from the host's menu): its supply and difficulty, keeping its plans
+    /// and the time of its next attack.
+    pub fn set_skill(&mut self, player: u8, difficulty: u32) {
+        let d = difficulty.min(2);
+        if player < 1 || player as usize >= self.players.len() {
+            return;
+        }
+        if let Some(ai) = self.ais.get_mut(player as usize) {
+            ai.difficulty = d;
+        }
+        self.players[player as usize].supply_pct = handicap(d);
     }
 
     /// How well one computer player plays (0 Easy, 1 Normal, 2 Hard): each

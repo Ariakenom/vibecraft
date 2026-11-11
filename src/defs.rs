@@ -560,6 +560,9 @@ pub const SPLASH_SHARE: f32 = 0.5;
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
 pub const UNSUPPLIED_DAMAGE: f32 = 0.01;
+/// More people than beds: one person at a time starves, dying over this
+/// many seconds (then the next). Beds back in time, and they live.
+pub const STARVE_SECS: f32 = 5.0;
 
 /// Seconds between newcomers arriving at a player's campfire, while there's
 /// a free bed. A bigger town grows faster: 6.7 s with 8 beds, 2.9 s with

@@ -279,9 +279,9 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
 - **A guest's clock** is the host's tick count plus half the round trip,
   taken from the most hopeful recent message and adjusted gently. The host
   measures how far off each guest's clock is (shown in the trace).
-- **Pause and speed.** The speed is a slider in the top bar: up to 10× when
-  playing alone; online the host can pause (P) and set 1×, 1.5× or 2× for
-  everyone. The simulation doesn't change: only how many ticks come
+- **Pause and speed.** The speed is a slider in the top bar, 1× to 10× in
+  half steps, alone and online alike; online only the host can pause (P)
+  and set it, for everyone (a computer that can't keep up is told so). The simulation doesn't change: only how many ticks come
   a second. The server's clock runs at `rate` (0 while paused), the frames
   carry it, and guests' clocks follow it (a new rate restarts their
   estimate). Orders given while paused go in once it runs again. The
@@ -348,16 +348,19 @@ Two topics carry the game itself. Every message carries
 
 - **The lobby.** The start screen has four seats. Opening the page makes
   you the host of your own lobby. Friends join with an invite link (the
-  page address plus `#CODE`) and take an open seat, or a computer's if none
-  is open. Begin with no friends seated is single player.
-- **Moving people.** Under the seats is a Spectators box: friends in the
-  room without a seat, and anyone who came with the watch link. The host
-  drags a person (or clicks them, then where they go) onto a seat, onto
-  another person's seat (they swap; a computer keeps its skill) or to the
-  Spectators. A friend moved to the spectators stays in the room and isn't
-  seated again by themselves (`benched`); someone watching who gets a seat
-  turns into a guest of the lobby (their seat waits 15 s while they
-  switch, `seatHold`). The host's own seat stays the first.
+  page address plus `#CODE`) and take an empty seat, or wait with the
+  spectators if there's none (computers keep their seats). Begin with no
+  friends seated is single player.
+- **Moving people.** Everyone in a seat is a chip the host drags (or
+  clicks, then clicks where it goes): onto another seat (they swap; a
+  computer keeps its skill, the host too can take another colour), onto
+  the Spectators box (friends without a seat and anyone who came with the
+  watch link) or, for a computer, back onto the row of computers (Easy,
+  Normal, Hard), which empties its seat. A computer from that row dropped
+  on a seat plays it. A friend moved to the spectators stays in the room
+  and isn't seated again by themselves (`benched`); someone watching who
+  gets a seat turns into a guest of the lobby (their seat waits 15 s while
+  they switch, `seatHold`).
 - **Rooms.** Each lobby is a room named after its code; the game runs in
   that room, and the host's presence there carries the seat list
   (`openOwnLobby`, `joinLobby`, `beginGame` in `main.js`).
@@ -411,9 +414,17 @@ player's fog history is kept). The view is set with `set_view` in
   their game". Spectators follow the host into the next game, and keep a
   replay of what they watched. Players see "N watching" in the top bar.
   Spectating works over the relay, not claude.ai's room service.
-- **Taking a seat.** The host's menu lists the seats during a game, and a
-  seat the computer plays can be given to a spectator by dragging them onto
-  it from the Spectators box (or clicking them, then the seat) ("Spectator 3": the
+- **Moving people mid-game.** The host's menu has the same chips (the host
+  keeps their own seat). A computer from the row dropped on a computer's
+  seat changes its skill; on a player's seat, the computer takes over
+  (command 7, whose x is the skill + 1, `Server.toComputer`) and the
+  player, told by the frames' `left`, goes on as a spectator
+  (`movedToSpectators`). A player dropped on the Spectators box goes the
+  same way. A player dropped on another seat goes through the spectators
+  and is handed the new seat once they're watching (`moves`,
+  `processMoves`); two players swap that way too.
+- **Taking a seat.** A seat the computer plays can be given to a spectator
+  by dragging them onto it ("Spectator 3": the
   host numbers them as they arrive, and each sees their number). The
   server (`Server.claim`) picks a tick T a second ahead and puts "a person
   takes over" (command 13, the opposite of 7) into that tick's bundle, so

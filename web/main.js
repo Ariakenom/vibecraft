@@ -1448,10 +1448,17 @@ const mpHooks = {
   pace(rate) { paceChanged(rate); },
   // Someone left: say so at once (the computer takes over on the next tick,
   // which, while paused, may be a while).
-  left(slot) { announceLeft(slot); },
+  // (Me: the host moved me to the spectators, or thought I was gone.)
+  left(slot) { if (slot === ME && mp && !mp.server && guestOf) setTimeout(movedToSpectators); else announceLeft(slot); },
   system(cmd) {
     const who = Rec.meta && Rec.meta.who;
-    if (cmd[0] === 7) { announceLeft(cmd[1]); announced.delete(cmd[1]); if (who) who[cmd[1]] = "computer"; delete pnames[cmd[1]]; if (mp && mp.server) publishLobby(); }
+    if (cmd[0] === 7) {
+      const p = cmd[1], skill = SKILL[cmd[2] - 1];
+      if (who && who[p] === "computer") { if (skill) toast(`${PNAME[p] || "A seat"} is played by a computer on ${skill} now.`); }
+      else { announceLeft(p); announced.delete(p); }
+      if (who) who[p] = "computer"; delete pnames[p];
+      if (mp && mp.server) publishLobby();
+    }
     if (cmd[0] === 15) cheatsToast(cmd[1]);
     if (cmd[0] === 13) { if (cmd[1] !== ME) toast(`${pnames[cmd[1]] || "A spectator"} takes over ${PNAME[cmd[1]] || "a seat"} from the computer.`, "good"); if (who) who[cmd[1]] = "human"; }
   },
@@ -1809,7 +1816,7 @@ function scrollCamera(dt) {
 // Events from the simulation. Numbers match `enum Ev` in game.rs.
 const EV = { Alert: 1, Trained: 2, Built: 3, Lost: 4, Death: 5, Melee: 6, Shoot: 7, Hammer: 9, ArrowHit: 11, Short: 12, Eliminated: 14,
   Upgraded: 15, Downgraded: 16, EraReached: 17, NukeArmed: 18, NukeLaunched: 19, NukeDetonated: 20,
-  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24, Cheats: 25, SpotTaken: 26 };
+  NukeIntercepted: 22, SiloBuilt: 23, NukeArming: 24, Cheats: 25, SpotTaken: 26, Starving: 27 };
 function handleEvents() {
   const n = W.take_events();
   if (!n) return;
@@ -1920,6 +1927,10 @@ function handleEvents() {
         toast(`You hold more ${RES_NAMES[d]} than you make. Your newest units that need it are losing health` + (p != null ? `: build a ${NAMES[p]}.` : "."), "bad");
         Sfx.ui("starving");
         break; }
+      case EV.Starving:
+        toast("More people than beds: one at a time is starving, dying in 5 seconds. Bring back the house goods (crew the producers) or build houses.", "bad");
+        Sfx.ui("starving");
+        break;
     }
   }
 }
@@ -2055,8 +2066,8 @@ function stepMultiplayer(now) {
   const h = $("netWait");
   const pausedNow = mp.pace() === 0;
   h.hidden = !(pausedNow || stalledSince && now - stalledSince > 700);
-  if (!h.hidden) h.textContent = pausedNow ? (mp.server ? "Paused for everyone. Press P to resume." : `Paused by ${pnames[1] || "the host"}.`)
-    : ME === 1 ? "Waiting for the other players…" : "Waiting for the host…";
+  if (!h.hidden) h.textContent = pausedNow ? (mp.server ? "Paused for everyone. Press P to resume." : `Paused by ${pnames[hostSlot] || "the host"}.`)
+    : mp.server ? "Waiting for the other players…" : "Waiting for the host…";
   lagCheck(now);
   if (!mp.server && now - mp.lastHeard > 15000) endMultiplayer("Lost contact with the host.");
   if (mp && mp.server) for (const s of mp.server.silent(20000)) dropPlayer(s);
@@ -2217,7 +2228,12 @@ function newGame(seedArg, local = 0, players = 2, mode = 0) {
   if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
   else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
-  else for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
+  else {
+    // Single player in another seat than the first: I play that one, the computer the rest.
+    const me = Math.max(1, Math.min(players, hostSlot));
+    if (me !== 1) { W.setup_multiplayer(me); for (let p = 1; p <= players; p++) if (p !== me) W.set_ai(p, 1); }
+    for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
+  }
   enterWorld(local);
 }
 
@@ -2379,6 +2395,9 @@ let pageRoom = null;    // claude.ai only: the page-wide room where lobbies are 
 let lobbyGen = 0;       // bumped on every lobby switch, so late answers from an old one are ignored
 let netOk = false;      // can this page go online at all?
 let lastPlayers = 2, lastWasMultiplayer = false, startTimer = 0;
+// The player the host plays (their seat's colour): 1 unless they moved
+// their own seat in the lobby. Single player keeps it for Restart.
+let hostSlot = 1;
 const kicked = new Set();  // friends the host removed: they don't get a seat again
 const played = new Set();  // games already played, so a leftover "start" never restarts one
 const myToken = Math.random().toString(36).slice(2, 10); // who I am in a room
@@ -2422,7 +2441,7 @@ function inviteLink() {
 // same works without a mouse: click a chip to pick it up, then click where
 // it goes (Escape, or clicking it again, puts it down).
 let picked = null; // { token, el }: the chip picked up by a click
-function chip(token, label, color, movable) {
+function chip(token, label, color, movable, title = "Drag to a seat or to the spectators (or click, then click where they go)") {
   const c = document.createElement("span");
   c.className = "chip" + (movable ? " movable" : "");
   c.textContent = label;
@@ -2430,7 +2449,7 @@ function chip(token, label, color, movable) {
   if (!movable) return c;
   c.draggable = true;
   c.tabIndex = 0;
-  c.title = "Drag to a seat or to the spectators (or click, then click where they go)";
+  c.title = title;
   c.dataset.token = token;
   if (picked && picked.token === token) { c.classList.add("picked"); picked.el = c; }
   c.addEventListener("dragstart", e => { dropPick(); e.dataTransfer.setData("text/x-vibecraft-person", token); e.dataTransfer.effectAllowed = "move"; c.classList.add("dragging"); });
@@ -2477,7 +2496,8 @@ function dropTarget(el, ok, put) {
 addEventListener("keydown", e => { if (e.key === "Escape" && picked) { dropPick(); rerenderSeats(); } });
 
 // The host's lobby: who is in the room without a seat. Guests the host moved
-// to the spectators (`benched`) and anyone who came with the watch link.
+// to the spectators (`benched`), anyone who came with the watch link, and
+// friends who arrived when every seat was taken.
 const benched = new Set();
 let roomPeople = new Map();      // token -> "guest" | "watcher", everyone in my room but me
 const seatHold = new Map();      // token -> until when a seat waits for them (a spectator becoming a guest)
@@ -2487,28 +2507,49 @@ function lobbySpectators() {
   if (guestOf) return Array.isArray(guestOf.host && guestOf.host.specs) ? guestOf.host.specs.filter(okToken) : [];
   return [...roomPeople.keys()].filter(t => !seats.includes("f:" + t) && !kicked.has(t));
 }
-// Put a person in seat `i`, or (i < 0) with the spectators.
-function lobbyMove(token, i) {
-  if (guestOf || mp || !okToken(token) || i === 0) return;
-  const from = seats.indexOf("f:" + token);
-  if (i < 0) {
-    if (from < 0) return rerenderSeats();
-    seats[from] = "open";
-    benched.add(token);
+// What a chip in the lobby stands for, as the seat string it would put
+// down: "host", "f:<token>" (a friend), "seat:<i>" (the computer in seat i)
+// or "ai:<skill>" (a new computer, from the row of computers).
+const lobbyItem = src => src === "host" ? "host" : okToken(src) ? "f:" + src : src;
+function lobbyFrom(src) {
+  if (/^seat:\d$/.test(src)) { const j = +src.slice(5); return seats[j] === "ai" ? j : -2; }
+  return seats.indexOf(lobbyItem(src));
+}
+// Can `src` go to seat i (or, i = "specs" / "ais", to the spectators / back
+// to the computers)?
+function lobbyCan(src, i) {
+  if (guestOf || mp) return false;
+  const from = lobbyFrom(src);
+  if (from === -2) return false;
+  if (i === "specs") return src !== "host" && okToken(src) && from >= 0; // (the host stays seated)
+  if (i === "ais") return /^seat:/.test(src);
+  if (from === i) return false;
+  if (/^ai:[0-2]$/.test(src)) return seats[i] !== "host" && !(seats[i] === "ai" && seatDiff[i] === +src.slice(3));
+  if (from >= 0) return true; // a swap
+  return seats[i] !== "host" && (okToken(src) ? !!room : false);
+}
+// The host moves `src` (see lobbyItem) to seat i, the spectators or the computers.
+function lobbyPut(src, i) {
+  if (!lobbyCan(src, i)) return rerenderSeats();
+  const from = lobbyFrom(src);
+  if (i === "specs") { seats[from] = "open"; benched.add(src); }
+  else if (i === "ais") seats[from] = "open";
+  else if (/^ai:/.test(src)) {
+    if (isFriend(seats[i])) benched.add(seats[i].slice(2));
+    seats[i] = "ai"; seatDiff[i] = +src.slice(3);
+  } else if (from >= 0) {
+    // A swap: whoever was there (a computer with its skill) moves over.
+    [seats[from], seats[i]] = [seats[i], seats[from]];
+    [seatDiff[from], seatDiff[i]] = [seatDiff[i], seatDiff[from]];
   } else {
-    if (from === i) return rerenderSeats();
-    const was = seats[i];
-    if (from >= 0) {
-      // Swap: whoever was there (or the computer, with its skill) moves over.
-      seats[from] = was;
-      [seatDiff[from], seatDiff[i]] = [seatDiff[i], seatDiff[from]];
-    } else if (isFriend(was)) benched.add(was.slice(2));
-    seats[i] = "f:" + token;
-    benched.delete(token);
+    // From the spectators: whoever sat there goes to the spectators.
+    if (isFriend(seats[i])) benched.add(seats[i].slice(2));
+    seats[i] = "f:" + src;
+    benched.delete(src);
     // Someone watching becomes a guest: their seat waits while they switch.
-    if (roomPeople.get(token) === "watcher") seatHold.set(token, performance.now() + 15000);
-    Sfx.ui("trained");
+    if (roomPeople.get(src) === "watcher") seatHold.set(src, performance.now() + 15000);
   }
+  Sfx.ui("trained");
   lobbyChanged();
 }
 
@@ -2526,52 +2567,31 @@ function renderLobby() {
     sw.className = "swatch";
     sw.style.background = slot ? PCOL[slot] : "transparent";
     if (!slot) sw.style.border = "1px dashed var(--line)";
-    const who = document.createElement("span");
-    who.className = "who";
     const nm = s === "host" ? (guest ? cleanName(guestOf.host && guestOf.host.name) : myName)
       : s === "f:" + myToken ? myName : isFriend(s) ? peerNames.get(s.slice(2)) || "" : "";
     const mine = guest ? s === "f:" + myToken : s === "host";
-    who.textContent = nm ? nm + (mine ? " (you)" : "") : s === "host" ? (guest ? "Host" : "You")
+    const diffs = guest ? (guestOf.host && guestOf.host.seatDiff) || [] : seatDiff;
+    const label = nm ? nm + (mine ? " (you)" : "") : s === "host" ? (guest ? "Host" : "You")
       : s === "f:" + myToken ? "You"
       : isFriend(s) ? "Friend"
-      : s === "ai" ? (guest ? `Computer · ${SKILL[(guestOf.host && guestOf.host.seatDiff || [])[i] ?? 1] || "Normal"}` : "Computer") // the host's picker shows the skill
+      : s === "ai" ? `Computer · ${SKILL[diffs[i] ?? 1] || "Normal"}`
       : room ? "Open for a friend" : "Empty";
-    if (slot) who.style.color = PLIGHT[slot];
-    li.append(sw);
-    if (isFriend(s) && !guest) {
-      // A friend's name is a chip the host can move.
-      const c = chip(s.slice(2), who.textContent, slot ? PLIGHT[slot] : "", true);
-      const holder = document.createElement("span");
-      holder.className = "who";
-      holder.append(c);
-      li.append(holder);
-    } else li.append(who);
-    // Any seat but the host's takes a person.
-    if (!guest && i > 0 && room) dropTarget(li, t => seats[i] !== "f:" + t, t => lobbyMove(t, i));
-    if (!guest && i > 0) {
-      // The host decides who sits where.
-      const sel = document.createElement("select");
-      sel.setAttribute("aria-label", `Seat ${i + 1}`);
-      // A computer seat picks its own skill.
-      const ais = SKILL.map((n, d) => [`ai:${d}`, `Computer · ${n}`]);
-      const opts = isFriend(s) ? [["friend", "Friend"], ["bench", "Move to spectators"], ["ai:1", "Give to computer"], ["open", "Send away"]]
-        : [...ais, ["open", room ? "Open" : "Empty"]];
-      for (const [v, label] of opts) {
-        const o = document.createElement("option");
-        o.value = v; o.textContent = label;
-        o.selected = (s === "ai" && v === `ai:${seatDiff[i]}`) || v === s || (v === "friend" && isFriend(s));
-        sel.append(o);
-      }
-      sel.onchange = () => setSeat(i, sel.value);
-      li.append(sel);
-    } else if (slot) {
+    // Everyone in a seat is a chip the host can move; an open seat is a place to put one.
+    const holder = document.createElement("span");
+    holder.className = "who";
+    if (s === "open") { holder.textContent = label; holder.classList.add("empty"); }
+    else holder.append(chip(guest ? "" : s === "host" ? "host" : s === "ai" ? `seat:${i}` : s.slice(2), label, slot ? PLIGHT[slot] : "", !guest && (s !== "f:" + myToken)));
+    li.append(sw, holder);
+    if (slot) {
       const tag = document.createElement("span");
       tag.className = "tag"; tag.textContent = PNAME[slot];
       li.append(tag);
     }
+    if (!guest) dropTarget(li, t => lobbyCan(t, i), t => lobbyPut(t, i));
     ol.append(li);
   });
   renderLobbySpectators();
+  renderComputers($("lobbyAis"), !guest, t => lobbyCan(t, "ais"), t => lobbyPut(t, "ais"));
   const active = list.filter(s => s !== "open").length;
   const friends = list.filter(isFriend).length;
   const btn = $("startBtn");
@@ -2583,6 +2603,19 @@ function renderLobby() {
   $("inviteRow").hidden = !link;
   $("lobbyWatchLink").hidden = !link;
   if (link && $("inviteLink").value !== link) $("inviteLink").value = link;
+}
+// The row of computers to drag onto a seat (Easy, Normal, Hard). A
+// computer dragged back onto it leaves its seat (lobby only).
+function renderComputers(box, show, ok, put) {
+  box.hidden = !show;
+  if (!show) return;
+  box.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = "Computers";
+  box.append(label);
+  SKILL.forEach((n, d) => box.append(chip(`ai:${d}`, n, "", true, "Drag onto a seat to have a computer play it (or click, then click the seat)")));
+  if (ok && put) dropTarget(box, ok, put);
 }
 
 // The map: a surprise (a new random one each game, unseen till it starts),
@@ -2649,20 +2682,10 @@ function renderLobbySpectators() {
   if (!list.length) {
     const none = document.createElement("span");
     none.className = "note";
-    none.textContent = host ? "Nobody yet. Drag a friend here to keep them out of the game." : "Nobody.";
+    none.textContent = host ? "Nobody yet. Drag someone here to keep them out of the game." : "Nobody.";
     box.append(none);
   }
-  if (host) dropTarget(box, t => seats.includes("f:" + t), t => lobbyMove(t, -1));
-}
-
-function setSeat(i, v) {
-  const s = seats[i];
-  if (isFriend(s) && v === "bench") return lobbyMove(s.slice(2), -1);
-  // (Given to the computer, a friend stays as a spectator; sent away, they leave.)
-  if (isFriend(s)) { if (v === "friend") return; (v === "open" ? kicked : benched).add(s.slice(2)); }
-  if (v.startsWith("ai:")) { seatDiff[i] = Math.max(0, Math.min(2, +v.slice(3) || 0)); v = "ai"; }
-  seats[i] = v;
-  lobbyChanged();
+  if (host) dropTarget(box, t => lobbyCan(t, "specs"), t => lobbyPut(t, "specs"));
 }
 function lobbyChanged() { publishLobby(); renderLobby(); }
 function publishLobby() {
@@ -2709,9 +2732,9 @@ function onHostPeers(peers) {
   seats.forEach((s, i) => { if (isFriend(s) && !here.has(s.slice(2)) && !seatHold.has(s.slice(2))) { seats[i] = "open"; changed = true; } });
   for (const t of here) {
     if (kicked.has(t) || benched.has(t) || seats.includes("f:" + t)) continue;
-    let i = seats.indexOf("open");
-    if (i < 0) i = seats.lastIndexOf("ai");
-    if (i < 0) break; // full
+    // An empty seat, or else they wait with the spectators (computers keep theirs).
+    const i = seats.indexOf("open");
+    if (i < 0) continue;
     seats[i] = "f:" + t;
     changed = true;
     if (!inGame()) Sfx.ui("trained");
@@ -2799,7 +2822,7 @@ function onGuestPeers(peers) {
   const seated = host.seats.includes("f:" + myToken);
   const onBench = Array.isArray(host.bench) && host.bench.includes(myToken);
   mpStatus(!seated && onBench ? "You're with the spectators. The host can give you a seat."
-    : !seated ? "No free seat right now. You'll get one if the host opens a seat."
+    : !seated ? "Every seat is taken: you're with the spectators. The host can give you a seat."
     : host.playing ? "The host is in a game. You'll play together when they're back. Meanwhile you can watch it."
     : "You're in. Waiting for the host to start…");
   $("watchHostBtn").hidden = !host.playing || !!Net.room;
@@ -2810,6 +2833,7 @@ function onGuestPeers(peers) {
 function lobbyTick() {
   if (guestOf && !mp && !guestOf.host && performance.now() - guestOf.lostAt > 8000)
     openOwnLobby("That game isn't open any more. Here's your own.", true);
+  processMoves();
   // The host: a seat held for a spectator who never turned up opens again.
   if (!guestOf && room && !mp && [...seatHold.values()].some(u => u < performance.now())) onHostPeers(lastHostPeers);
 }
@@ -2834,6 +2858,7 @@ function beginGame() {
   // Each computer's skill, by the player slot its seat gets.
   slotDiffs = {};
   seats.forEach((s, i) => { if (s === "ai") slotDiffs[slotOf(i, seats)] = seatDiff[i]; });
+  hostSlot = slotOf(seats.indexOf("host"), seats) || 1;
   if (!room || !active.some(isFriend)) {
     lastWasMultiplayer = false; lastPlayers = active.length;
     $("startScreen").hidden = true;
@@ -2843,9 +2868,9 @@ function beginGame() {
     return;
   }
   const slots = {}, ai = [];
-  const names = { 1: myName };
+  const names = { [hostSlot]: myName };
   active.forEach((s, k) => { if (isFriend(s)) { slots[s.slice(2)] = k + 1; names[k + 1] = peerNames.get(s.slice(2)) || ""; } else if (s === "ai") ai.push(k + 1); });
-  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: chosenSeed(), mode: gameMode, n: active.length, slots, ai, diffs: slotDiffs, host: myToken };
+  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: chosenSeed(), mode: gameMode, n: active.length, slots, ai, diffs: slotDiffs, host: myToken, hostSlot };
   // Keep telling the guests until all of them have answered.
   const send = () => room && room.emit("start", settings);
   send();
@@ -2855,14 +2880,15 @@ function beginGame() {
   }, 400);
   if (pageRoom) pageRoom.presence({ hosting: null });
   // The host runs the server and, like everyone, a client.
-  const client = new Client(1, null, myToken, mpHooks, endMultiplayer);
+  const client = new Client(hostSlot, null, myToken, mpHooks, endMultiplayer);
   client.server = new Server(room, Object.entries(slots).map(([t, s]) => [s, t, seatPeer.get(t)]), client, endMultiplayer);
   client.server.gameId = settings.id; client.server.seenPlaying = new Set();
-  startMultiplayer(1, settings, client);
+  startMultiplayer(hostSlot, settings, client);
 }
 
 function startMultiplayer(me, d, seq) {
   const n = Math.max(2, Math.min(4, d.n | 0));
+  hostSlot = Number.isInteger(d.hostSlot) && d.hostSlot >= 1 && d.hostSlot <= n ? d.hostSlot : 1;
   $("startScreen").hidden = true;
   newGame(d.seed >>> 0, me, n, [1, 2].includes(d.mode) ? d.mode : 0);
   const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
@@ -2880,7 +2906,7 @@ function startMultiplayer(me, d, seq) {
   if (mp.server) mp.server.setClock(0);
   paused = false; speed = 1;
   syncPaceUi();
-  Trace.start({ role: me === 1 ? "host" : "guest", me, players: n, transport: room && room.kind === "socket" ? "relay" : "claude.ai room", relay: room && room.kind === "socket" ? Net.relayUrl : undefined });
+  Trace.start({ role: seq.server ? "host" : "guest", me, players: n, transport: room && room.kind === "socket" ? "relay" : "claude.ai room", relay: room && room.kind === "socket" ? Net.relayUrl : undefined });
   $("netBtn").hidden = false;
   // Building the map can take a few seconds on a slow computer: only start
   // the "haven't heard from you" clocks once we're ready to play.
@@ -3015,49 +3041,128 @@ function takeSeat(w) {
   toast(`You are ${PNAME[slot]} now. Your turn to play!`, "good");
 }
 
-// The host's menu, during a game: who plays which seat, and handing a
-// computer's seat to a spectator.
+// The host's menu, during a game: everyone as chips. Drag a spectator onto
+// a seat to give it to them; a player onto the spectators (the computer
+// takes over, they watch from then on) or onto another seat (they swap:
+// each goes through the spectators and is handed the new seat as soon as
+// they're watching); a computer from the row of computers onto a seat to
+// have a computer of that skill play it. The host keeps their own seat.
+const moves = new Map(); // token -> { slot, until, old }: a player on their way to another seat (old: the connection they watched on before, if any)
 let seatsKey = "";
+// Who plays seat p now: "you", "out", "joining", "moving" (to another seat), "friend" or "computer".
+function gameSeat(p) {
+  const srv = mp && mp.server, joining = srv && srv.joining.get(p);
+  if (p === ME) return { state: "you" };
+  if (W.defeated(p)) return { state: "out" };
+  if (joining || (pendingSeat && pendingSeat.slot === p)) return { state: "joining", token: joining ? joining.token : pendingSeat.token };
+  if (srv && srv.active.has(p)) return { state: "friend", token: srv.tokens.get(p) };
+  if (!W.is_ai(p)) return { state: "friend" }; // (not ours to move: no token)
+  for (const [t, m] of moves) if (m.slot === p) return { state: "moving", token: t };
+  return { state: "computer" };
+}
+const gameSpecs = () => {
+  const srv = mp && mp.server;
+  return Watchers.ready().filter(([t]) => !(srv && [...srv.tokens].some(([s, tk]) => tk === t && srv.active.has(s))) && !(pendingSeat && pendingSeat.token === t));
+};
+// The seat a playing friend has (0 if none).
+const seatOfToken = t => { const srv = mp && mp.server; if (!srv) return 0; for (const [s, tk] of srv.tokens) if (tk === t && srv.active.has(s)) return s; return 0; };
+// Can `src` (a person's token, "slot:<p>" for the computer in seat p, or
+// "ai:<skill>") go onto seat p, or (p = "specs") to the spectators?
+function gameCan(src, p) {
+  if (!canGiveSeats()) return false;
+  const from = seatOfToken(src), spec = gameSpecs().some(r => r[0] === src);
+  if (p === "specs") return from > 0;
+  const at = gameSeat(p);
+  if (at.state === "you" || at.state === "out" || at.state === "joining" || at.state === "moving") return false;
+  if (at.state === "friend" && !at.token) return false;
+  if (/^ai:[0-2]$/.test(src)) return at.state === "friend" || W.player_difficulty(p) !== +src.slice(3);
+  if (/^slot:\d$/.test(src)) { const q = +src.slice(5); return q !== p && at.state === "friend" && gameSeat(q).state === "computer"; }
+  if (from) return from !== p;
+  return spec;
+}
+// The computer takes seat p (as `skill`, or keeping the one it has).
+function toComputer(p, skill = W.player_difficulty(p)) {
+  const cmd = [7, p, skill + 1, 0];
+  if (mp && mp.server) mp.server.toComputer(p, skill);
+  else if (!mp) { applyCmd(0, cmd); Rec.add(simTick, [0, ++Rec.seq, ...cmd]); mpHooks.system(cmd); }
+}
+function gamePut(src, p) {
+  if (!gameCan(src, p)) return renderGameSeats(true);
+  const until = performance.now() + 90000;
+  // A player who goes through the spectators watches on a new connection:
+  // wait for that one (an old entry from before they played doesn't count).
+  const via = t => ({ until, old: Watchers.peerOf(t) });
+  if (p === "specs") toComputer(seatOfToken(src), 1);
+  else if (/^ai:/.test(src)) toComputer(p, +src.slice(3)); // (a friend there goes to the spectators)
+  else if (/^slot:/.test(src)) {
+    // The computer moves onto a friend's seat: the friend takes the computer's.
+    const q = +src.slice(5), at = gameSeat(p), skill = W.player_difficulty(q);
+    moves.set(at.token, { slot: q, ...via(at.token) });
+    toComputer(p, skill);
+  } else {
+    const from = seatOfToken(src), at = gameSeat(p);
+    if (at.state === "friend") { toComputer(p, 1); if (from) moves.set(at.token, { slot: from, ...via(at.token) }); } // they swap
+    if (from) { toComputer(from, at.state === "computer" ? W.player_difficulty(p) : 1); moves.set(src, { slot: p, ...via(src) }); }
+    else if (at.state === "friend") moves.set(src, { slot: p, until, old: undefined }); // a spectator, once the seat is free
+    else giveSeat(p, src);
+  }
+  Sfx.ui("trained");
+  renderGameSeats(true);
+}
+// Once a second: hand players on their way to another seat their new one,
+// once they're watching and the seat is the computer's.
+function processMoves() {
+  if (!moves.size) return;
+  if (!canGiveSeats()) { moves.clear(); return; }
+  const ready = new Set(Watchers.ready().map(r => r[0])), now = performance.now();
+  for (const [t, m] of moves) {
+    if (now > m.until || W.defeated(m.slot)) { moves.delete(t); continue; }
+    const srv = mp && mp.server;
+    if (!ready.has(t) || (m.old != null && Watchers.peerOf(t) === m.old) || !W.is_ai(m.slot) || (srv && srv.joining.has(m.slot)) || (pendingSeat && pendingSeat.slot === m.slot)) continue;
+    moves.delete(t);
+    giveSeat(m.slot, t);
+  }
+}
 function renderGameSeats(force) {
   const box = $("gameSeats");
   const show = canGiveSeats();
   box.hidden = !show;
   if (!show) return;
-  const n = W.n_players(), srv = mp && mp.server;
-  const specs = Watchers.ready().filter(([t]) => !(srv && [...srv.tokens].some(([s, tk]) => tk === t && srv.active.has(s))) && !(pendingSeat && pendingSeat.token === t));
+  const n = W.n_players();
+  const specs = gameSpecs();
   const rows = [];
   for (let p = 1; p <= n; p++) {
-    const joining = srv && srv.joining.get(p);
-    const state = p === ME ? "you" : W.defeated(p) ? "out"
-      : joining || (pendingSeat && pendingSeat.slot === p) ? "joining"
-      : srv && srv.active.has(p) || !W.is_ai(p) ? "friend" : "computer";
-    const tk = joining ? joining.token : pendingSeat && pendingSeat.slot === p ? pendingSeat.token : null;
-    const to = tk ? Watchers.nameOf(tk) || `Spectator ${Watchers.number(tk)}` : "";
-    rows.push([p, state, to]);
+    const at = gameSeat(p);
+    const to = at.token ? Watchers.nameOf(at.token) || pnames[seatOfToken(at.token)] || personName(at.token, "") || `Spectator ${Watchers.number(at.token)}` : "";
+    rows.push([p, at.state, at.token || "", to, at.state === "computer" ? W.player_difficulty(p) : -1]);
   }
-  const key = JSON.stringify([rows, specs, pnames]);
+  const key = JSON.stringify([rows, specs, pnames, picked && picked.token]);
   if (!force && key === seatsKey) return;
   seatsKey = key;
   const ol = $("gameSeatList");
   ol.replaceChildren();
-  for (const [p, state, to] of rows) {
+  for (const [p, state, token, to, skill] of rows) {
     const li = document.createElement("li");
     li.className = "seat" + (state === "out" ? " closed" : "");
     const sw = document.createElement("span");
     sw.className = "swatch"; sw.style.background = PCOL[p];
-    const who = document.createElement("span");
-    who.className = "who"; who.style.color = PLIGHT[p];
-    who.textContent = pnames[p] && state !== "computer" ? `${pnames[p]} (${PNAME[p]})` : PNAME[p];
-    li.append(sw, who);
+    const holder = document.createElement("span");
+    holder.className = "who";
+    const label = state === "computer" ? `Computer · ${SKILL[skill] || "Normal"}`
+      : state === "you" ? `${pnames[p] || myName || "You"} (you)`
+      : state === "moving" ? `Computer, until ${to || "a player"} gets here`
+      : pnames[p] || (state === "friend" ? "Friend" : PNAME[p]);
+    const movable = (state === "friend" && !!token) || state === "computer";
+    holder.append(chip(state === "computer" ? `slot:${p}` : token, label, PLIGHT[p], movable));
+    li.append(sw, holder);
     const tag = document.createElement("span");
     tag.className = "tag";
-    tag.textContent = { you: "You", out: "Out", joining: `Handing to ${to}…`, friend: "Friend", computer: "Computer" }[state];
+    tag.textContent = { you: PNAME[p], out: "Out", joining: `Handing to ${to}…`, moving: PNAME[p], friend: PNAME[p], computer: PNAME[p] }[state];
     li.append(tag);
-    // A spectator dropped on a seat the computer plays takes it over.
-    if (state === "computer") dropTarget(li, t => specs.some(s => s[0] === t), t => giveSeat(p, t));
+    dropTarget(li, t => gameCan(t, p), t => gamePut(t, p));
     ol.append(li);
   }
-  // The spectators, as chips to drag onto a computer's seat.
+  // The spectators, as chips to drag onto a seat; and somewhere to drag players to.
   const sb = $("gameSpecs");
   sb.replaceChildren();
   const label = document.createElement("span");
@@ -3071,10 +3176,23 @@ function renderGameSeats(force) {
     none.textContent = "Nobody watching.";
     sb.append(none);
   }
-  const anyComputer = rows.some(r => r[1] === "computer");
-  $("gameSeatNote").textContent = !anyComputer ? "Every seat has a player."
-    : specs.length ? "Drag a spectator onto a seat the computer plays (or click them, then the seat): they take over from where the game is now."
-    : "Spectators can take over a seat the computer plays. Send them the watch link.";
+  dropTarget(sb, t => gameCan(t, "specs"), t => gamePut(t, "specs"));
+  renderComputers($("gameAis"), true);
+  $("gameSeatNote").textContent = "Drag people and computers between the seats and the spectators (or click one, then where it goes). Whoever takes a seat plays on from where the game is now; a player moved off one watches.";
+}
+
+// A guest the host moved to the spectators: leave the game quietly and
+// watch it (the host can hand us a seat again from there).
+function movedToSpectators() {
+  if (!mp || mp.server || !guestOf) return;
+  const code = guestOf.code;
+  running = false;
+  stopObserving(); $("outScreen").hidden = true;
+  Rec.finish("Moved to the spectators");
+  finishMultiplayer();
+  for (const id of ["endScreen", "menuScreen", "netWait"]) $(id).hidden = true;
+  startWatching(code);
+  toast("The host moved you to the spectators. You're watching now.");
 }
 
 function endMultiplayer(reason) {
@@ -3127,7 +3245,7 @@ function syncPaceUi() {
 let lastPace = 1;
 function paceChanged(rate) {
   const was = lastPace; lastPace = rate;
-  const host = pnames[1] || "The host";
+  const host = pnames[hostSlot] || "The host";
   if (rate === 0) toast(`${host} paused the game.`);
   else if (was === 0) toast(`${host} resumed the game${rate !== 1 ? ` at ${rate}×` : ""}.`);
   else toast(`${host} set the speed to ${rate}×.`);
@@ -3249,6 +3367,7 @@ async function loadSave(save) {
   for (const id of ["loadScreen", "menuScreen", "startScreen", "endScreen"]) $(id).hidden = true;
   running = true; Rec.real = true;
   lastPlayers = W.n_players(); // for Restart and Play again
+  hostSlot = W.local_player();
   publishLobby(); // friends who open our link now wait for the next game
   toast(`Loaded: ${fmtTime(W.game_time())} into the game.`);
 }
@@ -3333,12 +3452,12 @@ $("startBtn").onclick = beginGame;
 $("leaveLobbyBtn").onclick = () => openOwnLobby();
 $("againBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;
-// Game speed: a slider. Alone, up to 10x; online the host picks one of
-// NET.SPEEDS for everyone, and the others see it.
+// Game speed: a slider, 1x to 10x (NET.SPEEDS). Online the host sets it for
+// everyone, and the others see it.
 function syncSpeedUi() {
   const sl = $("speedSlider"), guest = !!mp && !mp.server;
   const shown = guest ? mp.pace() : speed;
-  sl.max = String(mp ? Math.max(...NET.SPEEDS) : 10);
+  sl.max = String(Math.max(...NET.SPEEDS));
   sl.value = String(shown);
   sl.disabled = guest;
   $("speedLabel").textContent = `${shown}×`;
