@@ -2417,6 +2417,101 @@ function inviteLink() {
   return location.href.split("#")[0] + "#" + roomCode;
 }
 
+// ---- Moving people between seats: drag and drop, or click and click ----
+// The host drags a person (a chip) onto a seat or onto the spectators. The
+// same works without a mouse: click a chip to pick it up, then click where
+// it goes (Escape, or clicking it again, puts it down).
+let picked = null; // { token, el }: the chip picked up by a click
+function chip(token, label, color, movable) {
+  const c = document.createElement("span");
+  c.className = "chip" + (movable ? " movable" : "");
+  c.textContent = label;
+  if (color) c.style.color = color;
+  if (!movable) return c;
+  c.draggable = true;
+  c.tabIndex = 0;
+  c.title = "Drag to a seat or to the spectators (or click, then click where they go)";
+  c.dataset.token = token;
+  if (picked && picked.token === token) { c.classList.add("picked"); picked.el = c; }
+  c.addEventListener("dragstart", e => { dropPick(); e.dataTransfer.setData("text/x-vibecraft-person", token); e.dataTransfer.effectAllowed = "move"; c.classList.add("dragging"); });
+  c.addEventListener("dragend", () => c.classList.remove("dragging"));
+  const pick = e => {
+    e.stopPropagation();
+    if (picked && picked.token === token) { dropPick(); return rerenderSeats(); }
+    dropPick();
+    picked = { token, el: c };
+    rerenderSeats(); // (shows where they can go)
+  };
+  c.addEventListener("click", pick);
+  c.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(e); } });
+  return c;
+}
+function dropPick() {
+  if (picked && picked.el) picked.el.classList.remove("picked");
+  picked = null;
+}
+function rerenderSeats() { if (inGame()) renderGameSeats(true); else renderLobby(); }
+// A place a chip can go: `ok(token)` says whether this one may, `put(token)` puts it there.
+function dropTarget(el, ok, put) {
+  el.addEventListener("dragover", e => {
+    if (!e.dataTransfer.types.includes("text/x-vibecraft-person")) return;
+    e.preventDefault(); // (the token can't be read until the drop)
+    e.dataTransfer.dropEffect = "move";
+    el.classList.add("drop-over");
+  });
+  el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("drop-over"); });
+  el.addEventListener("drop", e => {
+    e.preventDefault();
+    el.classList.remove("drop-over");
+    const t = e.dataTransfer.getData("text/x-vibecraft-person");
+    if (t && ok(t)) put(t);
+  });
+  el.addEventListener("click", e => {
+    if (!picked || e.target.closest("select, button, input")) return;
+    const t = picked.token;
+    dropPick();
+    if (ok(t)) put(t); else rerenderSeats();
+  });
+  if (picked && ok(picked.token)) el.classList.add("drop-ok");
+}
+addEventListener("keydown", e => { if (e.key === "Escape" && picked) { dropPick(); rerenderSeats(); } });
+
+// The host's lobby: who is in the room without a seat. Guests the host moved
+// to the spectators (`benched`) and anyone who came with the watch link.
+const benched = new Set();
+let roomPeople = new Map();      // token -> "guest" | "watcher", everyone in my room but me
+const seatHold = new Map();      // token -> until when a seat waits for them (a spectator becoming a guest)
+let lastHostPeers = [];
+const personName = (t, fallback) => (t === myToken ? myName : peerNames.get(t)) || fallback;
+function lobbySpectators() {
+  if (guestOf) return Array.isArray(guestOf.host && guestOf.host.specs) ? guestOf.host.specs.filter(okToken) : [];
+  return [...roomPeople.keys()].filter(t => !seats.includes("f:" + t) && !kicked.has(t));
+}
+// Put a person in seat `i`, or (i < 0) with the spectators.
+function lobbyMove(token, i) {
+  if (guestOf || mp || !okToken(token) || i === 0) return;
+  const from = seats.indexOf("f:" + token);
+  if (i < 0) {
+    if (from < 0) return rerenderSeats();
+    seats[from] = "open";
+    benched.add(token);
+  } else {
+    if (from === i) return rerenderSeats();
+    const was = seats[i];
+    if (from >= 0) {
+      // Swap: whoever was there (or the computer, with its skill) moves over.
+      seats[from] = was;
+      [seatDiff[from], seatDiff[i]] = [seatDiff[i], seatDiff[from]];
+    } else if (isFriend(was)) benched.add(was.slice(2));
+    seats[i] = "f:" + token;
+    benched.delete(token);
+    // Someone watching becomes a guest: their seat waits while they switch.
+    if (roomPeople.get(token) === "watcher") seatHold.set(token, performance.now() + 15000);
+    Sfx.ui("trained");
+  }
+  lobbyChanged();
+}
+
 function renderLobby() {
   renderMapPick();
   const guest = !!guestOf;
@@ -2442,14 +2537,24 @@ function renderLobby() {
       : s === "ai" ? (guest ? `Computer · ${SKILL[(guestOf.host && guestOf.host.seatDiff || [])[i] ?? 1] || "Normal"}` : "Computer") // the host's picker shows the skill
       : room ? "Open for a friend" : "Empty";
     if (slot) who.style.color = PLIGHT[slot];
-    li.append(sw, who);
+    li.append(sw);
+    if (isFriend(s) && !guest) {
+      // A friend's name is a chip the host can move.
+      const c = chip(s.slice(2), who.textContent, slot ? PLIGHT[slot] : "", true);
+      const holder = document.createElement("span");
+      holder.className = "who";
+      holder.append(c);
+      li.append(holder);
+    } else li.append(who);
+    // Any seat but the host's takes a person.
+    if (!guest && i > 0 && room) dropTarget(li, t => seats[i] !== "f:" + t, t => lobbyMove(t, i));
     if (!guest && i > 0) {
       // The host decides who sits where.
       const sel = document.createElement("select");
       sel.setAttribute("aria-label", `Seat ${i + 1}`);
       // A computer seat picks its own skill.
       const ais = SKILL.map((n, d) => [`ai:${d}`, `Computer · ${n}`]);
-      const opts = isFriend(s) ? [["friend", "Friend"], ["ai:1", "Give to computer"], ["open", "Remove"]]
+      const opts = isFriend(s) ? [["friend", "Friend"], ["bench", "Move to spectators"], ["ai:1", "Give to computer"], ["open", "Send away"]]
         : [...ais, ["open", room ? "Open" : "Empty"]];
       for (const [v, label] of opts) {
         const o = document.createElement("option");
@@ -2466,6 +2571,7 @@ function renderLobby() {
     }
     ol.append(li);
   });
+  renderLobbySpectators();
   const active = list.filter(s => s !== "open").length;
   const friends = list.filter(isFriend).length;
   const btn = $("startBtn");
@@ -2523,9 +2629,37 @@ $("mapSeed").oninput = () => { const v = Math.floor(+$("mapSeed").value); if (v 
 $("mapSeed").onchange = () => { $("mapSeed").value = mapSeed; };
 $("mapAnother").onclick = () => { mapSeed = 1 + Math.floor(Math.random() * 999999); saveMapChoice(); renderMapPick(); };
 
+// Under the seats: who's here without one. The host can drag them onto a seat.
+function renderLobbySpectators() {
+  const box = $("lobbySpecs");
+  box.hidden = !room;
+  if (!room) return;
+  const host = !guestOf;
+  const list = lobbySpectators();
+  box.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = "Spectators";
+  box.append(label);
+  for (const t of list) {
+    const watching = host ? roomPeople.get(t) === "watcher" : false;
+    const nm = personName(t, watching ? "Spectator" : "Guest") + (t === myToken ? " (you)" : "");
+    box.append(chip(t, nm, "", host));
+  }
+  if (!list.length) {
+    const none = document.createElement("span");
+    none.className = "note";
+    none.textContent = host ? "Nobody yet. Drag a friend here to keep them out of the game." : "Nobody.";
+    box.append(none);
+  }
+  if (host) dropTarget(box, t => seats.includes("f:" + t), t => lobbyMove(t, -1));
+}
+
 function setSeat(i, v) {
   const s = seats[i];
-  if (isFriend(s)) { if (v === "friend") return; kicked.add(s.slice(2)); }
+  if (isFriend(s) && v === "bench") return lobbyMove(s.slice(2), -1);
+  // (Given to the computer, a friend stays as a spectator; sent away, they leave.)
+  if (isFriend(s)) { if (v === "friend") return; (v === "open" ? kicked : benched).add(s.slice(2)); }
   if (v.startsWith("ai:")) { seatDiff[i] = Math.max(0, Math.min(2, +v.slice(3) || 0)); v = "ai"; }
   seats[i] = v;
   lobbyChanged();
@@ -2533,18 +2667,28 @@ function setSeat(i, v) {
 function lobbyChanged() { publishLobby(); renderLobby(); }
 function publishLobby() {
   if (!room || guestOf) return;
-  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, name: myName, names: mp ? pnames : null, seats, seatDiff, playing: inGame(), kicked: [...kicked].slice(-20) });
+  room.presence({ role: "host", v: NET.PROTOCOL, token: myToken, name: myName, names: mp ? pnames : null, seats, seatDiff, playing: inGame(), kicked: [...kicked].slice(-20), specs: lobbySpectators().slice(0, 30), bench: [...benched].slice(-30) });
 }
 
 // The host's view of the room: seat whoever has arrived, free the seats of
 // whoever has gone. During a game, anyone gone is handed to the computer.
 function onHostPeers(peers) {
+  lastHostPeers = peers;
   notePeerNames(peers);
-  if (!inGame()) renderLobby(); // names may have changed
   setWatchCount(countWatchers(peers));
   Chat.setOthers(peers.length);
   const here = new Set();
   for (const [t, id] of seatPeer) if (!peers.some(p => p.id === id)) seatPeer.delete(t); // gone: the token is free again
+  // Everyone here, for the spectators under the lobby's seats.
+  const people = new Map();
+  for (const p of peers) {
+    const pr = p.presence || {};
+    if ((pr.role === "guest" || pr.role === "watcher") && pr.v === NET.PROTOCOL && okToken(pr.token) && pr.token !== myToken && !people.has(pr.token)) people.set(pr.token, pr.role);
+  }
+  const peopleChanged = JSON.stringify([...people]) !== JSON.stringify([...roomPeople]);
+  roomPeople = people;
+  for (const t of benched) if (!people.has(t)) benched.delete(t); // gone: a fresh start if they come back
+  if (!inGame()) renderLobby(); // names may have changed
   for (const p of peers) {
     const pr = p.presence || {};
     if (pr.role !== "guest" || pr.v !== NET.PROTOCOL || !okToken(pr.token)) continue;
@@ -2558,11 +2702,13 @@ function onHostPeers(peers) {
   }
   // (Seats being handed to spectators are skipped: they become guests in a moment.)
   if (mp && mp.server) { for (const [slot, t] of mp.server.tokens) if (!here.has(t) && !mp.server.joining.has(slot)) dropPlayer(slot); return; }
-  if (mp) return;
-  let changed = false;
-  seats.forEach((s, i) => { if (isFriend(s) && !here.has(s.slice(2))) { seats[i] = "open"; changed = true; } });
+  if (mp) { if (peopleChanged) publishLobby(); return; }
+  let changed = peopleChanged;
+  const now = performance.now();
+  for (const [t, until] of seatHold) if (until < now || here.has(t)) seatHold.delete(t);
+  seats.forEach((s, i) => { if (isFriend(s) && !here.has(s.slice(2)) && !seatHold.has(s.slice(2))) { seats[i] = "open"; changed = true; } });
   for (const t of here) {
-    if (kicked.has(t) || seats.includes("f:" + t)) continue;
+    if (kicked.has(t) || benched.has(t) || seats.includes("f:" + t)) continue;
     let i = seats.indexOf("open");
     if (i < 0) i = seats.lastIndexOf("ai");
     if (i < 0) break; // full
@@ -2651,7 +2797,9 @@ function onGuestPeers(peers) {
   guestOf.host = host;
   if (Array.isArray(host.kicked) && host.kicked.includes(myToken)) { openOwnLobby("The host gave your seat away. Here's your own game.", true); return; }
   const seated = host.seats.includes("f:" + myToken);
-  mpStatus(!seated ? "No free seat right now. You'll get one if the host opens a seat."
+  const onBench = Array.isArray(host.bench) && host.bench.includes(myToken);
+  mpStatus(!seated && onBench ? "You're with the spectators. The host can give you a seat."
+    : !seated ? "No free seat right now. You'll get one if the host opens a seat."
     : host.playing ? "The host is in a game. You'll play together when they're back. Meanwhile you can watch it."
     : "You're in. Waiting for the host to start…");
   $("watchHostBtn").hidden = !host.playing || !!Net.room;
@@ -2662,6 +2810,8 @@ function onGuestPeers(peers) {
 function lobbyTick() {
   if (guestOf && !mp && !guestOf.host && performance.now() - guestOf.lostAt > 8000)
     openOwnLobby("That game isn't open any more. Here's your own.", true);
+  // The host: a seat held for a spectator who never turned up opens again.
+  if (!guestOf && room && !mp && [...seatHold.values()].some(u => u < performance.now())) onHostPeers(lastHostPeers);
 }
 
 // A guest: the host started the game.
@@ -2899,27 +3049,31 @@ function renderGameSeats(force) {
     who.className = "who"; who.style.color = PLIGHT[p];
     who.textContent = pnames[p] && state !== "computer" ? `${pnames[p]} (${PNAME[p]})` : PNAME[p];
     li.append(sw, who);
-    if (state === "computer" && specs.length) {
-      const sel = document.createElement("select");
-      sel.setAttribute("aria-label", `Who plays ${PNAME[p]}`);
-      for (const [v, label] of [["", "Computer"], ...specs.map(([t, k, nm]) => [t, `Give to ${nm || "Spectator " + k}`])]) {
-        const o = document.createElement("option");
-        o.value = v; o.textContent = label;
-        sel.append(o);
-      }
-      sel.onchange = () => { if (sel.value) giveSeat(p, sel.value); };
-      li.append(sel);
-    } else {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = { you: "You", out: "Out", joining: `Handing to ${to}…`, friend: "Friend", computer: "Computer" }[state];
-      li.append(tag);
-    }
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = { you: "You", out: "Out", joining: `Handing to ${to}…`, friend: "Friend", computer: "Computer" }[state];
+    li.append(tag);
+    // A spectator dropped on a seat the computer plays takes it over.
+    if (state === "computer") dropTarget(li, t => specs.some(s => s[0] === t), t => giveSeat(p, t));
     ol.append(li);
+  }
+  // The spectators, as chips to drag onto a computer's seat.
+  const sb = $("gameSpecs");
+  sb.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = "Spectators";
+  sb.append(label);
+  for (const [t, k, nm] of specs) sb.append(chip(t, nm || `Spectator ${k}`, "", true));
+  if (!specs.length) {
+    const none = document.createElement("span");
+    none.className = "note";
+    none.textContent = "Nobody watching.";
+    sb.append(none);
   }
   const anyComputer = rows.some(r => r[1] === "computer");
   $("gameSeatNote").textContent = !anyComputer ? "Every seat has a player."
-    : specs.length ? "A spectator can take over a seat the computer plays, from where the game is now."
+    : specs.length ? "Drag a spectator onto a seat the computer plays (or click them, then the seat): they take over from where the game is now."
     : "Spectators can take over a seat the computer plays. Send them the watch link.";
 }
 

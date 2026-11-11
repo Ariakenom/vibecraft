@@ -304,6 +304,17 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .seat .who { font-weight: 700; flex: 1; }
 .seat .tag { color: var(--muted); font-size: 13px; }
 .game-seats { display: grid; gap: 8px; margin-top: 14px; }
+/* people to move between seats and the spectators (drag, or click then click) */
+.specs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 40px; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 3px; }
+.specs .label { color: var(--muted); font-size: 13px; margin-right: 4px; }
+.specs .note { margin: 0; }
+.chip { display: inline-block; font-weight: 700; }
+.chip.movable { padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--ground); cursor: grab; user-select: none; -webkit-user-select: none; }
+.chip.movable:hover { border-color: var(--bronze); }
+.chip.dragging { opacity: .45; }
+.chip.picked { outline: 2px solid var(--bronze); outline-offset: 1px; }
+.seat.drop-ok, .specs.drop-ok { outline: 1px dashed var(--bronze); outline-offset: 1px; cursor: pointer; }
+.seat.drop-over, .specs.drop-over { outline: 2px solid var(--bronze); outline-offset: 0; }
 .lobby select, .lobby input { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px 8px; font: 500 15px var(--body); }
 .lobby .row { gap: 10px; }
 .map-pick { display: grid; gap: 8px; justify-items: start; }
@@ -547,6 +558,7 @@ body.observing #hint { display: none; }
           <h2 id="seatsTitle">Players</h2>
         </div>
         <ol class="seats" id="seats"></ol>
+        <div class="specs" id="lobbySpecs" aria-label="Spectators" hidden></div>
         <div class="map-pick" id="mapRow">
           <div class="row">
             <label for="gameMode">Mode</label>
@@ -664,6 +676,7 @@ body.observing #hint { display: none; }
       </div>
       <div id="gameSeats" class="game-seats" hidden>
         <ol class="seats" id="gameSeatList" aria-label="Seats"></ol>
+        <div class="specs" id="gameSpecs" aria-label="Spectators"></div>
         <p class="note" id="gameSeatNote"></p>
       </div>
     </div>

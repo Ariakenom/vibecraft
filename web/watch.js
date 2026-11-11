@@ -584,6 +584,19 @@ class Watcher {
     if (hp) this.hostPeer = hp.id;
     if (host) { this.host = host; this.hostSeen = performance.now(); if (this.loaded && host.names && typeof host.names === "object") setNames(host.names); }
     else this.host = null;
+    // The host gave me a seat in their lobby: join it as a guest.
+    if (host && !this.loaded && !host.playing && Array.isArray(host.seats) && host.seats.includes("f:" + myToken)) {
+      const code = this.code;
+      setTimeout(() => {
+        if (watcher !== this) return;
+        try { history.replaceState(null, "", location.href.split("#")[0] + "#" + code); } catch { /* not allowed here */ }
+        $("watchWait").hidden = true;
+        $("startScreen").hidden = false;
+        joinLobby(code);
+        toast("The host gave you a seat.", "good");
+      });
+      return;
+    }
     this.status();
   }
   // What the waiting card says, and giving up on a host that's gone.

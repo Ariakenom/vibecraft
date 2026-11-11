@@ -350,6 +350,14 @@ Two topics carry the game itself. Every message carries
   you the host of your own lobby. Friends join with an invite link (the
   page address plus `#CODE`) and take an open seat, or a computer's if none
   is open. Begin with no friends seated is single player.
+- **Moving people.** Under the seats is a Spectators box: friends in the
+  room without a seat, and anyone who came with the watch link. The host
+  drags a person (or clicks them, then where they go) onto a seat, onto
+  another person's seat (they swap; a computer keeps its skill) or to the
+  Spectators. A friend moved to the spectators stays in the room and isn't
+  seated again by themselves (`benched`); someone watching who gets a seat
+  turns into a guest of the lobby (their seat waits 15 s while they
+  switch, `seatHold`). The host's own seat stays the first.
 - **Rooms.** Each lobby is a room named after its code; the game runs in
   that room, and the host's presence there carries the seat list
   (`openOwnLobby`, `joinLobby`, `beginGame` in `main.js`).
@@ -404,7 +412,8 @@ player's fog history is kept). The view is set with `set_view` in
   replay of what they watched. Players see "N watching" in the top bar.
   Spectating works over the relay, not claude.ai's room service.
 - **Taking a seat.** The host's menu lists the seats during a game, and a
-  seat the computer plays can be given to a spectator ("Spectator 3": the
+  seat the computer plays can be given to a spectator by dragging them onto
+  it from the Spectators box (or clicking them, then the seat) ("Spectator 3": the
   host numbers them as they arrive, and each sees their number). The
   server (`Server.claim`) picks a tick T a second ahead and puts "a person
   takes over" (command 13, the opposite of 7) into that tick's bundle, so
