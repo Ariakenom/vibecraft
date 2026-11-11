@@ -36,3 +36,5 @@
 1794352446	2026-11-11	c933bb52346511403d4ee640f4ffcff02b576762	Merge pull request #54 from Ariakenom/models-order
 1794435363	2026-11-11	5c17d5c7408935b7d1da5fae0e14cc9feb490ba0	Starving one at a time; drag every seat, mid-game too; speed 1-10x online
 1794439135	2026-11-12	7519608e7cb6de76787d4a901180e599580ba0b2	Merge pull request #55 from Ariakenom/seats-drag
+1794439122	2026-11-12	dc7404bdfe1d560b77fb17b54bd95d64067959ae	Protocol 42 also covers the walkable town square
+1794439141	2026-11-12	6bcaf1a704c121d11fa07cfab6b71f9453260eea	Merge pull request #56 from Ariakenom/menus-review
