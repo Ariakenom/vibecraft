@@ -2233,38 +2233,52 @@ def kiln():
 
 @own_seed(116)
 def air_defense():
-    """A Patriot-style missile battery (2x2): a launcher truck with four
-    square canisters raised toward the sky, and a radar truck with a flat
-    panel, on a concrete pad."""
+    """A fixed missile battery (2x2), like a Patriot site in an old RTS: an
+    octagonal concrete emplacement with a sandbagged rim, a turret ring,
+    and a heavy launcher box of four missiles raised to the sky, with a
+    radar panel on a mast behind it. Nothing on wheels: it's built to stay."""
     m = Model("AirDefense")
     foundation(m, 2, col=CONCRETE)
-    def wheels(x0, x1, z, r=0.09):
-        for x in (x0, (x0 + x1) / 2, x1):
-            for dz in (-1, 1):
-                m.cyl(r, r, 0.06, "#2a2a2a", x, r + 0.04, z + dz * 0.17, seg=10, rx=math.pi / 2, vary=0)
-    # the launcher: a long trailer, a cab, and the canister box on a pivot
-    m.box(1.05, 0.12, 0.36, OLIVE2, -0.05, 0.22, 0.32, vary=0.02)
-    m.box(0.28, 0.24, 0.36, OLIVE, -0.7, 0.3, 0.32, vary=0.02)
-    m.box(0.02, 0.1, 0.3, GLASS, -0.845, 0.36, 0.32, vary=0)
-    wheels(-0.7, 0.35, 0.32)
-    m.box(0.12, 0.2, 0.12, "#3e4146", 0.25, 0.37, 0.32, vary=0)  # the pivot
-    tilt = 0.6
+    STEEL_D, STEEL_M = "#3e4146", "#5b6066"
+    # the emplacement: an octagon of concrete, a lip, and sandbags round it
+    m.cyl(0.86, 0.8, 0.16, CONCRETE, 0, 0.17, 0, seg=8, ry=math.pi / 8, vary=0.02)
+    m.cyl(0.74, 0.74, 0.03, "#a8a499", 0, 0.26, 0, seg=8, ry=math.pi / 8, vary=0.01)
+    for k in range(16):
+        a = k / 16 * 2 * math.pi
+        if 0.6 < a < 1.0:  # a gap for the crew
+            continue
+        m.box(0.2, 0.08, 0.1, "#9a8a64", math.cos(a) * 0.8, 0.29 + (k % 2) * 0.02, math.sin(a) * 0.8, ry=-a + math.pi / 2, bevel=0.02, vary=0.08)
+    # the turret: a steel ring, a pedestal and two side arms holding the box
+    m.cyl(0.38, 0.42, 0.1, STEEL_D, 0, 0.32, 0, seg=16, vary=0.02)
+    m.cyl(0.3, 0.3, 0.06, STEEL_M, 0, 0.39, 0, seg=16, vary=0.02)
+    m.box(0.34, 0.22, 0.42, OLIVE2, 0.05, 0.52, 0, bevel=0.02, vary=0.02)
+    for dz in (-0.27, 0.27):
+        m.box(0.3, 0.32, 0.06, OLIVE, 0.0, 0.66, dz, bevel=0.015, vary=0.02)
+    # the launcher: a big box tipped up toward -x, four tubes facing the sky
+    tilt = 0.75
     ca, sa = math.cos(tilt), math.sin(tilt)
-    for row in range(2):
-        for col in range(2):
-            # four canisters, two by two, raised to the sky (towards -x)
-            m.box(0.8, 0.15, 0.15, OLIVE, 0.05 - row * 0.1 * sa, 0.55 + row * 0.16 * ca, 0.24 + col * 0.16, rz=-tilt, vary=0.02)
-    m.box(0.03, 0.31, 0.31, "#2f3324", -0.3 - 0.05, 0.86, 0.32, rz=-tilt, vary=0)   # the canisters' front caps
-    m.box(0.05, 0.06, 0.32, TEAM, 0.0, 0.31, 0.32, vary=0)
-    # the radar truck: a cabin with a big flat panel facing out
-    m.box(0.9, 0.12, 0.34, OLIVE2, 0.0, 0.22, -0.42, vary=0.02)
-    m.box(0.25, 0.22, 0.34, OLIVE, 0.55, 0.3, -0.42, vary=0.02)
-    wheels(-0.35, 0.55, -0.42)
-    m.box(0.45, 0.26, 0.3, OLIVE, -0.1, 0.41, -0.42, vary=0.02)
-    m.box(0.05, 0.5, 0.48, "#4b5232", -0.2, 0.8, -0.42, rz=0.35, vary=0)       # the radar panel, tilted up
-    m.box(0.02, 0.42, 0.4, "#6d7a50", -0.235, 0.81, -0.42, rz=0.35, vary=0)
-    m.box(0.04, 0.3, 0.04, "#3e4146", 0.3, 0.6, -0.55, vary=0)                 # an antenna mast
-    m.pole_flag(0.8, 0.8, 0.8)
+    cx, cy = -0.05, 0.86
+    m.box(0.95, 0.42, 0.46, OLIVE, cx, cy, 0, rz=-tilt, bevel=0.03, vary=0.02)
+    m.box(0.97, 0.06, 0.48, OLIVE2, cx + 0.02 * sa, cy + 0.02 * ca, 0, rz=-tilt, vary=0)  # a seam round the middle
+    # the front face, out along the box's long axis (toward -x, up)
+    fx, fy = cx - 0.475 * ca, cy + 0.475 * sa
+    m.box(0.03, 0.44, 0.48, "#2f3324", fx, fy, 0, rz=-tilt, vary=0)
+    for row in (-1, 1):
+        for col in (-1, 1):
+            # each tube's mouth, and the white nose of the missile inside
+            ox, oy = fx - 0.01 * ca + row * 0.1 * sa, fy - 0.01 * sa + row * 0.1 * ca
+            m.box(0.02, 0.17, 0.17, "#1e1f1c", ox, oy, col * 0.11, rz=-tilt, vary=0)
+            m.cyl(0.055, 0.0, 0.08, "#eeeae0", ox - 0.03 * ca, oy + 0.03 * sa, col * 0.11, seg=8, rz=math.pi / 2 - tilt, vary=0)
+    m.box(0.5, 0.06, 0.47, TEAM, cx + 0.12 * ca, cy - 0.12 * sa + 0.2, 0, rz=-tilt, vary=0)  # team stripe on top
+    # the radar: a mast at the back with a flat panel and a little dish
+    m.box(0.06, 0.6, 0.06, STEEL_D, 0.55, 0.58, -0.45, vary=0)
+    m.box(0.05, 0.38, 0.5, "#4b5232", 0.55, 0.98, -0.45, rz=0.25, bevel=0.01, vary=0)
+    m.box(0.02, 0.32, 0.42, "#6d7a50", 0.525, 0.99, -0.45, rz=0.25, vary=0)
+    m.cyl(0.03, 0.03, 0.12, STEEL_D, 0.55, 0.32, 0.55, vary=0)
+    m.cyl(0.12, 0.03, 0.05, "#c9c6bd", 0.55, 0.42, 0.55, rz=0.5, seg=12, vary=0)
+    # a low ammunition locker by the gap
+    m.box(0.24, 0.14, 0.16, OLIVE2, 0.45, 0.33, 0.48, bevel=0.01, vary=0.03)
+    m.pole_flag(-0.75, 0.75, 0.8)
     return m
 
 def clear_scene():

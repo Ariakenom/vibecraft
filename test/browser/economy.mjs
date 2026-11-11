@@ -96,7 +96,7 @@ await pg.evaluate(() => renderSelection(false));
 check(await pg.evaluate(() => buildPage) === 2, "clicking an era tab works even if the panel changed while it was held");
 // The Medieval page has the Sawmill and a second Capitol.
 const med = await pg.evaluate(() => { buildPage = 1; selKey = ""; renderSelection(true); return [...$("cmd").querySelectorAll("button")].map(b => b.getAttribute("aria-label")); });
-check(med.includes("Build Sawmill") && med.includes("Build Capitol"), `the Medieval page has a Sawmill and a Capitol (${med.filter(l => /Build/.test(l)).join(", ")})`);
+check(med.includes("Build Sawmill") && med.includes("Build Town Square"), `the Medieval page has a Sawmill and a Town Square (${med.filter(l => /Build/.test(l)).join(", ")})`);
 // Disband: select your own soldier, Shift+Q twice and it's gone.
 const sold = await pg.evaluate(() => {
   readWorld(); const c = findOwn(K.Capitol);

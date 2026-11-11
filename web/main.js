@@ -30,7 +30,7 @@ const isGun = k => k === K.AirDefense || k === K.Musketeer || k === K.Dragoon ||
 // Big guns: a boom, a big puff, a shell you can see.
 const isBigGun = k => k === K.AirDefense || k === K.Cannon || k === K.FieldGun || k === K.Tank || k === K.RocketArtillery || k === K.Galleon || k === K.Ironclad || k === K.Destroyer;
 const isBld = k => k >= 64;
-const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Capitol", [K.Barracks]: "Barracks",
+const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", [K.Archer]: "Archer", [K.Horseman]: "Horseman", [K.Capitol]: "Town Square", [K.Barracks]: "Barracks",
   [K.Range]: "Archery Range", [K.Stable]: "Stable", [K.Tower]: "Watch Tower", [K.Farm]: "Farm", [K.LumberCamp]: "Lumber Camp", [K.Quarry]: "Quarry",
   [K.HuntingLodge]: "Hunting Lodge", [K.Orchard]: "Orchard", [K.Pasture]: "Pasture",
   [K.Swordsman]: "Swordsman", [K.Crossbowman]: "Crossbowman", [K.Knight]: "Knight", [K.Trebuchet]: "Trebuchet",
@@ -77,7 +77,7 @@ const DESC = {
   [K.Jet]: "A faster, tougher fighter. Owns the air. Fuel for 50 seconds away from an airfield or carrier, then it's slow until it gets back, and 14 bursts of fire. Costs aluminum and oil.",
   [K.Archer]: "Fires from range. Strong against foot soldiers, weak against riders.",
   [K.Horseman]: "Fast cavalry. Runs down archers.",
-  [K.Capitol]: "Your seat of power, a town square round a statue: free workers wait on it, newcomers turn up there, and nothing else can be built on it. It makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
+  [K.Capitol]: "The heart of your town, a square round a statue: free workers wait on it, newcomers turn up there, everyone can walk across it, and nothing else can be built on it. It makes a little wood, stone, grain and fruit by itself, and shoots at enemies. It has 4 beds of its own. From the Medieval era you can found more (8 wood, 8 stone, 6 brick, 4 builders); you're out only when the last one falls.",
   [K.Barracks]: "Trains spearmen; swordsmen, musketeers, riflemen and infantry as the eras come.",
   [K.Range]: "Trains archers; crossbowmen from the Medieval era and machine gunners from the Industrial.",
   [K.Stable]: "Trains horsemen and knights, and dragoons from the Gunpowder era.",
@@ -868,6 +868,7 @@ function renderTopBar() {
   const hungry = W.unsupplied(), freeP = W.people(0), all = W.people(4);
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
   topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${freeP}<small>/ ${all}</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
+  renderIdleBtn(freeP);
   topBar.era.textContent = `${ERA_NAMES[eraIndex()]} era`;
   const nextEra = eraIndex() + 1;
   topBar.era.title = nextEra <= W.era_progress(2)
@@ -875,6 +876,23 @@ function renderTopBar() {
     : "Tech tree (K)";
   $("clock").textContent = fmtTime(W.game_time());
   if (resTipFor >= 0) renderResTip();
+}
+
+// The free workers ("." or the button by the minimap): select them and look at the next.
+function nextFreeWorker() {
+  if (!running || observe) return;
+  const id = W.free_workers();
+  if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; }
+  else toast("Nobody is free in the town square.");
+}
+$("idleBtn").onclick = e => { nextFreeWorker(); e.currentTarget.blur(); };
+function renderIdleBtn(n) {
+  const b = $("idleBtn");
+  b.classList.toggle("none", !n);
+  b.classList.toggle("gone", !!observe && !observe.view);
+  const c = $("idleCount");
+  if (c.textContent !== String(n)) c.textContent = String(n);
+  b.title = n ? `${n} free worker${n === 1 ? "" : "s"} in the town square: select them (.)` : "No free workers (.)";
 }
 
 // Where a resource's slots come from and what holds them.
@@ -900,7 +918,7 @@ function renderResTip() {
   if (W.housed(r)) html += line("In houses", `−${W.housed(r)}`, "neg");
   if (W.supply(r) !== made) html += line("Handicap", `${W.supply(r) - made >= 0 ? "+" : "−"}${Math.abs(W.supply(r) - made)}`);
   html += `<div class="row total"><span>Free</span><b>${free(r) - W.housed(r)}</b></div>`;
-  if (W.is_house_good(r)) html += `<p class="note">Houses want it: each house takes one, nearest the Capitol first, and gets 2 beds for it (3 past its third good). Buildings and units come first: when it runs short, the furthest houses lose it.</p>`;
+  if (W.is_house_good(r)) html += `<p class="note">Houses want it: each house takes one, nearest the Town Square first, and gets 2 beds for it (3 past its third good). Buildings and units come first: when it runs short, the furthest houses lose it.</p>`;
   if (free(r) < 0) html += `<p class="bad">You hold more ${RES_NAMES[r]} than you make: your newest units that need it are losing health.</p>`;
   const p = producerOf(r);
   html += `<p class="note">Slots are borrowed, not spent: whatever holds them gives them back when it's gone.${p != null ? ` A ${NAMES[p]} makes more.` : ""}</p>`;
@@ -1008,7 +1026,7 @@ function renderSelection(force) {
   } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
-    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait in the <b>town square</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Capitol) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> to select the free workers`;
+    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait in the <b>town square</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Town Square) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> or the worker button at the bottom left to select the free workers`;
     panel.append(d);
   } else if (sel.length === 1) {
     singleInfo(panel, sel[0]);
@@ -1776,7 +1794,7 @@ window.addEventListener("keydown", e => {
   if (k === "k") { toggleTech(); return; }
   if (k === "m") { Sfx.setMuted(!Sfx.muted); syncSoundBtn(); return; }
   if (k === "h") { const i = findOwn(K.Capitol); if (i != null) { setSelection([E(i, F.id)]); centerOn(E(i, F.x), E(i, F.y)); } return; }
-  if (k === "." || k === ",") { const id = W.free_workers(); if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; } else toast("Nobody is free in the town square."); return; }
+  if (k === "." || k === ",") { nextFreeWorker(); return; }
   if (k === " ") { e.preventDefault(); if (lastAlert && performance.now() - lastAlert.t < 15000) centerOn(lastAlert.x, lastAlert.y); else focusSelection(); return; }
   const ck = e.shiftKey && cmdKeys["⇧" + k] ? "⇧" + k : k;
   if (cmdKeys[ck]) { cmdKeys[ck](); e.preventDefault(); }
@@ -2149,62 +2167,104 @@ try {
 } catch { /* not in this browser */ }
 
 // ---- the trace panel (F8) ----
-// The frames part, for single player and multiplayer alike.
-function frameLines(s) {
-  const ms = n => n == null ? "?" : `${n} ms`, w = s.avgWork || {};
-  const lines = [`Frames ${s.fps}/s · between frames: median ${ms(s.p50)}, 95% within ${ms(s.p95)}, longest ${ms(s.maxFrameGap)}`];
-  lines.push(`Work per frame on average: game ${w.sim} ms, world ${w.world} ms, drawing ${w.draw} ms, graphics card ${w.gpu} ms, HUD ${w.hud} ms (most ${ms(s.maxWork)})`);
-  // The biggest parts, game and page.
+// Sections of label/value rows, always the same rows (a dash when there's
+// nothing yet), in a panel of fixed size: nothing in it jumps as the
+// numbers change.
+const traceDash = "–";
+function frameSections(s) {
+  const ms = n => n == null ? traceDash : `${n} ms`, w = s.avgWork || {};
   const top = (o, k) => Object.entries(o || {}).slice(0, k);
   const g = s.game || {}, tick = g.tick;
-  if (tick) {
-    const parts = top(g, 9).filter(([k]) => k !== "tick" && !k.startsWith("AI: ")).slice(0, 6).map(([k, v]) => `${k} ${v.ms}`);
-    const ai = ["AI: towns", "AI: barbarians"].filter(k => g[k]).map(k => `${k.slice(4)} ${g[k].ms}`);
-    lines.push(`Game: ${tick.ms} ms/s for ${tick.n} ticks (${Math.round(tick.ms / Math.max(1, tick.n) * 10) / 10} ms each) · biggest: ${parts.join(", ")}`);
-    if (ai.length || g.paths) lines.push(`Computer players: ${ai.join(", ") || "none"} ms/s · paths ${g.paths ? `${g.paths.ms} ms/s, ${g.paths.n} searches, ${Math.round(s.pathTiles / 1000)}k tiles` : "none"}`);
+  const parts = tick ? top(g, 9).filter(([k]) => k !== "tick" && !k.startsWith("AI: ")).slice(0, 4).map(([k, v]) => `${k} ${v.ms}`) : [];
+  const ai = ["AI: towns", "AI: barbarians"].filter(k => g[k]).map(k => `${k.slice(4)} ${g[k].ms}`);
+  const page = top(s.page, 4).map(([k, v]) => `${k} ${v}`);
+  return [
+    ["Frames", [
+      ["Frames", `${s.fps ?? traceDash}/s`],
+      ["Between frames", `median ${ms(s.p50)} · 95% ${ms(s.p95)} · longest ${ms(s.maxFrameGap)}`],
+      ["Work per frame", `game ${w.sim ?? traceDash} · world ${w.world ?? traceDash} · drawing ${w.draw ?? traceDash} · GPU ${w.gpu ?? traceDash} · HUD ${w.hud ?? traceDash} ms`],
+      ["Most work", ms(s.maxWork)],
+    ]],
+    ["Simulation", [
+      ["Game", tick ? `${tick.ms} ms/s, ${tick.n} ticks (${Math.round(tick.ms / Math.max(1, tick.n) * 10) / 10} ms each)` : traceDash],
+      ["Biggest", parts.join(", ") || traceDash],
+      ["Computer players", ai.length ? `${ai.join(", ")} ms/s` : traceDash],
+      ["Paths", g.paths ? `${g.paths.ms} ms/s, ${g.paths.n} searches, ${Math.round(s.pathTiles / 1000)}k tiles` : traceDash],
+    ]],
+    ["Page", [
+      ["Biggest (ms/s)", page.join(", ") || traceDash],
+      ["Scene", s.ents != null ? `${MW}×${MH} map · ${s.ents} things · ${s.drawCalls} draw calls · ${Math.round(s.triangles / 1000)}k triangles` : traceDash],
+      ["View", s.view ? `${s.view[0]}×${s.view[1]}${s.heapMB ? ` · memory ${s.heapMB} MB` : ""}` : traceDash],
+    ]],
+  ];
+}
+function hiccupSection(s) {
+  const slow = Trace.events.filter(e => e.kind === "slow frame"), e = slow[slow.length - 1];
+  const long = Trace.events.filter(e => e.kind === "long task").length;
+  return ["Hiccups", [
+    ["Slow frames", String(slow.length)],
+    ["Last slow frame", e ? `${e.gap} ms, ours ${e.ourWork} (game ${e.before.sim}, drawing ${e.before.draw}, GPU ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, freed ${e.freedMB} MB` : ""}` : traceDash],
+    ["Long tasks (>50 ms)", String(long)],
+    ["Memory clean-ups", s.cleanups ? `${s.cleanups} this second (${s.freedMB} MB)` : traceDash],
+  ]];
+}
+// Build the panel's rows once per layout (same sections and labels), then only change the values.
+let traceKey = "";
+function showTraceSections(sections) {
+  const body = $("netTraceBody");
+  const key = JSON.stringify(sections.map(([t, rows]) => [t, rows.map(r => r[0])]));
+  if (key !== traceKey) {
+    traceKey = key;
+    body.replaceChildren(...sections.map(([title, rows]) => {
+      const sec = document.createElement("section");
+      sec.className = "tr-sec";
+      const h = document.createElement("h4"); h.textContent = title;
+      const dl = document.createElement("dl");
+      for (const [label] of rows) { const dt = document.createElement("dt"), dd = document.createElement("dd"); dt.textContent = label; dl.append(dt, dd); }
+      sec.append(h, dl);
+      return sec;
+    }));
   }
-  const page = top(s.page, 6).map(([k, v]) => `${k} ${v}`);
-  if (page.length) lines.push(`Page (ms/s): ${page.join(", ")}`);
-  if (s.ents != null) lines.push(`Map ${MW}×${MH} · ${s.ents} things in sight · ${s.drawCalls} draw calls, ${Math.round(s.triangles / 1000)}k triangles · view ${s.view[0]}×${s.view[1]}${s.heapMB ? ` · memory ${s.heapMB} MB` : ""}`);
-  return lines;
+  const dds = body.querySelectorAll("dd");
+  let k = 0;
+  for (const [, rows] of sections) for (const [, v] of rows) { const dd = dds[k++]; if (dd.textContent !== v) { dd.textContent = v; dd.title = v; } }
 }
 function renderTrace() {
   const box = $("netTrace");
   if (box.hidden) return;
   const s = Trace.samples[Trace.samples.length - 1];
-  if (!s) { $("netTraceBody").textContent = "Measuring…"; return; }
-  const ms = n => n == null ? "?" : `${n} ms`;
+  if (!s) { showTraceSections([["Measuring…", []]]); return; }
+  const ms = n => n == null ? traceDash : `${n} ms`;
   if (!mp) {
-    const lines = [`Single player · game time ${s.gameTime} s · speed ${s.speed}×${s.paused ? " (paused)" : ""} · ticks ${s.ticks}/s`, ...frameLines(s)];
-    const slow = Trace.events.filter(e => e.kind === "slow frame");
-    if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
-    const long = Trace.events.filter(e => e.kind === "long task").length;
-    if (long) lines.push(`Long tasks (page blocked over 50 ms): ${long}`);
-    $("netTraceBody").textContent = lines.join("\n");
+    showTraceSections([
+      ["Game", [["Playing", `single player · game time ${s.gameTime} s`], ["Speed", `${s.speed}×${s.paused ? " (paused)" : ""} · ${s.ticks} ticks/s`]]],
+      ...frameSections(s), hiccupSection(s),
+    ]);
     return;
   }
-  const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : "–";
+  const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : traceDash;
   const st = s.stats, tick = NET.TICK_MS;
-  const lines = [];
-  lines.push(`You: ${s.role} (${PNAME[ME]}) · ${Trace.info.transport} · window ${s.window} ticks (${s.window * tick} ms)`);
-  const sign = n => n == null ? "?" : `${n > 0 ? "+" : ""}${n} ms`;
-  if (s.server) {
-    for (const [slot, g] of Object.entries(s.server.guests)) lines.push(`${PNAME[slot]}: ${g.active ? "" : "(left) "}ping ${ms(g.rtt)} ±${g.dev ?? "?"} · clock ${sign(g.clockErr)} · late commands ${g.late} · heard ${ms(g.heardAgo)} ago`);
-  } else {
-    lines.push(`Ping to host: ${ms(s.rtt)} ±${s.dev} · my clock ${sign(s.clockErr)} (as the host sees it) · heard ${ms(s.heardAgo)} ago`);
-  }
-  lines.push(`Live runs ${s.ahead} ticks ahead of confirmed · unconfirmed commands: mine ${s.pending}, friends' ${s.foreign}`);
-  lines.push(`Predictions right: whole game ${pct(st.matched, st.compared)}, my own things ${pct(st.mineMatched, st.compared)} (of ${st.compared} ticks)`);
-  lines.push(`Corrections ${st.corrections} (friend early ${st.early}, friend in bundle ${st.remote}, moved ${st.moved}, system ${st.system}, behind ${st.behind}) · re-ran ${st.resimTicks} ticks`);
-  lines.push(`…that changed my own things ${st.mineChanged} · moved my selection ${st.selChanged}`);
-  lines.push(`Friends' commands seen ${ms(s.friendsSeenAfter)} after given · unexplained ${st.unexplained} · drift (desync) ${st.desyncs}`);
-  lines.push(`Ticks ${s.ticks}/s · stalled ${s.stallMs} ms`);
-  lines.push(`Messages in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, longest gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`);
-  lines.push(...frameLines(s), `Longest clock gap ${ms(s.maxClockGap)}`);
-  const slow = Trace.events.filter(e => e.kind === "slow frame");
-  if (slow.length) { const e = slow[slow.length - 1]; lines.push(`Slow frames ${slow.length}; last: ${e.gap} ms, of which ours ${e.ourWork} ms (game ${e.before.sim}, drawing ${e.before.draw}, graphics card ${e.before.gpu}, HUD ${e.before.hud})${e.newShaders ? `, ${e.newShaders} new shaders` : ""}${e.freedMB ? `, browser freed ${e.freedMB} MB` : ""}`); }
-  if (s.cleanups) lines.push(`Browser memory clean-ups: ${s.cleanups} this second (${s.freedMB} MB)`);
-  $("netTraceBody").textContent = lines.join("\n");
+  const sign = n => n == null ? traceDash : `${n > 0 ? "+" : ""}${n} ms`;
+  const people = s.server
+    ? Object.entries(s.server.guests).map(([slot, g]) => [PNAME[slot] || `Player ${slot}`, `${g.active ? "" : "(left) "}ping ${ms(g.rtt)} ±${g.dev ?? "?"} · clock ${sign(g.clockErr)} · late ${g.late} · heard ${ms(g.heardAgo)} ago`])
+    : [["Host", `ping ${ms(s.rtt)} ±${s.dev} · my clock ${sign(s.clockErr)} · heard ${ms(s.heardAgo)} ago`]];
+  showTraceSections([
+    ["Network", [
+      ["You", `${s.role} (${PNAME[ME]}) · ${Trace.info.transport}`],
+      ["Window", `${s.window} ticks (${s.window * tick} ms)`],
+      ...people,
+      ["Messages", `in ${s.inMsgs}/s (${(s.inBytes / 1024).toFixed(1)} KB, gap ${ms(s.maxInGap)}) · out ${s.outMsgs}/s (${(s.outBytes / 1024).toFixed(1)} KB)`],
+    ]],
+    ["Lockstep", [
+      ["Ahead of confirmed", `${s.ahead} ticks · unconfirmed: mine ${s.pending}, friends' ${s.foreign}`],
+      ["Predictions right", `${pct(st.matched, st.compared)} (mine ${pct(st.mineMatched, st.compared)}) of ${st.compared} ticks`],
+      ["Corrections", `${st.corrections} (early ${st.early}, bundle ${st.remote}, moved ${st.moved}, system ${st.system}, behind ${st.behind}) · re-ran ${st.resimTicks}`],
+      ["Changed mine", `${st.mineChanged} · moved my selection ${st.selChanged}`],
+      ["Friends' commands", `seen ${ms(s.friendsSeenAfter)} after · unexplained ${st.unexplained} · drift ${st.desyncs}`],
+      ["Ticks", `${s.ticks}/s · stalled ${s.stallMs} ms · clock gap ${ms(s.maxClockGap)}`],
+    ]],
+    ...frameSections(s), hiccupSection(s),
+  ]);
 }
 function toggleTrace(show = $("netTrace").hidden) {
   $("netTrace").hidden = !show || !running;
@@ -2287,7 +2347,7 @@ function endGame(st = W.state_of(ME)) {
     if (!outShown && !observe) {
       outShown = true;
       $("outTitle").textContent = surrendered ? "You surrendered" : "Defeat";
-      $("outWhy").textContent = (surrendered ? "" : "Your Capitol has fallen. ") +
+      $("outWhy").textContent = (surrendered ? "" : "Your Town Square has fallen. ") +
         (mp && mp.server ? "The others play on. You're the host: if you leave, the game ends for everyone." : "The others play on.");
       $("outScreen").hidden = false;
       if (!mp && !paused) togglePause(); // single player waits for you to choose
@@ -2307,7 +2367,7 @@ function showEnd(st) {
   $("endWhy").textContent = {
     1: "All your rivals have fallen.",
     2: surrendered ? `You surrendered. ${winner} wins.` : `${winner} has conquered the land.`,
-    5: surrendered ? "You surrendered." : "Your Capitol has fallen.",
+    5: surrendered ? "You surrendered." : "Your Town Square has fallen.",
   }[st];
   Rec.finish(won ? `${pnc(ME)} won` : W.winner_player() ? `${winner} won` : surrendered ? `${pnc(ME)} surrendered` : `${pnc(ME)} was out`);
   Sfx.ui("fanfare", won);
@@ -2682,7 +2742,7 @@ function renderLobbySpectators() {
   if (!list.length) {
     const none = document.createElement("span");
     none.className = "note";
-    none.textContent = host ? "Nobody yet. Drag someone here to keep them out of the game." : "Nobody.";
+    none.textContent = "Nobody";
     box.append(none);
   }
   if (host) dropTarget(box, t => lobbyCan(t, "specs"), t => lobbyPut(t, "specs"));
@@ -3127,6 +3187,7 @@ function renderGameSeats(force) {
   const box = $("gameSeats");
   const show = canGiveSeats();
   box.hidden = !show;
+  $("noSeatsNote").hidden = show;
   if (!show) return;
   const n = W.n_players();
   const specs = gameSpecs();
@@ -3173,12 +3234,12 @@ function renderGameSeats(force) {
   if (!specs.length) {
     const none = document.createElement("span");
     none.className = "note";
-    none.textContent = "Nobody watching.";
+    none.textContent = "Nobody";
     sb.append(none);
   }
   dropTarget(sb, t => gameCan(t, "specs"), t => gamePut(t, "specs"));
   renderComputers($("gameAis"), true);
-  $("gameSeatNote").textContent = "Drag people and computers between the seats and the spectators (or click one, then where it goes). Whoever takes a seat plays on from where the game is now; a player moved off one watches.";
+  $("gameSeatNote").textContent = "Drag, or click then click.";
 }
 
 // A guest the host moved to the spectators: leave the game quietly and
@@ -3422,12 +3483,12 @@ function renderSaveList() {
 window.addEventListener("pointerdown", () => Sfx.init(), { capture: true });
 window.addEventListener("keydown", () => Sfx.init(), { capture: true });
 function syncSoundBtn() {
-  for (const id of ["volume", "menuVolume"]) {
+  for (const id of ["volume", "menuVolume", "startVolume"]) {
     $(id).value = String(Math.round(Sfx.volume * 100));
     $(id).classList.toggle("off", Sfx.muted);
   }
 }
-for (const id of ["volume", "menuVolume"]) {
+for (const id of ["volume", "menuVolume", "startVolume"]) {
   $(id).addEventListener("input", e => {
     Sfx.setVolume(e.target.value / 100);
     if (Sfx.muted && Sfx.volume > 0) Sfx.setMuted(false); // dragging the slider means you want sound
@@ -3449,6 +3510,16 @@ const toMenu = () => {
   if (wasGuestOf) joinLobby(wasGuestOf); else openOwnLobby();
 };
 $("startBtn").onclick = beginGame;
+// Tabs (start screen and menu): each shows its own panel of the card, in the same place.
+function showTab(card, name) {
+  for (const b of card.querySelectorAll(".tabs [data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  for (const p of card.querySelectorAll(".tabpanel")) { const on = p.dataset.tab === name; p.hidden = !on; p.classList.toggle("on", on); }
+  if (name === "players") renderGameSeats(true);
+}
+for (const tabs of document.querySelectorAll(".tabs")) {
+  const card = tabs.closest(".card");
+  tabs.addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(card, b.dataset.tab); });
+}
 $("leaveLobbyBtn").onclick = () => openOwnLobby();
 $("againBtn").onclick = toMenu;
 $("pauseBtn").onclick = togglePause;

@@ -21,6 +21,7 @@ async function same(pages, what) {
 // The host drags the first spectator in the menu onto seat `slot`.
 async function give(host, slot) {
   if (await host.evaluate(() => $("menuScreen").hidden)) await host.click("#menuBtn");
+  await host.click('#menuScreen [data-tab="players"]');
   await host.waitForSelector("#gameSeats:not([hidden])");
   await host.waitForSelector("#gameSpecs .chip.movable", { timeout: 15000 });
   await host.dragAndDrop("#gameSpecs .chip.movable", `#gameSeatList li:nth-child(${slot})`);
@@ -85,6 +86,7 @@ async function give(host, slot) {
   await spec.waitForFunction(() => watcher && watcher.loaded, null, { timeout: 30000 });
   check(await spec.evaluate(() => pnames[1] === "Ada" && /Ada/.test($("sbBody").textContent)), "the spectator's scoreboard has the names");
   await host.click("#menuBtn");
+  await host.click('#menuScreen [data-tab="players"]');
   await host.waitForFunction(() => /Cy/.test($("gameSpecs").textContent), null, { timeout: 15000 });
   check(true, "the host's menu shows the spectator by name");
   // Click and click works too (no mouse dragging): pick Cy up, then the seat.
