@@ -362,12 +362,12 @@ impl Game {
         if kind == Kind::Dock {
             return 1;
         }
-        // One by each Capitol and by the silo (`ai_unguarded`): the plan
-        // asks for them, so the economy's target has none.
-        if kind == Kind::AirDefense {
-            return hard;
-        }
-        if kind == Kind::Farm || hard == usize::MAX || matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Tower) {
+        // What makes nothing (the soldiers' buildings, the Factory, Tank
+        // Works and Airfield, air defenses, the silo) isn't in the economy's
+        // target at all: the plan says how many of those. (They used to get
+        // the target's count, none, unless named here: the computer never
+        // built the later eras' ones.)
+        if kind == Kind::Farm || hard == usize::MAX || kind.stats().produces.is_empty() {
             return hard;
         }
         let want = target(self.players[me as usize].era).count(kind) as usize;
