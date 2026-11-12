@@ -380,116 +380,272 @@ function unitModel(kind, owner) {
   return { body: m.build(), tool: t.build(), pivot: [0.05, 0.36, 0.11], height: 0.66 };
 }
 
-// Boats: the waterline is y = 0, the bow points +x. Drawn at their true
-// size (not `UNIT_SCALE`): they're big enough already. The tool is a
-// pennant at the masthead, which doesn't swing.
+// A boat's hull, lofted from cross-sections so it has a pointed bow, a
+// rounded bilge and a deck that rises to the ends, instead of a box with a
+// wedge stuck on. The waterline is y = 0 and the bow points +x; the hull
+// runs from x0 to x1. Returns its skin, its deck and a strake along the
+// top of the sides (painted in the team colour, so a ship shows whose it
+// is even with its sails down).
+function hullGeos(x0, x1, W, H, o = {}) {
+  const { stern = 0.55, sheer = 0.04, draft = 0.08, rake = 0.1, taper = 0.5, point = 1.7, bilge = 0.74, strake = 0.05, n = 12 } = o;
+  const L = x1 - x0, st = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const f = t < 0.3 ? stern + (1 - stern) * Math.sin((t / 0.3) * Math.PI / 2) : t < taper ? 1 : 1 - ((t - taper) / (1 - taper)) ** point;
+    const hw = Math.max(0.004, (W / 2) * f), x = x0 + t * L;
+    const yd = H - draft + sheer * (2 * t - 1) ** 2;                    // the rail
+    const yk = -draft + H * 0.6 * Math.max(0, (t - 0.75) / 0.25) ** 2;   // the keel sweeps up to the stem
+    const yb = yk + (yd - yk) * 0.3, xd = x + rake * t ** 4;
+    st.push({ t, hw, yd, yk, xd, sec: [[xd, yd, hw], [x, yb, hw * bilge], [x, yk, 0], [x, yb, -hw * bilge], [xd, yd, -hw]] });
+  }
+  const mk = () => ({ pos: [] });
+  const skin = mk(), deck = mk(), band = mk();
+  // A triangle, turned so it faces the way `hint` points.
+  const tri = (g, a, b, c, hx, hy, hz) => {
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    const d = (uy * vz - uz * vy) * hx + (uz * vx - ux * vz) * hy + (ux * vy - uy * vx) * hz;
+    if (d >= 0) g.pos.push(...a, ...b, ...c); else g.pos.push(...a, ...c, ...b);
+  };
+  const quad = (g, a, b, c, d, hx, hy, hz) => { tri(g, a, b, c, hx, hy, hz); tri(g, a, c, d, hx, hy, hz); };
+  const DROP = 0.022, IN = 0.9;   // the deck sits a little below the rail, inside a low bulwark
+  for (let i = 0; i < n; i++) {
+    const A = st[i], B = st[i + 1];
+    for (let j = 0; j < 4; j++) {
+      const cz = (A.sec[j][2] + A.sec[j + 1][2]) / 2, cy = (A.sec[j][1] + A.sec[j + 1][1]) / 2;
+      quad(skin, A.sec[j], A.sec[j + 1], B.sec[j + 1], B.sec[j], 0, cy - H * 0.6, cz * 3);
+    }
+    const dk = (S, s) => [S.xd, S.yd - DROP, s * S.hw * IN];
+    quad(deck, dk(A, -1), dk(A, 1), dk(B, 1), dk(B, -1), 0, 1, 0);
+    for (const s of [-1, 1]) {
+      quad(skin, A.sec[s > 0 ? 0 : 4], dk(A, s), dk(B, s), B.sec[s > 0 ? 0 : 4], 0, 1, -s);   // the bulwark's inside
+      // the strake: a band just proud of the top of the side
+      const top = S => [S.xd, S.yd + 0.002, s * (S.hw + 0.006)];
+      const low = S => { const p = S.sec[s > 0 ? 0 : 4], q = S.sec[s > 0 ? 1 : 3], k = Math.min(1, strake / Math.max(0.01, p[1] - q[1])); return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, s * (Math.abs(p[2] + (q[2] - p[2]) * k) + 0.006)]; };
+      quad(band, top(A), low(A), low(B), top(B), 0, 0.2, s);
+    }
+  }
+  const S0 = st[0];   // the stern: a flat transom
+  for (let j = 1; j < 4; j++) tri(skin, S0.sec[0], S0.sec[j], S0.sec[j + 1], -1, 0, 0);
+  tri(band, [S0.xd - 0.006, S0.yd + 0.002, S0.hw], [S0.xd - 0.006, S0.yd - strake, S0.hw * 0.97], [S0.xd - 0.006, S0.yd + 0.002, -S0.hw], -1, 0, 0);
+  tri(band, [S0.xd - 0.006, S0.yd - strake, S0.hw * 0.97], [S0.xd - 0.006, S0.yd - strake, -S0.hw * 0.97], [S0.xd - 0.006, S0.yd + 0.002, -S0.hw], -1, 0, 0);
+  const geo = g => { const b = new THREE.BufferGeometry(); b.setAttribute("position", new THREE.BufferAttribute(new Float32Array(g.pos), 3)); b.computeVertexNormals(); return b; };
+  // How high the deck is, and how wide, at x: for putting things on it.
+  const at = x => { const t = Math.max(0, Math.min(1, (x - x0) / L)), i = Math.min(n - 1, Math.floor(t * n)), k = t * n - i, A = st[i], B = st[i + 1];
+    return { y: A.yd + (B.yd - A.yd) * k - DROP, hw: A.hw + (B.hw - A.hw) * k }; };
+  return { skin: geo(skin), deck: geo(deck), band: geo(band), at };
+}
+// A sail with wind in it: a thin sheet across the ship, bellied forward.
+function sailGeo(w, h, belly = 0.06) {
+  const g = new THREE.BoxGeometry(0.016, h, w, 1, 4, 6), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const z = p.getZ(i) / (w / 2), y = p.getY(i) / (h / 2); p.setX(i, p.getX(i) + belly * (1 - z * z) * (1 - 0.4 * y * y)); }
+  g.computeVertexNormals();
+  return g;
+}
+
+// Boats: the waterline is y = 0, the bow points +x. The tool is a pennant
+// at the masthead, which doesn't swing. Each has its own outline from the
+// air: the fishing boat one slanting sail; the transport tubby, striped
+// sail, deck full of cargo; the galley long and low with oars, a ram and a
+// curling stern; the cog castles fore and aft; the galleon three masts of
+// white sail and a tall stern; the ironclad a black sloping casemate; the
+// destroyer grey and thin with turrets and raked funnels; the submarine a
+// narrow deck and a gun; the nuclear one a black whale's back, a tall fin
+// and missile hatches; the carrier a flat deck with aircraft on it.
 function boatModel(kind, owner) {
   const team = PCOL[owner], dark = PDARK[owner];
   const m = new Model(), t = new Model();
-  const GREY = "#7d858c", DARKGREY = "#4f565c", SAIL = "#efe6d1";
-  // A hull: a box with a pointed bow, a little below the waterline.
-  const hull = (len, w, h, col, deck = WOOD) => {
-    m.add(box(len, h, w), col, -0.06, h / 2 - 0.08, 0);
-    const bow = cyl(0, w / Math.SQRT2, 0.36, 4); bow.rotateY(Math.PI / 4); bow.rotateZ(-Math.PI / 2); bow.scale(1, h / w, 1);
-    m.add(bow, col, len / 2 + 0.12, h / 2 - 0.08, 0);
-    m.add(box(len - 0.06, 0.03, w - 0.06), deck, -0.06, h - 0.07, 0);
+  const GREY = "#98a1a8", DARKGREY = "#5a6268", SAIL = "#efe6d1", BLACK = "#22262a", GOLD = "#d9b24a";
+  let H = null;
+  const hull = (x0, x1, w, h, col, deck, band, o) => {
+    H = hullGeos(x0, x1, w, h, o);
+    m.add(H.skin, col).add(H.deck, deck).add(H.band, band);
+    return H;
   };
-  const mast = (x, h, w, col = team) => {
-    m.add(cyl(0.018, 0.022, h, 5), DARKWOOD, x, h / 2, 0);
-    m.add(box(0.03, h * 0.5, w), col, x + 0.03, h * 0.62, 0); // a square sail across the ship
-    m.add(box(0.025, 0.025, w + 0.08), DARKWOOD, x, h * 0.88, 0);
+  // Things stand on the deck: y above it at x.
+  const on = (geo, col, x, y, z = 0, ry = 0) => m.add(geo, col, x, H.at(x).y + y, z, ry);
+  const mast = (x, h, r = 0.02) => on(cyl(r * 0.7, r, h, 6), DARKWOOD, x, h / 2);
+  const square = (x, y, w, h, col, belly) => {   // a square sail on its yard, y above the deck
+    on(sailGeo(w, h, belly), col, x + 0.02, y);
+    on(box(0.028, 0.028, w + 0.08), DARKWOOD, x, y + h / 2);
   };
+  const gun = (x, z, len, col = BLACK) => on(cyl(0.014, 0.018, len, 6).rotateZ(Math.PI / 2), col, x, 0.04, z);
   let top = 0.9, mx = 0, mz = 0;
   switch (kind) {
-    case K.FishingBoat:
-      hull(0.42, 0.2, 0.14, "#8a6a42");
-      m.add(cyl(0.012, 0.014, 0.5, 5), DARKWOOD, 0, 0.3, 0);
-      { const sail = cone(0.16, 0.36, 3); sail.scale(0.15, 1, 1); m.add(sail, team, 0.04, 0.32, 0); }
-      m.add(box(0.12, 0.05, 0.12), "#c9bfa8", -0.16, 0.07, 0); // a heap of net
-      m.add(box(0.06, 0.12, 0.06), SKIN, -0.08, 0.12, 0.04); // the fisher
-      top = 0.55;
+    case K.FishingBoat: {
+      hull(-0.3, 0.42, 0.26, 0.15, "#9a7648", "#c9a878", team, { stern: 0.7, sheer: 0.05, rake: 0.06, n: 8, strake: 0.035 });
+      // one slanting yard and a three-cornered sail
+      on(cyl(0.012, 0.016, 0.42, 5), DARKWOOD, 0.08, 0.21);
+      { const yard = cyl(0.01, 0.01, 0.7, 5); yard.rotateZ(-0.9); on(yard, DARKWOOD, 0.02, 0.4); }
+      { const s = new THREE.BoxGeometry(0.5, 0.42, 0.014, 6, 6, 1), p = s.attributes.position;
+        for (let i = 0; i < p.count; i++) { const u = p.getX(i) / 0.5 + 0.5, v = p.getY(i) / 0.42 + 0.5; p.setY(i, (v * (0.25 + 0.75 * u) - 0.5) * 0.42 + u * 0.16); p.setZ(i, p.getZ(i) + 0.05 * Math.sin(u * Math.PI) * v); }
+        s.computeVertexNormals(); on(s, SAIL, 0.0, 0.3); on(box(0.5, 0.05, 0.02), team, 0.0, 0.14); }
+      on(box(0.15, 0.06, 0.15), "#d9d2bd", -0.17, 0.03);                 // a heap of net, floats on it
+      for (const [x, z] of [[-0.2, 0.04], [-0.13, -0.04], [-0.17, 0]]) on(ball(0.018, 0), "#c8453a", x, 0.07, z);
+      on(box(0.07, 0.11, 0.07), "#5a7a94", 0.24, 0.055, 0.02);            // the fisher, in a straw hat
+      on(ball(0.035, 0), SKIN, 0.24, 0.14, 0.02); on(cone(0.065, 0.04, 8), "#d9b85c", 0.24, 0.18, 0.02);
+      { const rod = cyl(0.005, 0.005, 0.34, 4); rod.rotateX(1.0); on(rod, DARKWOOD, 0.24, 0.18, 0.16); }
+      on(cyl(0.035, 0.03, 0.05, 8), "#8a6438", 0.1, 0.025, -0.05);        // a basket of fish
+      on(cyl(0.03, 0.03, 0.01, 8), "#a9c2d0", 0.1, 0.052, -0.05);
+      top = 0.62; mx = 0.08;
       break;
-    case K.Transport:
-      hull(0.9, 0.4, 0.2, "#7a5532");
-      for (const [x, z] of [[-0.28, 0.08], [-0.12, -0.08], [0.18, 0.07]]) m.add(box(0.13, 0.12, 0.13), "#a07a4f", x, 0.19, z);
-      mast(0.02, 0.85, 0.42);
-      top = 0.85; mx = 0.02;
+    }
+    case K.Transport: {
+      hull(-0.52, 0.72, 0.5, 0.23, "#7a5532", "#b08a58", team, { stern: 0.8, sheer: 0.05, taper: 0.55, point: 1.4, rake: 0.05 });
+      mast(0.05, 0.85, 0.024);
+      square(0.05, 0.5, 0.56, 0.42, SAIL, 0.09);
+      for (const y of [0.4, 0.6]) on(sailGeo(0.565, 0.06, 0.09), team, 0.055, y);   // two team stripes across the sail
+      // the deck piled with cargo: crates, barrels, sacks, a load under a tarpaulin
+      for (const [x, z, s, c] of [[-0.3, 0.1, 0.14, "#a07a4f"], [-0.3, -0.07, 0.12, "#8a6438"], [-0.16, 0.0, 0.13, "#a07a4f"], [-0.26, 0.03, 0.1, "#b88a58"]]) on(box(s, s, s), c, x, s / 2 + (s === 0.1 ? 0.13 : 0), z);
+      for (const [x, z] of [[0.28, 0.1], [0.28, -0.1], [0.4, 0]]) { on(cyl(0.05, 0.05, 0.12, 8), "#8a5f35", x, 0.06, z); on(cyl(0.053, 0.053, 0.02, 8), IRON, x, 0.06, z); }
+      on(box(0.2, 0.1, 0.3), dark, -0.02, 0.05); on(box(0.16, 0.05, 0.26), dark, -0.02, 0.12);
+      for (const z of [-0.08, 0.06]) on(ball(0.05, 1).scale(1.3, 0.8, 1), "#d9c38f", 0.17, 0.035, z);
+      on(box(0.03, 0.2, 0.03), DARKWOOD, -0.47, 0.1); on(box(0.03, 0.03, 0.14), DARKWOOD, -0.47, 0.2);   // the tiller post
+      top = 0.9; mx = 0.05;
       break;
-    case K.Galley:
-      hull(0.95, 0.28, 0.16, "#6e4a2c");
-      for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) { const oar = box(0.02, 0.02, 0.32); oar.rotateX(sd * 0.5); m.add(oar, WOOD, -0.36 + i * 0.13, 0.03, sd * 0.24); }
-      m.add(box(0.08, 0.05, 0.05), IRON, 0.62, -0.03, 0); // the ram
-      for (let i = 0; i < 3; i++) m.add(box(0.06, 0.12, 0.06), team, -0.2 + i * 0.2, 0.16, 0);
-      mast(0.0, 0.8, 0.36);
-      top = 0.8;
+    }
+    case K.Galley: {
+      hull(-0.56, 0.62, 0.27, 0.15, "#6e4a2c", "#a8824f", "#b8402e", { stern: 0.5, sheer: 0.03, taper: 0.45, point: 2.0, rake: 0.02, strake: 0.03 });
+      for (let i = 0; i < 8; i++) for (const sd of [-1, 1]) { const oar = box(0.016, 0.016, 0.36); oar.rotateX(sd * 0.42); m.add(oar, "#c9a878", -0.4 + i * 0.105, 0.01, sd * 0.27); m.add(box(0.03, 0.012, 0.07).rotateX(sd * 0.42), "#e0c898", -0.4 + i * 0.105, -0.055, sd * 0.42); }
+      m.add(cone(0.035, 0.2, 6).rotateZ(-Math.PI / 2), "#b98b45", 0.7, -0.03, 0);          // the bronze ram, at the waterline
+      for (const sd of [-1, 1]) { m.add(cyl(0.035, 0.035, 0.01, 10).rotateX(Math.PI / 2), "#f2ecda", 0.5, 0.05, sd * 0.062); m.add(cyl(0.015, 0.015, 0.012, 8).rotateX(Math.PI / 2), "#1a1410", 0.505, 0.05, sd * 0.066); }   // an eye on the bow
+      for (let k = 0; k < 5; k++) { const a = 0.3 + k * 0.5; m.add(box(0.035, 0.09, 0.05).rotateZ(-a), "#6e4a2c", -0.6 - Math.sin(a) * 0.06 + (k > 2 ? (k - 2) * 0.05 : 0), 0.12 + k * 0.065, 0); }   // the stern post, curling forward
+      for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) on(cyl(0.04, 0.04, 0.012, 8).rotateX(Math.PI / 2), i % 2 ? team : dark, -0.34 + i * 0.13, 0.03, sd * (H.at(-0.34 + i * 0.13).hw + 0.008));   // shields along the rail
+      mast(0.02, 0.62);
+      square(0.02, 0.4, 0.44, 0.3, team, 0.07);
+      on(box(0.16, 0.1, 0.16), "#b8402e", -0.42, 0.11); on(box(0.2, 0.015, 0.2), "#b8402e", -0.42, 0.16);       // the captain's awning
+      top = 0.68; mx = 0.02;
       break;
-    case K.Cog:
-      hull(0.85, 0.36, 0.24, "#7a5532");
-      m.add(box(0.2, 0.14, 0.34), "#8a6a42", -0.36, 0.23, 0); // aftcastle
-      m.add(box(0.16, 0.1, 0.3), "#8a6a42", 0.36, 0.21, 0); // forecastle
-      m.add(box(0.21, 0.02, 0.35), dark, -0.36, 0.31, 0);
-      mast(0.0, 0.95, 0.42);
-      top = 0.95;
+    }
+    case K.Cog: {
+      hull(-0.5, 0.66, 0.42, 0.28, "#7a5532", "#a8824f", "#4e3420", { stern: 0.78, sheer: 0.06, taper: 0.5, point: 1.5, rake: 0.08 });
+      // castles fore and aft: boxes on the rails with battlements, team-coloured boards
+      const castle = (x, w, d, h) => {
+        on(box(w, h, d), "#8a6a42", x, h / 2 + 0.02); on(box(w + 0.03, 0.03, d + 0.03), DARKWOOD, x, h + 0.02);
+        on(box(w + 0.01, h * 0.45, d + 0.01), team, x, h * 0.62);
+        for (let i = 0; i < 3; i++) for (const sd of [-1, 1]) on(box(0.055, 0.05, 0.03), "#8a6a42", x - w / 2 + 0.03 + i * (w - 0.06) / 2, h + 0.06, sd * d / 2);
+        for (let i = 0; i < 3; i++) for (const sx of [-1, 1]) on(box(0.03, 0.05, 0.055), "#8a6a42", x + sx * w / 2, h + 0.06, -d / 2 + 0.03 + i * (d - 0.06) / 2);
+      };
+      castle(-0.36, 0.26, 0.36, 0.16); castle(0.46, 0.18, 0.24, 0.13);
+      mast(0.05, 1.0, 0.026);
+      square(0.05, 0.56, 0.52, 0.46, team, 0.09);
+      on(sailGeo(0.1, 0.34, 0.11), dark, 0.075, 0.56); on(sailGeo(0.34, 0.09, 0.11), dark, 0.075, 0.6);   // a cross on the sail
+      on(cyl(0.06, 0.045, 0.07, 8), "#8a6a42", 0.05, 0.88);                                                  // the crow's nest
+      top = 1.02; mx = 0.05;
       break;
-    case K.Galleon:
-      hull(1.05, 0.36, 0.26, "#5a3a22");
-      m.add(box(0.26, 0.18, 0.34), "#6e4a2c", -0.42, 0.26, 0);
-      for (let i = 0; i < 5; i++) for (const sd of [-1, 1]) m.add(box(0.06, 0.05, 0.02), "#1d1208", -0.3 + i * 0.15, 0.1, sd * 0.185); // gun ports
-      m.add(box(0.98, 0.025, 0.37), "#c99a45", -0.06, 0.16, 0); // a gilt stripe
-      mast(0.2, 1.05, 0.44, SAIL); mast(-0.2, 0.9, 0.38, SAIL);
-      m.flag(0.2, 0.12, team, 0.3, 1.0, 0);
-      top = 1.05; mx = 0.2;
+    }
+    case K.Galleon: {
+      hull(-0.6, 0.72, 0.4, 0.28, "#5a3a22", "#a8824f", GOLD, { stern: 0.72, sheer: 0.07, taper: 0.5, point: 1.6, rake: 0.1, strake: 0.03 });
+      // the tall stern, in two steps, with windows and a lantern
+      on(box(0.34, 0.14, 0.32), "#6e4a2c", -0.42, 0.07); on(box(0.2, 0.12, 0.28), "#7a5532", -0.5, 0.2);
+      on(box(0.36, 0.02, 0.34), GOLD, -0.42, 0.145); on(box(0.22, 0.02, 0.3), GOLD, -0.5, 0.265);
+      for (const z of [-0.08, 0, 0.08]) m.add(box(0.01, 0.05, 0.045), "#f2d27a", -0.607, H.at(-0.5).y + 0.2, z);
+      on(ball(0.03, 0), "#f2d27a", -0.6, 0.33);
+      for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) { const x = -0.26 + i * 0.13, hw = H.at(x).hw; m.add(box(0.05, 0.04, 0.02), "#1d1208", x, 0.085, sd * (hw * 0.93)); m.add(box(0.03, 0.012, 0.05), "#2a2c30", x, 0.085, sd * (hw * 0.93 + 0.03)); }   // gun ports, muzzles out
+      { const sprit = cyl(0.012, 0.018, 0.42, 5); sprit.rotateZ(-1.15); on(sprit, DARKWOOD, 0.8, 0.1); }
+      for (const [x, h, w] of [[0.36, 0.8, 0.36], [0.0, 1.05, 0.46], [-0.32, 0.72, 0.3]]) {
+        mast(x, h, 0.022);
+        square(x, h * 0.42, w, h * 0.34, SAIL, 0.08); square(x, h * 0.78, w * 0.72, h * 0.24, SAIL, 0.06);
+      }
+      m.flag(0.2, 0.12, team, -0.52, H.at(-0.5).y + 0.5, 0); on(cyl(0.008, 0.008, 0.3, 4), DARKWOOD, -0.62, 0.42);   // the ensign at the stern
+      top = 1.08; mx = 0.0;
       break;
-    case K.Ironclad:
-      hull(1.05, 0.38, 0.18, DARKGREY, GREY);
-      { const cas = box(0.5, 0.16, 0.3); m.add(cas, GREY, -0.05, 0.18, 0); }
-      for (const sd of [-1, 1]) m.add(box(0.12, 0.03, 0.03), "#2a2e31", 0.0, 0.18, sd * 0.16);
-      m.add(cyl(0.05, 0.05, 0.28, 8), "#2a2219", -0.15, 0.38, 0); // the funnel
-      m.add(cyl(0.052, 0.052, 0.04, 8), team, -0.15, 0.48, 0);
-      m.add(cyl(0.012, 0.012, 0.5, 5), DARKWOOD, 0.2, 0.35, 0);
-      top = 0.6; mx = 0.2;
+    }
+    case K.Ironclad: {
+      hull(-0.6, 0.66, 0.42, 0.15, "#2e2b28", "#4a4540", team, { stern: 0.6, sheer: 0.0, taper: 0.55, point: 1.8, rake: -0.04, strake: 0.03 });
+      // the casemate: iron plate sloping in on every side, guns through it
+      { const g = box(0.66, 0.2, 0.38), p = g.attributes.position;
+        for (let i = 0; i < p.count; i++) if (p.getY(i) > 0) { p.setX(i, p.getX(i) * 0.62); p.setZ(i, p.getZ(i) * 0.5); }
+        g.computeVertexNormals(); on(g, "#3d3935", -0.04, 0.1); }
+      on(box(0.42, 0.012, 0.2), "#57514b", -0.04, 0.205);
+      for (let i = 0; i < 4; i++) on(box(0.01, 0.012, 0.19), "#2a2724", -0.19 + i * 0.1, 0.212);          // plate seams on the roof
+      for (const sd of [-1, 1]) for (const x of [-0.18, -0.04, 0.1]) { on(box(0.05, 0.045, 0.02), "#0f0d0c", x, 0.09, sd * 0.155); on(cyl(0.012, 0.012, 0.08, 6).rotateX(Math.PI / 2), "#1a1816", x, 0.09, sd * 0.19); }
+      on(cyl(0.014, 0.014, 0.12, 6).rotateZ(Math.PI / 2), "#1a1816", 0.34, 0.08);                         // the bow gun
+      on(cyl(0.06, 0.07, 0.4, 10), "#1f1c1a", -0.1, 0.4); on(cyl(0.075, 0.075, 0.05, 10), team, -0.1, 0.5); on(cyl(0.065, 0.065, 0.02, 10), "#0f0d0c", -0.1, 0.61);   // the funnel
+      on(box(0.08, 0.06, 0.08), "#57514b", 0.1, 0.24);                                                     // the pilot house
+      m.add(cone(0.04, 0.16, 6).rotateZ(-Math.PI / 2), "#2e2b28", 0.68, -0.03, 0);                         // a ram
+      on(cyl(0.008, 0.008, 0.36, 4), "#1a1816", -0.5, 0.18);
+      top = 0.72; mx = -0.5;
       break;
-    case K.Submarine: case K.NuclearSub: {
-      // Mostly under the water: a dark back, a conning tower, a periscope.
-      const big = kind === K.NuclearSub, L = big ? 1.25 : 0.95;
-      const back = cyl(0.13, 0.13, L, 10); back.rotateZ(Math.PI / 2); back.scale(1, 0.55, 1);
-      m.add(back, "#3a4046", -0.04, -0.03, 0);
-      const nose = ball(0.13, 1); nose.scale(1.2, 0.55, 1); m.add(nose, "#3a4046", L / 2 - 0.02, -0.03, 0);
-      // The missile deck: a row of hatches behind the tower.
-      if (big) for (let i = 0; i < 4; i++) m.add(box(0.07, 0.03, 0.12), "#2a2e31", -0.15 - i * 0.1, 0.06, 0);
-      m.add(box(0.2, 0.16, 0.1), "#4f565c", 0.05, 0.1, 0);
-      m.add(box(0.21, 0.03, 0.11), team, 0.05, 0.19, 0);
-      m.add(cyl(0.01, 0.01, 0.2, 5), "#2a2e31", 0.1, 0.28, 0);
-      top = 0.38; mx = 0.05;
+    }
+    case K.Destroyer: {
+      hull(-0.66, 0.84, 0.28, 0.2, GREY, "#7d868c", team, { stern: 0.55, sheer: 0.02, taper: 0.4, point: 1.9, rake: 0.14, strake: 0.025, n: 14 });
+      const turret = (x, dir) => { on(cyl(0.06, 0.065, 0.035, 8), DARKGREY, x, 0.018); on(box(0.1, 0.055, 0.09), GREY, x, 0.06); on(cyl(0.011, 0.011, 0.17, 6).rotateZ(Math.PI / 2), BLACK, x + dir * 0.12, 0.065); };
+      turret(0.5, 1); on(box(0.12, 0.05, 0.14), GREY, 0.36, 0.025); m.add(box(0.1, 0.055, 0.09), GREY, 0.36, H.at(0.36).y + 0.08, 0); m.add(cyl(0.011, 0.011, 0.17, 6).rotateZ(Math.PI / 2), BLACK, 0.48, H.at(0.36).y + 0.085, 0);   // two guns forward, one above the other
+      on(box(0.2, 0.14, 0.2), GREY, 0.16, 0.07); on(box(0.14, 0.07, 0.18), GREY, 0.18, 0.175); on(box(0.145, 0.03, 0.185), BLACK, 0.2, 0.185);   // the bridge and its windows
+      for (const x of [-0.04, -0.24]) { const f = cyl(0.045, 0.055, 0.22, 8); f.rotateZ(0.22); on(f, GREY, x, 0.13); on(cyl(0.05, 0.05, 0.035, 8).rotateZ(0.22), team, x - 0.02, 0.21); on(cyl(0.046, 0.046, 0.02, 8).rotateZ(0.22), BLACK, x - 0.027, 0.245); }   // two raked funnels
+      on(cyl(0.008, 0.012, 0.42, 5), DARKGREY, 0.1, 0.4); on(box(0.012, 0.012, 0.2), DARKGREY, 0.1, 0.5); on(box(0.1, 0.04, 0.012), DARKGREY, 0.1, 0.58);   // mast and radar
+      turret(-0.48, -1);
+      for (const sd of [-1, 1]) on(cyl(0.022, 0.022, 0.16, 6).rotateZ(Math.PI / 2), DARKGREY, -0.36, 0.03, sd * 0.07);   // torpedo tubes
+      for (let i = 0; i < 3; i++) on(cyl(0.02, 0.02, 0.04, 6).rotateX(Math.PI / 2), BLACK, -0.6, 0.025, -0.05 + i * 0.05);  // depth charges
+      top = 0.66; mx = 0.1;
+      break;
+    }
+    case K.Submarine: {
+      // A diesel boat on the surface: a low round hull, a flat deck along
+      // its top, a conning tower with a rail, periscopes, a gun before it.
+      const HULL = "#4a545c";
+      const back = new THREE.CapsuleGeometry(0.105, 0.86, 4, 10); back.rotateZ(Math.PI / 2); back.scale(1, 0.62, 1);
+      m.add(back, HULL, 0.0, -0.035, 0);
+      m.add(box(0.86, 0.03, 0.1), "#69747c", 0.02, 0.035, 0);                                   // the deck casing
+      m.add(box(0.14, 0.03, 0.06), "#69747c", 0.5, 0.03, 0);
+      m.add(cyl(0.05, 0.06, 0.12, 10).scale(1.7, 1, 1), HULL, 0.02, 0.11, 0);                   // the conning tower
+      m.add(cyl(0.062, 0.062, 0.03, 10).scale(1.7, 1, 1), team, 0.02, 0.15, 0);
+      for (const sd of [-1, 1]) m.add(box(0.14, 0.008, 0.008), "#c3ccd4", -0.02, 0.2, sd * 0.045);   // its rail
+      m.add(cyl(0.008, 0.008, 0.2, 5), "#2a2e31", 0.05, 0.27, 0); m.add(cyl(0.006, 0.006, 0.14, 5), "#2a2e31", 0.0, 0.24, 0);   // periscopes
+      m.add(cyl(0.025, 0.03, 0.035, 8), "#2a2e31", 0.24, 0.065, 0); m.add(cyl(0.01, 0.01, 0.16, 6).rotateZ(Math.PI / 2 - 0.25), "#2a2e31", 0.31, 0.105, 0);   // the deck gun
+      { const wire = box(0.5, 0.005, 0.005); wire.rotateZ(-0.2); m.add(wire, "#2a2e31", 0.32, 0.1, 0); }   // the net cutter's wire to the bow
+      m.add(box(0.04, 0.09, 0.012), HULL, -0.5, 0.02, 0);                                        // the rudder's top
+      top = 0.4; mx = 0.02;
+      break;
+    }
+    case K.NuclearSub: {
+      // Much bigger, black and smooth: a whale's back, a tall fin with
+      // planes on it, a rudder standing out of the water astern, and two
+      // rows of missile hatches ringed in white.
+      const HULL = "#1f2327";
+      const back = new THREE.CapsuleGeometry(0.16, 1.1, 5, 12); back.rotateZ(Math.PI / 2); back.scale(1, 0.6, 1);
+      m.add(back, HULL, -0.02, -0.045, 0);
+      { const tail = cone(0.1, 0.3, 10); tail.rotateZ(Math.PI / 2); tail.scale(1, 0.6, 1); m.add(tail, HULL, -0.82, -0.04, 0); }
+      m.add(box(0.2, 0.2, 0.07), HULL, 0.3, 0.14, 0); m.add(cyl(0.035, 0.035, 0.2, 8), HULL, 0.4, 0.14, 0); m.add(cyl(0.035, 0.035, 0.2, 8), HULL, 0.2, 0.14, 0);   // the fin, rounded fore and aft
+      m.add(box(0.21, 0.035, 0.075), team, 0.3, 0.19, 0);
+      m.add(box(0.07, 0.012, 0.3), HULL, 0.32, 0.15, 0);                                         // its diving planes
+      m.add(cyl(0.008, 0.008, 0.16, 5), "#3a4046", 0.33, 0.32, 0); m.add(cyl(0.006, 0.006, 0.1, 5), "#3a4046", 0.27, 0.29, 0);
+      for (let i = 0; i < 5; i++) for (const sd of [-1, 1]) {                                     // the missile deck
+        m.add(cyl(0.04, 0.04, 0.012, 10), "#e8e6e0", -0.02 - i * 0.11, 0.052 - i * 0.002, sd * 0.05);
+        m.add(cyl(0.03, 0.03, 0.014, 10), "#3a4046", -0.02 - i * 0.11, 0.053 - i * 0.002, sd * 0.05);
+      }
+      { const fin = box(0.14, 0.2, 0.014), p = fin.attributes.position; for (let i = 0; i < p.count; i++) if (p.getY(i) > 0) p.setX(i, p.getX(i) * 0.5 - 0.03); fin.computeVertexNormals(); m.add(fin, HULL, -0.76, 0.1, 0); }   // the rudder
+      m.add(box(0.1, 0.012, 0.26), HULL, -0.78, 0.0, 0);
+      top = 0.42; mx = 0.3;
       break;
     }
     case K.Carrier: {
-      // A long, flat grey deck with an island on the starboard side.
-      hull(1.5, 0.42, 0.2, DARKGREY, GREY);
-      m.add(box(1.6, 0.04, 0.5), "#5a6166", 0.02, 0.15, 0); // the flight deck, wider than the hull
-      for (let k = 0; k < 6; k++) m.add(box(0.12, 0.005, 0.02), "#d9dccf", -0.6 + k * 0.24, 0.175, 0); // the centre line
-      m.add(box(0.26, 0.24, 0.1), GREY, 0.1, 0.29, -0.2); // the island
-      m.add(box(0.14, 0.06, 0.11), "#2a2e31", 0.12, 0.39, -0.2);
-      m.add(cyl(0.01, 0.01, 0.25, 5), DARKGREY, 0.08, 0.53, -0.2);
-      m.add(box(0.2, 0.02, 0.12), team, -0.5, 0.18, 0.12);
-      top = 0.66; mx = 0.08; mz = -0.2;
+      // A long grey hull under a flat deck that overhangs it, an island to
+      // starboard, an angled landing strip, and aircraft parked forward.
+      hull(-0.84, 0.86, 0.42, 0.2, DARKGREY, "#6a7278", team, { stern: 0.7, sheer: 0.0, taper: 0.55, point: 1.7, rake: 0.1, strake: 0.03 });
+      const dy = 0.15;
+      m.add(box(1.72, 0.035, 0.52), "#4f575d", 0.02, dy, 0);
+      { const ang = box(0.9, 0.036, 0.2); ang.rotateY(0.16); m.add(ang, "#4f575d", -0.3, dy, 0.22); }   // the angled deck, out to port
+      for (let k = 0; k < 7; k++) m.add(box(0.12, 0.004, 0.018), "#e6e8dc", -0.72 + k * 0.24, dy + 0.02, -0.04);       // the centre line
+      { const l = box(0.86, 0.004, 0.014); l.rotateY(0.16); m.add(l, "#f0d83a", -0.3, dy + 0.02, 0.2); }
+      for (const [x, z] of [[0.25, 0.14], [-0.5, -0.12]]) m.add(box(0.14, 0.004, 0.12), "#3a4046", x, dy + 0.02, z);  // lifts
+      m.add(box(0.3, 0.2, 0.09), GREY, 0.12, dy + 0.115, -0.21); m.add(box(0.16, 0.07, 0.1), GREY, 0.14, dy + 0.25, -0.21);
+      m.add(box(0.165, 0.025, 0.105), BLACK, 0.15, dy + 0.26, -0.21);
+      m.add(cyl(0.035, 0.04, 0.1, 8), DARKGREY, 0.02, dy + 0.26, -0.21);                                              // its funnel
+      m.add(cyl(0.008, 0.01, 0.26, 5), DARKGREY, 0.16, dy + 0.42, -0.21); m.add(box(0.1, 0.035, 0.012), DARKGREY, 0.16, dy + 0.5, -0.21);
+      m.add(box(0.31, 0.03, 0.095), team, 0.12, dy + 0.06, -0.21);
+      // aircraft on the deck, wings in the team colour
+      for (const [x, z, a] of [[0.62, 0.1, 0.5], [0.5, -0.08, 0.5], [0.72, -0.06, 0.5], [-0.62, 0.05, 0.0]]) {
+        m.add(box(0.11, 0.022, 0.022), "#c3ccd4", x, dy + 0.035, z, a); m.add(box(0.03, 0.008, 0.13), team, x, dy + 0.04, z, a); m.add(box(0.012, 0.03, 0.04), "#c3ccd4", x - Math.cos(a) * 0.05, dy + 0.045, z + Math.sin(a) * 0.05, a);
+      }
+      top = 0.68; mx = 0.16; mz = -0.21;
       break;
     }
-    case K.Destroyer:
-      hull(1.15, 0.3, 0.18, DARKGREY, GREY);
-      m.add(box(0.22, 0.2, 0.2), GREY, 0.12, 0.2, 0); // the bridge
-      m.add(box(0.12, 0.04, 0.22), "#2a2e31", 0.18, 0.29, 0);
-      m.add(cyl(0.05, 0.06, 0.24, 8), GREY, -0.12, 0.25, 0);
-      m.add(cyl(0.052, 0.052, 0.04, 8), team, -0.12, 0.38, 0);
-      for (const x of [0.42, -0.42]) { m.add(cyl(0.07, 0.08, 0.06, 8), GREY, x, 0.13, 0); m.add(box(0.18, 0.025, 0.025), "#2a2e31", x + Math.sign(x) * 0.1, 0.15, 0); }
-      m.add(cyl(0.01, 0.01, 0.4, 5), DARKGREY, 0.05, 0.45, 0);
-      top = 0.62; mx = 0.05;
-      break;
   }
   t.flag(0.14, 0.07, team, 0.07, 0, 0);
   // (A carrier is drawn larger, to look big beside the aircraft it carries.)
   const scale = kind === K.Carrier ? 1.7 : 1;
-  return { body: m.build(), tool: t.build(), pivot: [mx, top, mz], height: top, scale };
+  return { body: m.build(), tool: t.build(), pivot: [mx, H && kind !== K.Carrier ? H.at(mx).y + top : top, mz], height: top, scale };
 }
 
 // Buildings are centred on their footprint; y = 0 is the ground.
@@ -766,7 +922,7 @@ function glbName(kind) {
     [K.BauxiteMine]: "BauxiteMine", [K.PowerPlant]: "PowerPlant", [K.HaberBosch]: "HaberBosch", [K.RadioFactory]: "RadioFactory", [K.TankWorks]: "TankWorks", [K.Airfield]: "Airfield",
     [K.RocketArtillery]: "RocketArtillery", [K.Jet]: "Jet", [K.TowerBlock]: "TowerBlock", [K.UraniumMine]: "UraniumMine", [K.Reactor]: "Reactor",
     [K.CarPlant]: "CarPlant", [K.TvPlant]: "TvPlant", [K.MissileSilo]: "MissileSilo",
-    [K.Sawmill]: "Lumbermill", [K.Stoneworks]: "Stoneworks", [K.Kiln]: "Kiln", [K.AirDefense]: "AirDefense" };
+    [K.Sawmill]: "Lumbermill", [K.Stoneworks]: "Stoneworks", [K.Kiln]: "Kiln", [K.AirDefense]: "AirDefense", [K.Pasture]: "Pasture" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
@@ -790,7 +946,7 @@ function loadGlbModels() {
 
 function setResourceGeos() {
   R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"]]) {
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"], ["horse", "Horse"], ["deer", "Deer"]]) {
     if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
   }
 }
@@ -1853,7 +2009,7 @@ function makeObj(i) {
   if (isBld(kind)) {
     const s = stat(kind, 6);
     o.baseY = flattenUnder(o.x, o.y, groundSize(kind));
-    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3, [K.Capitol]: 2.5 }[kind] || 1.6;
+    o.height = { [K.Farm]: 0.3, [K.Pasture]: 1.3, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3, [K.Capitol]: 2.5 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
     // A dock turns its pier (+z) to the water beside it.
