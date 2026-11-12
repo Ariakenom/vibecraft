@@ -117,6 +117,17 @@ const PARALLEL: usize = 4;
 /// Fishing boats the computer keeps, and warships at each difficulty.
 const FISHING_BOATS: usize = 2;
 const WARSHIPS: [usize; 3] = [0, 2, 4];
+/// The computer wants an air defense within this many tiles of each of its
+/// Capitols and of its silo: a nuke aimed at them then falls well inside
+/// the battery's cover (`AIR_DEFENSE_COVER`).
+const AIR_DEFENSE_NEAR: f32 = 8.0;
+/// Aiming a nuke: spots tried round each rival air defense, how many
+/// ordinary buildings a Capitol counts for, and the least harm (in
+/// buildings flattened) worth a nuke.
+const NUKE_RING: usize = 24;
+const NUKE_CAPITOL_WORTH: f32 = 8.0;
+const NUKE_WORTH: f32 = 2.0;
+
 /// Warships, oldest era first.
 const NAVY: [Kind; 6] = [Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Submarine, Kind::Destroyer];
 
@@ -351,6 +362,11 @@ impl Game {
         if kind == Kind::Dock {
             return 1;
         }
+        // One by each Capitol and by the silo (`ai_unguarded`): the plan
+        // asks for them, so the economy's target has none.
+        if kind == Kind::AirDefense {
+            return hard;
+        }
         if kind == Kind::Farm || hard == usize::MAX || matches!(kind, Kind::Barracks | Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Tower) {
             return hard;
         }
@@ -426,9 +442,10 @@ impl Game {
         self.ai_nuke(me, c.home);
     }
 
-    /// A silo: arm a nuke when its slots are free, and launch it at the
-    /// nearest rival Capitol.
-    fn ai_nuke(&mut self, me: u8, home: (f32, f32)) {
+    /// A silo: arm a nuke when its slots are free, and launch it where it
+    /// does the most harm and no air defense we know of can stop it
+    /// (`nuke_target`). With no such place the nuke stays in its silo.
+    fn ai_nuke(&mut self, me: u8, _home: (f32, f32)) {
         let Some(s) = self.find_first(me, Kind::MissileSilo) else { return };
         let (id, state, built) = (self.ents[s].id, self.ents[s].nuke, self.ents[s].built);
         if built < 1.0 {
@@ -438,10 +455,82 @@ impl Game {
             let _ = self.apply(me, Command::Arm { id });
         } else if state == 2 && self.time >= self.ais[me as usize].next_attack {
             // (Not before its first attack is due, like the army.)
-            if let Some((x, y)) = self.target_for(me, home.0, home.1) {
+            if let Some((x, y)) = self.nuke_target(me) {
                 let _ = self.apply(me, Command::Launch { id, x, y });
             }
         }
+    }
+
+    /// Our Capitols and silo that have no air defense of ours (or its
+    /// foundation) within `AIR_DEFENSE_NEAR`: the oldest first.
+    fn ai_unguarded(&self, me: u8) -> Option<(f32, f32)> {
+        let guards: Vec<(f32, f32)> = self.own(me).filter(|e| e.kind == Kind::AirDefense).map(|e| (e.x, e.y)).collect();
+        self.own(me)
+            .filter(|e| e.built >= 1.0 && matches!(e.kind, Kind::Capitol | Kind::MissileSilo))
+            .find(|e| !guards.iter().any(|&(x, y)| (x - e.x).hypot(y - e.y) <= AIR_DEFENSE_NEAR + 1.5))
+            .map(|e| (e.x, e.y))
+    }
+
+    /// A spot for an air defense in a town grown full round (x, y): right
+    /// up against other buildings (the usual one-tile gap never comes free
+    /// again there), but only where the free ground round it stays in one
+    /// piece, so it closes no lane between them.
+    fn ai_tight_spot(&self, me: u8, kind: Kind, x: f32, y: f32, reach: &[bool]) -> Option<(i32, i32)> {
+        let s = kind.stats().size;
+        let (cx, cy) = (x as i32 - s / 2, y as i32 - s / 2);
+        // The tiles round a footprint, in order: one run of free ones means
+        // whoever walks there can still walk round it.
+        let open_lanes = |tx: i32, ty: i32| {
+            let n = 4 * (s + 1);
+            let free: Vec<bool> = (0..n).map(|t| ring_point_of(s + 1, t)).map(|(dx, dy)| self.map.passable(tx - 1 + dx, ty - 1 + dy)).collect();
+            (0..free.len()).filter(|&i| free[i] && !free[(i + free.len() - 1) % free.len()]).count() <= 1
+        };
+        (3..=AIR_DEFENSE_NEAR as i32).find_map(|r| {
+            (0..8 * r).map(|t| ring_point(r, t)).map(|(dx, dy)| (cx + dx, cy + dy)).find(|&(tx, ty)| {
+                self.explored_by(me, tx, ty) && self.explored_by(me, tx + s - 1, ty + s - 1) && self.can_place(kind, tx, ty, me, 0) && touches(&self.map, reach, tx, ty, s) && open_lanes(tx, ty)
+            })
+        })
+    }
+
+    /// Where `me`'s nuke should fall: the spot that does the most damage
+    /// to rivals' buildings (a Capitol counting for many), less what it
+    /// does to our own, among spots outside the cover of every rival air
+    /// defense we know of. The computer knows what a player would: the
+    /// Capitols (in Skirmish every start is known), and buildings on ground it
+    /// has explored, which includes a battery that shot its last nuke down.
+    /// None if nothing worth a nuke can be reached.
+    pub(crate) fn nuke_target(&self, me: u8) -> Option<(f32, f32)> {
+        let known = |e: &Entity| e.alive && e.is_building() && e.owner != me && e.owner != GAIA && ((e.kind == Kind::Capitol && self.frontier.is_none()) || self.explored_by(me, e.tx, e.ty));
+        let rivals: Vec<&Entity> = self.ents.iter().filter(|e| known(e)).collect();
+        let defenses: Vec<&Entity> = rivals.iter().copied().filter(|e| e.kind == Kind::AirDefense && e.built >= 1.0).collect();
+        let ours: Vec<&Entity> = self.own(me).filter(|e| e.is_building()).collect();
+        // On each building, and round each air defense just past its cover
+        // (often still close enough to hurt what it guards).
+        let mut spots: Vec<(f32, f32)> = rivals.iter().map(|e| (e.x, e.y)).collect();
+        for d in &defenses {
+            for k in 0..NUKE_RING {
+                let a = k as f32 / NUKE_RING as f32 * std::f32::consts::TAU;
+                spots.push((d.x + a.cos() * (AIR_DEFENSE_COVER + 2.5), d.y + a.sin() * (AIR_DEFENSE_COVER + 2.5)));
+            }
+        }
+        let (w, h) = (self.map.w as f32, self.map.h as f32);
+        let harm = |list: &[&Entity], x: f32, y: f32| -> f32 {
+            list.iter().map(|e| (1.0 - e.edge_dist(x, y) / NUKE_RADIUS).max(0.0) * if e.kind == Kind::Capitol { NUKE_CAPITOL_WORTH } else { 1.0 }).sum()
+        };
+        let mut best = None;
+        let mut best_score = NUKE_WORTH;
+        for (x, y) in spots {
+            if x < 0.0 || y < 0.0 || x > w || y > h || defenses.iter().any(|d| d.edge_dist(x, y) <= AIR_DEFENSE_COVER + 0.5) {
+                continue;
+            }
+            // (Ours count double: never trade a town for a town.)
+            let score = harm(&rivals, x, y) - 2.0 * harm(&ours, x, y);
+            if score > best_score {
+                best_score = score;
+                best = Some((x, y));
+            }
+        }
+        best
     }
 
     /// Every tile a unit can walk to from (x, y), moving like the path
@@ -585,7 +674,10 @@ impl Game {
         // The plan: the first project that isn't impossible.
         let mut next = None;
         for (kind, n) in PLAN {
-            if c.have[kind as usize] >= n || !self.unlocked(me, kind) || (kind == Kind::Capitol && n >= 3 && !self.is_barb(me)) {
+            // Air defenses: the first by home, then (the Atomic era's step)
+            // one by every Capitol and by the silo that has none near.
+            let have_all = if kind == Kind::AirDefense && n >= 2 { self.ai_unguarded(me).is_none() } else { c.have[kind as usize] >= n };
+            if have_all || !self.unlocked(me, kind) || (kind == Kind::Capitol && n >= 3 && !self.is_barb(me)) {
                 continue;
             }
             // Soldiers' buildings only from a surplus: what `ai_free_up`
@@ -982,6 +1074,12 @@ impl Game {
             None if kind == Kind::Capitol => {
                 let clear = |tx: i32, ty: i32| !self.next_to_deposit(tx, ty, 3);
                 self.find_spot_where(me, kind, bx, by, 16, 34, &c.reach, &clear)
+            }
+            // An air defense right by what it guards: a nuke aimed there is
+            // shot down only if it falls within the battery's cover.
+            None if kind == Kind::AirDefense => {
+                let (gx, gy) = self.ai_unguarded(me).unwrap_or((bx, by));
+                self.find_spot(me, kind, gx, gy, 3, AIR_DEFENSE_NEAR as i32, &c.reach).or_else(|| self.ai_tight_spot(me, kind, gx, gy, &c.reach))
             }
             // Further out as the town fills up, leaving the ground next to
             // deposits to the producers that need it (if there's room).
@@ -1464,6 +1562,18 @@ fn formation_around(n: usize, x: f32, y: f32) -> Vec<(f32, f32)> {
 /// Does a footprint have a tile next to it (corners included) in `reach`?
 fn touches(map: &crate::map::Map, reach: &[bool], tx: i32, ty: i32, size: i32) -> bool {
     (ty - 1..=ty + size).any(|y| (tx - 1..=tx + size).any(|x| (x < tx || y < ty || x >= tx + size || y >= ty + size) && map.inside(x, y) && reach[map.idx(x, y)]))
+}
+
+/// The t-th tile on the edge of a square `side` + 1 tiles wide, from its
+/// corner (0, 0) (4 * side tiles in total).
+fn ring_point_of(side: i32, t: i32) -> (i32, i32) {
+    let (s, o) = (t / side, t % side);
+    match s {
+        0 => (o, 0),
+        1 => (side, o),
+        2 => (side - o, side),
+        _ => (0, side - o),
+    }
 }
 
 /// The t-th point on the square ring of radius r (8r points in total).

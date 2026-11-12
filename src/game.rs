@@ -2812,6 +2812,18 @@ impl Game {
                     let e = &mut self.ents[d];
                     e.progress = AIR_DEFENSE_RELOAD;
                     self.nukes[k].shot = Some((e.x, e.y));
+                    // Its missile gives the battery away: the nuke's owner
+                    // has now seen where it stands (the computer aims its
+                    // next one elsewhere, `nuke_target`).
+                    let (tx, ty, s) = (e.tx, e.ty, e.kind.stats().size);
+                    if owner < 8 {
+                        for (x, y) in (ty..ty + s).flat_map(|y| (tx..tx + s).map(move |x| (x, y))) {
+                            if self.map.inside(x, y) {
+                                let i = self.map.idx(x, y);
+                                self.explored[i] |= 1 << owner;
+                            }
+                        }
+                    }
                 }
             }
             let n = &self.nukes[k];
