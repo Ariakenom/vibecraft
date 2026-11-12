@@ -1266,6 +1266,31 @@ fn beds_grow_faster_with_more_goods() {
 }
 
 #[test]
+fn the_computer_aims_its_nuke_past_an_air_defense_it_has_seen() {
+    let mut g = town(5, 1, 2);
+    let cap = g.find_first(2, Kind::Capitol).unwrap();
+    let (cx, cy, tx, ty) = (g.ents[cap].x, g.ents[cap].y, g.ents[cap].tx, g.ents[cap].ty);
+    // Nothing in the way: at the Capitol.
+    let (x, y) = g.nuke_target(1).unwrap();
+    assert!((x - cx).hypot(y - cy) < 3.0, "aimed at ({x}, {y}), the Capitol is at ({cx}, {cy})");
+    // An air defense by it that player 1 hasn't seen changes nothing; once
+    // seen (here: it shot a nuke down), the next one falls outside its
+    // cover, and still close enough to hurt the Capitol.
+    let (ax, ay) = (3..9).flat_map(|r| (ty - r..=ty + r).flat_map(move |y| (tx - r..=tx + r).map(move |x| (x, y)))).find(|&(x, y)| g.can_place(Kind::AirDefense, x, y, 2, 0)).unwrap();
+    let def = g.spawn_building(Kind::AirDefense, 2, ax, ay, 1.0) as usize;
+    assert!(!g.explored_by(1, ax, ay), "the test wants the battery unseen at first");
+    assert_eq!(g.nuke_target(1), Some((x, y)));
+    let silo = g.spawn_building(Kind::MissileSilo, 1, 2, 2, 1.0);
+    g.ents[silo as usize].nuke = 2;
+    g.apply(1, Command::Launch { id: silo, x, y }).unwrap();
+    run(&mut g, NUKE_FLIGHT + 1.0);
+    assert!(g.ents[cap].hp == g.ents[cap].kind.stats().hp, "the first one was shot down");
+    let (x, y) = g.nuke_target(1).expect("a spot past the cover");
+    assert!(g.ents[def].edge_dist(x, y) > AIR_DEFENSE_COVER, "({x}, {y}) is inside the cover");
+    assert!(g.ents[cap].edge_dist(x, y) < NUKE_RADIUS, "({x}, {y}) is too far to hurt the Capitol");
+}
+
+#[test]
 fn an_air_defense_missile_brings_down_any_aircraft() {
     let mut g = town(5, 1, 2);
     g.set_ai(2, false);
