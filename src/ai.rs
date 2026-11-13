@@ -253,6 +253,12 @@ fn producer_of(r: Res) -> Option<Kind> {
 /// buildings (`econ.rs`) for the next era's houses, or for the silo once
 /// they are in the last one. The computer builds no more of a kind than this
 /// needs (one over, for slack) and lets go of what it no longer needs.
+/// Work the plans out now (`target`), not when the first computer player
+/// thinks: that froze the game for a quarter of a second, 11 s in.
+pub fn warm_up() {
+    target(0);
+}
+
 fn target(era: u8) -> &'static econ::Plan {
     static PLANS: std::sync::OnceLock<Vec<econ::Plan>> = std::sync::OnceLock::new();
     &PLANS.get_or_init(|| (1..=5).map(econ::era_plan).chain(std::iter::once(econ::silo_plan())).collect())[era.min(5) as usize]

@@ -1366,12 +1366,23 @@ function buildWorld() {
   });
   R3.resLook = { pine: look(true), oak: look(true), bush: look(true), stone: look(false, stoneMat), gold: look(false, goldMat) };
   for (const k of ["horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium"]) R3.resLook[k] = look(false);
-  R3.res = new Map(); // "kind block" -> its mesh
+  R3.res = new Map(); // RES_KINDS index * 65536 + block -> its mesh
+}
+const RES_KINDS = ["pine", "oak", "bush", "stone", "gold", "horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium"];
+// Which of RES_KINDS draws a deposit of kind `dep` (defs::Dep) on tile tx, ty.
+function resKindOf(dep, tx, ty) {
+  switch (dep) {
+    case 1: return hash2(tx, ty) < 0.4 ? 0 : 1; // pine or oak
+    case 0: return 2; case 3: return 5; case 4: return 6; case 6: return 7; case 7: return 8; case 8: return 9;
+    case 9: return 11; case 10: return 12; case 11: return 13; case 12: return 14; case 13: return 15; case 14: return 10;
+    default: return 3; // stone
+  }
 }
 
-// The instanced mesh for this kind of resource in block b, with room for n.
-function resMesh(kind, b, n) {
-  const key = kind + " " + b;
+// The instanced mesh for this kind of resource (an index into RES_KINDS) in
+// block b, with room for n.
+function resMesh(k, b, n) {
+  const key = k * 65536 + b, kind = RES_KINDS[k];
   let m = R3.res.get(key);
   if (m && m.instanceMatrix.count >= n) return m;
   if (m) { R3.scene.remove(m); m.dispose(); }
@@ -1379,7 +1390,7 @@ function resMesh(kind, b, n) {
   m = new THREE.InstancedMesh(R3.resGeo[kind], l.mat, Math.max(4, 2 ** Math.ceil(Math.log2(n))));
   m.customDepthMaterial = l.depth;
   m.castShadow = true; m.receiveShadow = true; m.count = 0;
-  m.userData.res = [];
+  m.userData.res = new Int32Array(m.instanceMatrix.count * 2); // each instance's tile x, y, for picking
   R3.scene.add(m);
   R3.res.set(key, m);
   return m;
@@ -2913,6 +2924,8 @@ function waterSide(x, y, s) {
   return Math.round(a / (Math.PI / 2)) * (Math.PI / 2);
 }
 
+const resetCount = m => { m.count = 0; };
+const makeRoom = (n, key) => resMesh(Math.floor(key / 65536), key % 65536, n);
 function updateResources() {
   if (!R3.res) return;
   // A number that changes when resources do (was a string: garbage every frame).
@@ -2927,17 +2940,20 @@ function updateResources() {
   // (Written over in place, then cut to length: emptying an array lets
   // the browser drop its storage, to be made again straight after.)
   // First which kind goes where, and how many of each in each block.
-  const bw = Math.ceil(MW / BLOCK), place = R3.resPlace ??= [], need = new Map();
-  for (const m of R3.res.values()) m.count = 0;
+  // (Numbers, in arrays kept from call to call: this runs several times a
+  // second while exploring, and strings here were the page's biggest garbage.)
+  const bw = Math.ceil(MW / BLOCK);
+  if (!R3.resPlace || R3.resPlace.length < resCount) R3.resPlace = new Int32Array(resCount * 2 + 64);
+  const place = R3.resPlace, need = R3.resNeed ??= new Map();
+  need.clear();
+  R3.res.forEach(resetCount);
   for (let i = 0; i < resCount; i++) {
-    const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2];
-    const h = hash2(tx, ty);
-    const mesh = kind === 1 ? (h < 0.4 ? "pine" : "oak") : kind === 0 ? "bush" : kind === 3 ? "horse" : kind === 4 ? "deer" : kind === 6 ? "iron" : kind === 7 ? "clay" : kind === 8 ? "sheep" : kind === 9 ? "nitrate" : kind === 10 ? "coal" : kind === 11 ? "oil" : kind === 12 ? "bauxite" : kind === 13 ? "uranium" : kind === 14 ? "fish" : "stone";
-    const b = Math.floor(ty / BLOCK) * bw + Math.floor(tx / BLOCK), key = mesh + " " + b;
+    const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1];
+    const key = resKindOf(resBuf[i * 5 + 2], tx, ty) * 65536 + Math.floor(ty / BLOCK) * bw + Math.floor(tx / BLOCK);
     place[i] = key;
     need.set(key, (need.get(key) || 0) + 1);
   }
-  for (const [key, n] of need) { const [kind, b] = key.split(" "); resMesh(kind, b, n); }
+  need.forEach(makeRoom);
   for (let i = 0; i < resCount; i++) {
     const tx = resBuf[i * 5], ty = resBuf[i * 5 + 1], kind = resBuf[i * 5 + 2], frac = resBuf[i * 5 + 3] / resBuf[i * 5 + 4];
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
@@ -2960,6 +2976,7 @@ function updateResources() {
     else if (kind === 14) { mesh = "fish"; scale = 0.9 + 0.3 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res.get(place[i]);
+    if (!m) continue;
     const x = tx + 0.5 + (h - 0.5) * 0.25, y = ty + 0.5 + (h2 - 0.5) * 0.25;
     // Turned round the vertical by h and scaled, written straight into the
     // instance arrays (passing numbers to three.js's setters boxes each).
@@ -2977,7 +2994,6 @@ function updateResources() {
   }
   for (const m of R3.res.values()) {
     m.visible = m.count > 0;
-    if (m.userData.res.length > m.count * 2) m.userData.res.length = m.count * 2;
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
     m.computeBoundingSphere();

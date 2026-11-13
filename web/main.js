@@ -3687,6 +3687,7 @@ const Boot = {
   Boot.step("Waking the engine…", 0.12);
   await Boot.breathe();
   await loadWasm();
+  W.warm_up(); // (the computer's plans: a quarter-second freeze 11 s into the first game otherwise)
   initWatchUi();
   initChatUi();
   Boot.step("Carving the models…", 0.3);
