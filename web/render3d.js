@@ -36,7 +36,7 @@ const R3 = {
 const fowUniforms = { uFow: { value: null }, uMapSize: { value: null } };
 // Time in seconds, shared by the water and the swaying grass, trees and flags.
 const timeUniform = { value: 0 };
-// How much things move in the wind (0 on the Low graphics setting).
+// How much things move in the wind (0 with the Wind setting off).
 const swayUniform = { value: 1 };
 function withFow(mat, extra) {
   // three.js reuses a compiled shader for any material whose onBeforeCompile
@@ -380,116 +380,272 @@ function unitModel(kind, owner) {
   return { body: m.build(), tool: t.build(), pivot: [0.05, 0.36, 0.11], height: 0.66 };
 }
 
-// Boats: the waterline is y = 0, the bow points +x. Drawn at their true
-// size (not `UNIT_SCALE`): they're big enough already. The tool is a
-// pennant at the masthead, which doesn't swing.
+// A boat's hull, lofted from cross-sections so it has a pointed bow, a
+// rounded bilge and a deck that rises to the ends, instead of a box with a
+// wedge stuck on. The waterline is y = 0 and the bow points +x; the hull
+// runs from x0 to x1. Returns its skin, its deck and a strake along the
+// top of the sides (painted in the team colour, so a ship shows whose it
+// is even with its sails down).
+function hullGeos(x0, x1, W, H, o = {}) {
+  const { stern = 0.55, sheer = 0.04, draft = 0.08, rake = 0.1, taper = 0.5, point = 1.7, bilge = 0.74, strake = 0.05, n = 12 } = o;
+  const L = x1 - x0, st = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const f = t < 0.3 ? stern + (1 - stern) * Math.sin((t / 0.3) * Math.PI / 2) : t < taper ? 1 : 1 - ((t - taper) / (1 - taper)) ** point;
+    const hw = Math.max(0.004, (W / 2) * f), x = x0 + t * L;
+    const yd = H - draft + sheer * (2 * t - 1) ** 2;                    // the rail
+    const yk = -draft + H * 0.6 * Math.max(0, (t - 0.75) / 0.25) ** 2;   // the keel sweeps up to the stem
+    const yb = yk + (yd - yk) * 0.3, xd = x + rake * t ** 4;
+    st.push({ t, hw, yd, yk, xd, sec: [[xd, yd, hw], [x, yb, hw * bilge], [x, yk, 0], [x, yb, -hw * bilge], [xd, yd, -hw]] });
+  }
+  const mk = () => ({ pos: [] });
+  const skin = mk(), deck = mk(), band = mk();
+  // A triangle, turned so it faces the way `hint` points.
+  const tri = (g, a, b, c, hx, hy, hz) => {
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    const d = (uy * vz - uz * vy) * hx + (uz * vx - ux * vz) * hy + (ux * vy - uy * vx) * hz;
+    if (d >= 0) g.pos.push(...a, ...b, ...c); else g.pos.push(...a, ...c, ...b);
+  };
+  const quad = (g, a, b, c, d, hx, hy, hz) => { tri(g, a, b, c, hx, hy, hz); tri(g, a, c, d, hx, hy, hz); };
+  const DROP = 0.022, IN = 0.9;   // the deck sits a little below the rail, inside a low bulwark
+  for (let i = 0; i < n; i++) {
+    const A = st[i], B = st[i + 1];
+    for (let j = 0; j < 4; j++) {
+      const cz = (A.sec[j][2] + A.sec[j + 1][2]) / 2, cy = (A.sec[j][1] + A.sec[j + 1][1]) / 2;
+      quad(skin, A.sec[j], A.sec[j + 1], B.sec[j + 1], B.sec[j], 0, cy - H * 0.6, cz * 3);
+    }
+    const dk = (S, s) => [S.xd, S.yd - DROP, s * S.hw * IN];
+    quad(deck, dk(A, -1), dk(A, 1), dk(B, 1), dk(B, -1), 0, 1, 0);
+    for (const s of [-1, 1]) {
+      quad(skin, A.sec[s > 0 ? 0 : 4], dk(A, s), dk(B, s), B.sec[s > 0 ? 0 : 4], 0, 1, -s);   // the bulwark's inside
+      // the strake: a band just proud of the top of the side
+      const top = S => [S.xd, S.yd + 0.002, s * (S.hw + 0.006)];
+      const low = S => { const p = S.sec[s > 0 ? 0 : 4], q = S.sec[s > 0 ? 1 : 3], k = Math.min(1, strake / Math.max(0.01, p[1] - q[1])); return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, s * (Math.abs(p[2] + (q[2] - p[2]) * k) + 0.006)]; };
+      quad(band, top(A), low(A), low(B), top(B), 0, 0.2, s);
+    }
+  }
+  const S0 = st[0];   // the stern: a flat transom
+  for (let j = 1; j < 4; j++) tri(skin, S0.sec[0], S0.sec[j], S0.sec[j + 1], -1, 0, 0);
+  tri(band, [S0.xd - 0.006, S0.yd + 0.002, S0.hw], [S0.xd - 0.006, S0.yd - strake, S0.hw * 0.97], [S0.xd - 0.006, S0.yd + 0.002, -S0.hw], -1, 0, 0);
+  tri(band, [S0.xd - 0.006, S0.yd - strake, S0.hw * 0.97], [S0.xd - 0.006, S0.yd - strake, -S0.hw * 0.97], [S0.xd - 0.006, S0.yd + 0.002, -S0.hw], -1, 0, 0);
+  const geo = g => { const b = new THREE.BufferGeometry(); b.setAttribute("position", new THREE.BufferAttribute(new Float32Array(g.pos), 3)); b.computeVertexNormals(); return b; };
+  // How high the deck is, and how wide, at x: for putting things on it.
+  const at = x => { const t = Math.max(0, Math.min(1, (x - x0) / L)), i = Math.min(n - 1, Math.floor(t * n)), k = t * n - i, A = st[i], B = st[i + 1];
+    return { y: A.yd + (B.yd - A.yd) * k - DROP, hw: A.hw + (B.hw - A.hw) * k }; };
+  return { skin: geo(skin), deck: geo(deck), band: geo(band), at };
+}
+// A sail with wind in it: a thin sheet across the ship, bellied forward.
+function sailGeo(w, h, belly = 0.06) {
+  const g = new THREE.BoxGeometry(0.016, h, w, 1, 4, 6), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const z = p.getZ(i) / (w / 2), y = p.getY(i) / (h / 2); p.setX(i, p.getX(i) + belly * (1 - z * z) * (1 - 0.4 * y * y)); }
+  g.computeVertexNormals();
+  return g;
+}
+
+// Boats: the waterline is y = 0, the bow points +x. The tool is a pennant
+// at the masthead, which doesn't swing. Each has its own outline from the
+// air: the fishing boat one slanting sail; the transport tubby, striped
+// sail, deck full of cargo; the galley long and low with oars, a ram and a
+// curling stern; the cog castles fore and aft; the galleon three masts of
+// white sail and a tall stern; the ironclad a black sloping casemate; the
+// destroyer grey and thin with turrets and raked funnels; the submarine a
+// narrow deck and a gun; the nuclear one a black whale's back, a tall fin
+// and missile hatches; the carrier a flat deck with aircraft on it.
 function boatModel(kind, owner) {
   const team = PCOL[owner], dark = PDARK[owner];
   const m = new Model(), t = new Model();
-  const GREY = "#7d858c", DARKGREY = "#4f565c", SAIL = "#efe6d1";
-  // A hull: a box with a pointed bow, a little below the waterline.
-  const hull = (len, w, h, col, deck = WOOD) => {
-    m.add(box(len, h, w), col, -0.06, h / 2 - 0.08, 0);
-    const bow = cyl(0, w / Math.SQRT2, 0.36, 4); bow.rotateY(Math.PI / 4); bow.rotateZ(-Math.PI / 2); bow.scale(1, h / w, 1);
-    m.add(bow, col, len / 2 + 0.12, h / 2 - 0.08, 0);
-    m.add(box(len - 0.06, 0.03, w - 0.06), deck, -0.06, h - 0.07, 0);
+  const GREY = "#98a1a8", DARKGREY = "#5a6268", SAIL = "#efe6d1", BLACK = "#22262a", GOLD = "#d9b24a";
+  let H = null;
+  const hull = (x0, x1, w, h, col, deck, band, o) => {
+    H = hullGeos(x0, x1, w, h, o);
+    m.add(H.skin, col).add(H.deck, deck).add(H.band, band);
+    return H;
   };
-  const mast = (x, h, w, col = team) => {
-    m.add(cyl(0.018, 0.022, h, 5), DARKWOOD, x, h / 2, 0);
-    m.add(box(0.03, h * 0.5, w), col, x + 0.03, h * 0.62, 0); // a square sail across the ship
-    m.add(box(0.025, 0.025, w + 0.08), DARKWOOD, x, h * 0.88, 0);
+  // Things stand on the deck: y above it at x.
+  const on = (geo, col, x, y, z = 0, ry = 0) => m.add(geo, col, x, H.at(x).y + y, z, ry);
+  const mast = (x, h, r = 0.02) => on(cyl(r * 0.7, r, h, 6), DARKWOOD, x, h / 2);
+  const square = (x, y, w, h, col, belly) => {   // a square sail on its yard, y above the deck
+    on(sailGeo(w, h, belly), col, x + 0.02, y);
+    on(box(0.028, 0.028, w + 0.08), DARKWOOD, x, y + h / 2);
   };
+  const gun = (x, z, len, col = BLACK) => on(cyl(0.014, 0.018, len, 6).rotateZ(Math.PI / 2), col, x, 0.04, z);
   let top = 0.9, mx = 0, mz = 0;
   switch (kind) {
-    case K.FishingBoat:
-      hull(0.42, 0.2, 0.14, "#8a6a42");
-      m.add(cyl(0.012, 0.014, 0.5, 5), DARKWOOD, 0, 0.3, 0);
-      { const sail = cone(0.16, 0.36, 3); sail.scale(0.15, 1, 1); m.add(sail, team, 0.04, 0.32, 0); }
-      m.add(box(0.12, 0.05, 0.12), "#c9bfa8", -0.16, 0.07, 0); // a heap of net
-      m.add(box(0.06, 0.12, 0.06), SKIN, -0.08, 0.12, 0.04); // the fisher
-      top = 0.55;
+    case K.FishingBoat: {
+      hull(-0.3, 0.42, 0.26, 0.15, "#9a7648", "#c9a878", team, { stern: 0.7, sheer: 0.05, rake: 0.06, n: 8, strake: 0.035 });
+      // one slanting yard and a three-cornered sail
+      on(cyl(0.012, 0.016, 0.42, 5), DARKWOOD, 0.08, 0.21);
+      { const yard = cyl(0.01, 0.01, 0.7, 5); yard.rotateZ(-0.9); on(yard, DARKWOOD, 0.02, 0.4); }
+      { const s = new THREE.BoxGeometry(0.5, 0.42, 0.014, 6, 6, 1), p = s.attributes.position;
+        for (let i = 0; i < p.count; i++) { const u = p.getX(i) / 0.5 + 0.5, v = p.getY(i) / 0.42 + 0.5; p.setY(i, (v * (0.25 + 0.75 * u) - 0.5) * 0.42 + u * 0.16); p.setZ(i, p.getZ(i) + 0.05 * Math.sin(u * Math.PI) * v); }
+        s.computeVertexNormals(); on(s, SAIL, 0.0, 0.3); on(box(0.5, 0.05, 0.02), team, 0.0, 0.14); }
+      on(box(0.15, 0.06, 0.15), "#d9d2bd", -0.17, 0.03);                 // a heap of net, floats on it
+      for (const [x, z] of [[-0.2, 0.04], [-0.13, -0.04], [-0.17, 0]]) on(ball(0.018, 0), "#c8453a", x, 0.07, z);
+      on(box(0.07, 0.11, 0.07), "#5a7a94", 0.24, 0.055, 0.02);            // the fisher, in a straw hat
+      on(ball(0.035, 0), SKIN, 0.24, 0.14, 0.02); on(cone(0.065, 0.04, 8), "#d9b85c", 0.24, 0.18, 0.02);
+      { const rod = cyl(0.005, 0.005, 0.34, 4); rod.rotateX(1.0); on(rod, DARKWOOD, 0.24, 0.18, 0.16); }
+      on(cyl(0.035, 0.03, 0.05, 8), "#8a6438", 0.1, 0.025, -0.05);        // a basket of fish
+      on(cyl(0.03, 0.03, 0.01, 8), "#a9c2d0", 0.1, 0.052, -0.05);
+      top = 0.62; mx = 0.08;
       break;
-    case K.Transport:
-      hull(0.9, 0.4, 0.2, "#7a5532");
-      for (const [x, z] of [[-0.28, 0.08], [-0.12, -0.08], [0.18, 0.07]]) m.add(box(0.13, 0.12, 0.13), "#a07a4f", x, 0.19, z);
-      mast(0.02, 0.85, 0.42);
-      top = 0.85; mx = 0.02;
+    }
+    case K.Transport: {
+      hull(-0.52, 0.72, 0.5, 0.23, "#7a5532", "#b08a58", team, { stern: 0.8, sheer: 0.05, taper: 0.55, point: 1.4, rake: 0.05 });
+      mast(0.05, 0.85, 0.024);
+      square(0.05, 0.5, 0.56, 0.42, SAIL, 0.09);
+      for (const y of [0.4, 0.6]) on(sailGeo(0.565, 0.06, 0.09), team, 0.055, y);   // two team stripes across the sail
+      // the deck piled with cargo: crates, barrels, sacks, a load under a tarpaulin
+      for (const [x, z, s, c] of [[-0.3, 0.1, 0.14, "#a07a4f"], [-0.3, -0.07, 0.12, "#8a6438"], [-0.16, 0.0, 0.13, "#a07a4f"], [-0.26, 0.03, 0.1, "#b88a58"]]) on(box(s, s, s), c, x, s / 2 + (s === 0.1 ? 0.13 : 0), z);
+      for (const [x, z] of [[0.28, 0.1], [0.28, -0.1], [0.4, 0]]) { on(cyl(0.05, 0.05, 0.12, 8), "#8a5f35", x, 0.06, z); on(cyl(0.053, 0.053, 0.02, 8), IRON, x, 0.06, z); }
+      on(box(0.2, 0.1, 0.3), dark, -0.02, 0.05); on(box(0.16, 0.05, 0.26), dark, -0.02, 0.12);
+      for (const z of [-0.08, 0.06]) on(ball(0.05, 1).scale(1.3, 0.8, 1), "#d9c38f", 0.17, 0.035, z);
+      on(box(0.03, 0.2, 0.03), DARKWOOD, -0.47, 0.1); on(box(0.03, 0.03, 0.14), DARKWOOD, -0.47, 0.2);   // the tiller post
+      top = 0.9; mx = 0.05;
       break;
-    case K.Galley:
-      hull(0.95, 0.28, 0.16, "#6e4a2c");
-      for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) { const oar = box(0.02, 0.02, 0.32); oar.rotateX(sd * 0.5); m.add(oar, WOOD, -0.36 + i * 0.13, 0.03, sd * 0.24); }
-      m.add(box(0.08, 0.05, 0.05), IRON, 0.62, -0.03, 0); // the ram
-      for (let i = 0; i < 3; i++) m.add(box(0.06, 0.12, 0.06), team, -0.2 + i * 0.2, 0.16, 0);
-      mast(0.0, 0.8, 0.36);
-      top = 0.8;
+    }
+    case K.Galley: {
+      hull(-0.56, 0.62, 0.27, 0.15, "#6e4a2c", "#a8824f", "#b8402e", { stern: 0.5, sheer: 0.03, taper: 0.45, point: 2.0, rake: 0.02, strake: 0.03 });
+      for (let i = 0; i < 8; i++) for (const sd of [-1, 1]) { const oar = box(0.016, 0.016, 0.36); oar.rotateX(sd * 0.42); m.add(oar, "#c9a878", -0.4 + i * 0.105, 0.01, sd * 0.27); m.add(box(0.03, 0.012, 0.07).rotateX(sd * 0.42), "#e0c898", -0.4 + i * 0.105, -0.055, sd * 0.42); }
+      m.add(cone(0.035, 0.2, 6).rotateZ(-Math.PI / 2), "#b98b45", 0.7, -0.03, 0);          // the bronze ram, at the waterline
+      for (const sd of [-1, 1]) { m.add(cyl(0.035, 0.035, 0.01, 10).rotateX(Math.PI / 2), "#f2ecda", 0.5, 0.05, sd * 0.062); m.add(cyl(0.015, 0.015, 0.012, 8).rotateX(Math.PI / 2), "#1a1410", 0.505, 0.05, sd * 0.066); }   // an eye on the bow
+      for (let k = 0; k < 5; k++) { const a = 0.3 + k * 0.5; m.add(box(0.035, 0.09, 0.05).rotateZ(-a), "#6e4a2c", -0.6 - Math.sin(a) * 0.06 + (k > 2 ? (k - 2) * 0.05 : 0), 0.12 + k * 0.065, 0); }   // the stern post, curling forward
+      for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) on(cyl(0.04, 0.04, 0.012, 8).rotateX(Math.PI / 2), i % 2 ? team : dark, -0.34 + i * 0.13, 0.03, sd * (H.at(-0.34 + i * 0.13).hw + 0.008));   // shields along the rail
+      mast(0.02, 0.62);
+      square(0.02, 0.4, 0.44, 0.3, team, 0.07);
+      on(box(0.16, 0.1, 0.16), "#b8402e", -0.42, 0.11); on(box(0.2, 0.015, 0.2), "#b8402e", -0.42, 0.16);       // the captain's awning
+      top = 0.68; mx = 0.02;
       break;
-    case K.Cog:
-      hull(0.85, 0.36, 0.24, "#7a5532");
-      m.add(box(0.2, 0.14, 0.34), "#8a6a42", -0.36, 0.23, 0); // aftcastle
-      m.add(box(0.16, 0.1, 0.3), "#8a6a42", 0.36, 0.21, 0); // forecastle
-      m.add(box(0.21, 0.02, 0.35), dark, -0.36, 0.31, 0);
-      mast(0.0, 0.95, 0.42);
-      top = 0.95;
+    }
+    case K.Cog: {
+      hull(-0.5, 0.66, 0.42, 0.28, "#7a5532", "#a8824f", "#4e3420", { stern: 0.78, sheer: 0.06, taper: 0.5, point: 1.5, rake: 0.08 });
+      // castles fore and aft: boxes on the rails with battlements, team-coloured boards
+      const castle = (x, w, d, h) => {
+        on(box(w, h, d), "#8a6a42", x, h / 2 + 0.02); on(box(w + 0.03, 0.03, d + 0.03), DARKWOOD, x, h + 0.02);
+        on(box(w + 0.01, h * 0.45, d + 0.01), team, x, h * 0.62);
+        for (let i = 0; i < 3; i++) for (const sd of [-1, 1]) on(box(0.055, 0.05, 0.03), "#8a6a42", x - w / 2 + 0.03 + i * (w - 0.06) / 2, h + 0.06, sd * d / 2);
+        for (let i = 0; i < 3; i++) for (const sx of [-1, 1]) on(box(0.03, 0.05, 0.055), "#8a6a42", x + sx * w / 2, h + 0.06, -d / 2 + 0.03 + i * (d - 0.06) / 2);
+      };
+      castle(-0.36, 0.26, 0.36, 0.16); castle(0.46, 0.18, 0.24, 0.13);
+      mast(0.05, 1.0, 0.026);
+      square(0.05, 0.56, 0.52, 0.46, team, 0.09);
+      on(sailGeo(0.1, 0.34, 0.11), dark, 0.075, 0.56); on(sailGeo(0.34, 0.09, 0.11), dark, 0.075, 0.6);   // a cross on the sail
+      on(cyl(0.06, 0.045, 0.07, 8), "#8a6a42", 0.05, 0.88);                                                  // the crow's nest
+      top = 1.02; mx = 0.05;
       break;
-    case K.Galleon:
-      hull(1.05, 0.36, 0.26, "#5a3a22");
-      m.add(box(0.26, 0.18, 0.34), "#6e4a2c", -0.42, 0.26, 0);
-      for (let i = 0; i < 5; i++) for (const sd of [-1, 1]) m.add(box(0.06, 0.05, 0.02), "#1d1208", -0.3 + i * 0.15, 0.1, sd * 0.185); // gun ports
-      m.add(box(0.98, 0.025, 0.37), "#c99a45", -0.06, 0.16, 0); // a gilt stripe
-      mast(0.2, 1.05, 0.44, SAIL); mast(-0.2, 0.9, 0.38, SAIL);
-      m.flag(0.2, 0.12, team, 0.3, 1.0, 0);
-      top = 1.05; mx = 0.2;
+    }
+    case K.Galleon: {
+      hull(-0.6, 0.72, 0.4, 0.28, "#5a3a22", "#a8824f", GOLD, { stern: 0.72, sheer: 0.07, taper: 0.5, point: 1.6, rake: 0.1, strake: 0.03 });
+      // the tall stern, in two steps, with windows and a lantern
+      on(box(0.34, 0.14, 0.32), "#6e4a2c", -0.42, 0.07); on(box(0.2, 0.12, 0.28), "#7a5532", -0.5, 0.2);
+      on(box(0.36, 0.02, 0.34), GOLD, -0.42, 0.145); on(box(0.22, 0.02, 0.3), GOLD, -0.5, 0.265);
+      for (const z of [-0.08, 0, 0.08]) m.add(box(0.01, 0.05, 0.045), "#f2d27a", -0.607, H.at(-0.5).y + 0.2, z);
+      on(ball(0.03, 0), "#f2d27a", -0.6, 0.33);
+      for (let i = 0; i < 6; i++) for (const sd of [-1, 1]) { const x = -0.26 + i * 0.13, hw = H.at(x).hw; m.add(box(0.05, 0.04, 0.02), "#1d1208", x, 0.085, sd * (hw * 0.93)); m.add(box(0.03, 0.012, 0.05), "#2a2c30", x, 0.085, sd * (hw * 0.93 + 0.03)); }   // gun ports, muzzles out
+      { const sprit = cyl(0.012, 0.018, 0.42, 5); sprit.rotateZ(-1.15); on(sprit, DARKWOOD, 0.8, 0.1); }
+      for (const [x, h, w] of [[0.36, 0.8, 0.36], [0.0, 1.05, 0.46], [-0.32, 0.72, 0.3]]) {
+        mast(x, h, 0.022);
+        square(x, h * 0.42, w, h * 0.34, SAIL, 0.08); square(x, h * 0.78, w * 0.72, h * 0.24, SAIL, 0.06);
+      }
+      m.flag(0.2, 0.12, team, -0.52, H.at(-0.5).y + 0.5, 0); on(cyl(0.008, 0.008, 0.3, 4), DARKWOOD, -0.62, 0.42);   // the ensign at the stern
+      top = 1.08; mx = 0.0;
       break;
-    case K.Ironclad:
-      hull(1.05, 0.38, 0.18, DARKGREY, GREY);
-      { const cas = box(0.5, 0.16, 0.3); m.add(cas, GREY, -0.05, 0.18, 0); }
-      for (const sd of [-1, 1]) m.add(box(0.12, 0.03, 0.03), "#2a2e31", 0.0, 0.18, sd * 0.16);
-      m.add(cyl(0.05, 0.05, 0.28, 8), "#2a2219", -0.15, 0.38, 0); // the funnel
-      m.add(cyl(0.052, 0.052, 0.04, 8), team, -0.15, 0.48, 0);
-      m.add(cyl(0.012, 0.012, 0.5, 5), DARKWOOD, 0.2, 0.35, 0);
-      top = 0.6; mx = 0.2;
+    }
+    case K.Ironclad: {
+      hull(-0.6, 0.66, 0.42, 0.15, "#2e2b28", "#4a4540", team, { stern: 0.6, sheer: 0.0, taper: 0.55, point: 1.8, rake: -0.04, strake: 0.03 });
+      // the casemate: iron plate sloping in on every side, guns through it
+      { const g = box(0.66, 0.2, 0.38), p = g.attributes.position;
+        for (let i = 0; i < p.count; i++) if (p.getY(i) > 0) { p.setX(i, p.getX(i) * 0.62); p.setZ(i, p.getZ(i) * 0.5); }
+        g.computeVertexNormals(); on(g, "#3d3935", -0.04, 0.1); }
+      on(box(0.42, 0.012, 0.2), "#57514b", -0.04, 0.205);
+      for (let i = 0; i < 4; i++) on(box(0.01, 0.012, 0.19), "#2a2724", -0.19 + i * 0.1, 0.212);          // plate seams on the roof
+      for (const sd of [-1, 1]) for (const x of [-0.18, -0.04, 0.1]) { on(box(0.05, 0.045, 0.02), "#0f0d0c", x, 0.09, sd * 0.155); on(cyl(0.012, 0.012, 0.08, 6).rotateX(Math.PI / 2), "#1a1816", x, 0.09, sd * 0.19); }
+      on(cyl(0.014, 0.014, 0.12, 6).rotateZ(Math.PI / 2), "#1a1816", 0.34, 0.08);                         // the bow gun
+      on(cyl(0.06, 0.07, 0.4, 10), "#1f1c1a", -0.1, 0.4); on(cyl(0.075, 0.075, 0.05, 10), team, -0.1, 0.5); on(cyl(0.065, 0.065, 0.02, 10), "#0f0d0c", -0.1, 0.61);   // the funnel
+      on(box(0.08, 0.06, 0.08), "#57514b", 0.1, 0.24);                                                     // the pilot house
+      m.add(cone(0.04, 0.16, 6).rotateZ(-Math.PI / 2), "#2e2b28", 0.68, -0.03, 0);                         // a ram
+      on(cyl(0.008, 0.008, 0.36, 4), "#1a1816", -0.5, 0.18);
+      top = 0.72; mx = -0.5;
       break;
-    case K.Submarine: case K.NuclearSub: {
-      // Mostly under the water: a dark back, a conning tower, a periscope.
-      const big = kind === K.NuclearSub, L = big ? 1.25 : 0.95;
-      const back = cyl(0.13, 0.13, L, 10); back.rotateZ(Math.PI / 2); back.scale(1, 0.55, 1);
-      m.add(back, "#3a4046", -0.04, -0.03, 0);
-      const nose = ball(0.13, 1); nose.scale(1.2, 0.55, 1); m.add(nose, "#3a4046", L / 2 - 0.02, -0.03, 0);
-      // The missile deck: a row of hatches behind the tower.
-      if (big) for (let i = 0; i < 4; i++) m.add(box(0.07, 0.03, 0.12), "#2a2e31", -0.15 - i * 0.1, 0.06, 0);
-      m.add(box(0.2, 0.16, 0.1), "#4f565c", 0.05, 0.1, 0);
-      m.add(box(0.21, 0.03, 0.11), team, 0.05, 0.19, 0);
-      m.add(cyl(0.01, 0.01, 0.2, 5), "#2a2e31", 0.1, 0.28, 0);
-      top = 0.38; mx = 0.05;
+    }
+    case K.Destroyer: {
+      hull(-0.66, 0.84, 0.28, 0.2, GREY, "#7d868c", team, { stern: 0.55, sheer: 0.02, taper: 0.4, point: 1.9, rake: 0.14, strake: 0.025, n: 14 });
+      const turret = (x, dir) => { on(cyl(0.06, 0.065, 0.035, 8), DARKGREY, x, 0.018); on(box(0.1, 0.055, 0.09), GREY, x, 0.06); on(cyl(0.011, 0.011, 0.17, 6).rotateZ(Math.PI / 2), BLACK, x + dir * 0.12, 0.065); };
+      turret(0.5, 1); on(box(0.12, 0.05, 0.14), GREY, 0.36, 0.025); m.add(box(0.1, 0.055, 0.09), GREY, 0.36, H.at(0.36).y + 0.08, 0); m.add(cyl(0.011, 0.011, 0.17, 6).rotateZ(Math.PI / 2), BLACK, 0.48, H.at(0.36).y + 0.085, 0);   // two guns forward, one above the other
+      on(box(0.2, 0.14, 0.2), GREY, 0.16, 0.07); on(box(0.14, 0.07, 0.18), GREY, 0.18, 0.175); on(box(0.145, 0.03, 0.185), BLACK, 0.2, 0.185);   // the bridge and its windows
+      for (const x of [-0.04, -0.24]) { const f = cyl(0.045, 0.055, 0.22, 8); f.rotateZ(0.22); on(f, GREY, x, 0.13); on(cyl(0.05, 0.05, 0.035, 8).rotateZ(0.22), team, x - 0.02, 0.21); on(cyl(0.046, 0.046, 0.02, 8).rotateZ(0.22), BLACK, x - 0.027, 0.245); }   // two raked funnels
+      on(cyl(0.008, 0.012, 0.42, 5), DARKGREY, 0.1, 0.4); on(box(0.012, 0.012, 0.2), DARKGREY, 0.1, 0.5); on(box(0.1, 0.04, 0.012), DARKGREY, 0.1, 0.58);   // mast and radar
+      turret(-0.48, -1);
+      for (const sd of [-1, 1]) on(cyl(0.022, 0.022, 0.16, 6).rotateZ(Math.PI / 2), DARKGREY, -0.36, 0.03, sd * 0.07);   // torpedo tubes
+      for (let i = 0; i < 3; i++) on(cyl(0.02, 0.02, 0.04, 6).rotateX(Math.PI / 2), BLACK, -0.6, 0.025, -0.05 + i * 0.05);  // depth charges
+      top = 0.66; mx = 0.1;
+      break;
+    }
+    case K.Submarine: {
+      // A diesel boat on the surface: a low round hull, a flat deck along
+      // its top, a conning tower with a rail, periscopes, a gun before it.
+      const HULL = "#4a545c";
+      const back = new THREE.CapsuleGeometry(0.105, 0.86, 4, 10); back.rotateZ(Math.PI / 2); back.scale(1, 0.62, 1);
+      m.add(back, HULL, 0.0, -0.035, 0);
+      m.add(box(0.86, 0.03, 0.1), "#69747c", 0.02, 0.035, 0);                                   // the deck casing
+      m.add(box(0.14, 0.03, 0.06), "#69747c", 0.5, 0.03, 0);
+      m.add(cyl(0.05, 0.06, 0.12, 10).scale(1.7, 1, 1), HULL, 0.02, 0.11, 0);                   // the conning tower
+      m.add(cyl(0.062, 0.062, 0.03, 10).scale(1.7, 1, 1), team, 0.02, 0.15, 0);
+      for (const sd of [-1, 1]) m.add(box(0.14, 0.008, 0.008), "#c3ccd4", -0.02, 0.2, sd * 0.045);   // its rail
+      m.add(cyl(0.008, 0.008, 0.2, 5), "#2a2e31", 0.05, 0.27, 0); m.add(cyl(0.006, 0.006, 0.14, 5), "#2a2e31", 0.0, 0.24, 0);   // periscopes
+      m.add(cyl(0.025, 0.03, 0.035, 8), "#2a2e31", 0.24, 0.065, 0); m.add(cyl(0.01, 0.01, 0.16, 6).rotateZ(Math.PI / 2 - 0.25), "#2a2e31", 0.31, 0.105, 0);   // the deck gun
+      { const wire = box(0.5, 0.005, 0.005); wire.rotateZ(-0.2); m.add(wire, "#2a2e31", 0.32, 0.1, 0); }   // the net cutter's wire to the bow
+      m.add(box(0.04, 0.09, 0.012), HULL, -0.5, 0.02, 0);                                        // the rudder's top
+      top = 0.4; mx = 0.02;
+      break;
+    }
+    case K.NuclearSub: {
+      // Much bigger, black and smooth: a whale's back, a tall fin with
+      // planes on it, a rudder standing out of the water astern, and two
+      // rows of missile hatches ringed in white.
+      const HULL = "#1f2327";
+      const back = new THREE.CapsuleGeometry(0.16, 1.1, 5, 12); back.rotateZ(Math.PI / 2); back.scale(1, 0.6, 1);
+      m.add(back, HULL, -0.02, -0.045, 0);
+      { const tail = cone(0.1, 0.3, 10); tail.rotateZ(Math.PI / 2); tail.scale(1, 0.6, 1); m.add(tail, HULL, -0.82, -0.04, 0); }
+      m.add(box(0.2, 0.2, 0.07), HULL, 0.3, 0.14, 0); m.add(cyl(0.035, 0.035, 0.2, 8), HULL, 0.4, 0.14, 0); m.add(cyl(0.035, 0.035, 0.2, 8), HULL, 0.2, 0.14, 0);   // the fin, rounded fore and aft
+      m.add(box(0.21, 0.035, 0.075), team, 0.3, 0.19, 0);
+      m.add(box(0.07, 0.012, 0.3), HULL, 0.32, 0.15, 0);                                         // its diving planes
+      m.add(cyl(0.008, 0.008, 0.16, 5), "#3a4046", 0.33, 0.32, 0); m.add(cyl(0.006, 0.006, 0.1, 5), "#3a4046", 0.27, 0.29, 0);
+      for (let i = 0; i < 5; i++) for (const sd of [-1, 1]) {                                     // the missile deck
+        m.add(cyl(0.04, 0.04, 0.012, 10), "#e8e6e0", -0.02 - i * 0.11, 0.052 - i * 0.002, sd * 0.05);
+        m.add(cyl(0.03, 0.03, 0.014, 10), "#3a4046", -0.02 - i * 0.11, 0.053 - i * 0.002, sd * 0.05);
+      }
+      { const fin = box(0.14, 0.2, 0.014), p = fin.attributes.position; for (let i = 0; i < p.count; i++) if (p.getY(i) > 0) p.setX(i, p.getX(i) * 0.5 - 0.03); fin.computeVertexNormals(); m.add(fin, HULL, -0.76, 0.1, 0); }   // the rudder
+      m.add(box(0.1, 0.012, 0.26), HULL, -0.78, 0.0, 0);
+      top = 0.42; mx = 0.3;
       break;
     }
     case K.Carrier: {
-      // A long, flat grey deck with an island on the starboard side.
-      hull(1.5, 0.42, 0.2, DARKGREY, GREY);
-      m.add(box(1.6, 0.04, 0.5), "#5a6166", 0.02, 0.15, 0); // the flight deck, wider than the hull
-      for (let k = 0; k < 6; k++) m.add(box(0.12, 0.005, 0.02), "#d9dccf", -0.6 + k * 0.24, 0.175, 0); // the centre line
-      m.add(box(0.26, 0.24, 0.1), GREY, 0.1, 0.29, -0.2); // the island
-      m.add(box(0.14, 0.06, 0.11), "#2a2e31", 0.12, 0.39, -0.2);
-      m.add(cyl(0.01, 0.01, 0.25, 5), DARKGREY, 0.08, 0.53, -0.2);
-      m.add(box(0.2, 0.02, 0.12), team, -0.5, 0.18, 0.12);
-      top = 0.66; mx = 0.08; mz = -0.2;
+      // A long grey hull under a flat deck that overhangs it, an island to
+      // starboard, an angled landing strip, and aircraft parked forward.
+      hull(-0.84, 0.86, 0.42, 0.2, DARKGREY, "#6a7278", team, { stern: 0.7, sheer: 0.0, taper: 0.55, point: 1.7, rake: 0.1, strake: 0.03 });
+      const dy = 0.15;
+      m.add(box(1.72, 0.035, 0.52), "#4f575d", 0.02, dy, 0);
+      { const ang = box(0.9, 0.036, 0.2); ang.rotateY(0.16); m.add(ang, "#4f575d", -0.3, dy, 0.22); }   // the angled deck, out to port
+      for (let k = 0; k < 7; k++) m.add(box(0.12, 0.004, 0.018), "#e6e8dc", -0.72 + k * 0.24, dy + 0.02, -0.04);       // the centre line
+      { const l = box(0.86, 0.004, 0.014); l.rotateY(0.16); m.add(l, "#f0d83a", -0.3, dy + 0.02, 0.2); }
+      for (const [x, z] of [[0.25, 0.14], [-0.5, -0.12]]) m.add(box(0.14, 0.004, 0.12), "#3a4046", x, dy + 0.02, z);  // lifts
+      m.add(box(0.3, 0.2, 0.09), GREY, 0.12, dy + 0.115, -0.21); m.add(box(0.16, 0.07, 0.1), GREY, 0.14, dy + 0.25, -0.21);
+      m.add(box(0.165, 0.025, 0.105), BLACK, 0.15, dy + 0.26, -0.21);
+      m.add(cyl(0.035, 0.04, 0.1, 8), DARKGREY, 0.02, dy + 0.26, -0.21);                                              // its funnel
+      m.add(cyl(0.008, 0.01, 0.26, 5), DARKGREY, 0.16, dy + 0.42, -0.21); m.add(box(0.1, 0.035, 0.012), DARKGREY, 0.16, dy + 0.5, -0.21);
+      m.add(box(0.31, 0.03, 0.095), team, 0.12, dy + 0.06, -0.21);
+      // aircraft on the deck, wings in the team colour
+      for (const [x, z, a] of [[0.62, 0.1, 0.5], [0.5, -0.08, 0.5], [0.72, -0.06, 0.5], [-0.62, 0.05, 0.0]]) {
+        m.add(box(0.11, 0.022, 0.022), "#c3ccd4", x, dy + 0.035, z, a); m.add(box(0.03, 0.008, 0.13), team, x, dy + 0.04, z, a); m.add(box(0.012, 0.03, 0.04), "#c3ccd4", x - Math.cos(a) * 0.05, dy + 0.045, z + Math.sin(a) * 0.05, a);
+      }
+      top = 0.68; mx = 0.16; mz = -0.21;
       break;
     }
-    case K.Destroyer:
-      hull(1.15, 0.3, 0.18, DARKGREY, GREY);
-      m.add(box(0.22, 0.2, 0.2), GREY, 0.12, 0.2, 0); // the bridge
-      m.add(box(0.12, 0.04, 0.22), "#2a2e31", 0.18, 0.29, 0);
-      m.add(cyl(0.05, 0.06, 0.24, 8), GREY, -0.12, 0.25, 0);
-      m.add(cyl(0.052, 0.052, 0.04, 8), team, -0.12, 0.38, 0);
-      for (const x of [0.42, -0.42]) { m.add(cyl(0.07, 0.08, 0.06, 8), GREY, x, 0.13, 0); m.add(box(0.18, 0.025, 0.025), "#2a2e31", x + Math.sign(x) * 0.1, 0.15, 0); }
-      m.add(cyl(0.01, 0.01, 0.4, 5), DARKGREY, 0.05, 0.45, 0);
-      top = 0.62; mx = 0.05;
-      break;
   }
   t.flag(0.14, 0.07, team, 0.07, 0, 0);
   // (A carrier is drawn larger, to look big beside the aircraft it carries.)
   const scale = kind === K.Carrier ? 1.7 : 1;
-  return { body: m.build(), tool: t.build(), pivot: [mx, top, mz], height: top, scale };
+  return { body: m.build(), tool: t.build(), pivot: [mx, H && kind !== K.Carrier ? H.at(mx).y + top : top, mz], height: top, scale };
 }
 
 // Buildings are centred on their footprint; y = 0 is the ground.
@@ -511,17 +667,28 @@ function buildingModel(kind, owner) {
   };
   switch (kind) {
     case K.Capitol: {
-      m.add(box(2.85, 0.3, 2.85), STONE2, 0, 0.15, 0);
-      m.add(box(1.8, 1.1, 1.8), STONE, 0, 0.85, 0);
-      const pyr = cone(1.4, 1.0, 4); pyr.rotateY(Math.PI / 4); m.add(pyr, team, 0, 1.9, 0);
-      for (const [x, z] of [[1.15, 1.15], [-1.15, 1.15], [1.15, -1.15], [-1.15, -1.15]]) {
-        m.add(cyl(0.25, 0.28, 1.4, 10), STONE, x, 0.7, z);
-        m.add(cone(0.32, 0.45, 10), dark, x, 1.62, z);
+      // (As `capitol` in assets/models.py, which is drawn when the models
+      // are built in.) Just the statue in the middle of its town square (the paving is
+      // `campfire`, drawn round it): a stepped plinth with team-coloured
+      // drapes, and a bronze robed figure with one arm up holding a torch
+      // (its flame flickers: `updateCampfires`). Team flags at the square's
+      // corners say whose it is from afar.
+      m.add(box(1.0, 0.1, 1.0), "#b5ab98", 0, 0.14, 0);
+      m.add(box(0.8, 0.12, 0.8), "#a89f8c", 0, 0.25, 0);
+      m.add(box(0.56, 0.62, 0.56), "#d8cfbb", 0, 0.62, 0);
+      for (const [x, z, r] of [[0, 0.285, 0], [0, -0.285, 0], [0.285, 0, Math.PI / 2], [-0.285, 0, Math.PI / 2]]) m.add(box(0.26, 0.4, 0.02), team, x, 0.68, z, r);
+      m.add(box(0.7, 0.1, 0.7), "#bfb6a2", 0, 0.98, 0);
+      m.add(cone(0.28, 0.8, 10), "#a67c3d", 0, 1.43, 0);
+      m.add(cyl(0.12, 0.17, 0.3, 8), "#b98b45", 0, 1.76, 0);
+      m.add(ball(0.12, 1), "#c29650", 0, 2.01, 0);
+      const arm = box(0.07, 0.34, 0.07); arm.rotateZ(-0.35);
+      m.add(arm, "#b98b45", 0.2, 2.0, 0);
+      m.add(cyl(0.03, 0.03, 0.34, 6), "#6e4a26", 0.3, 2.24, 0);
+      m.add(cyl(0.07, 0.04, 0.08, 8), "#8a6330", 0.3, 2.42, 0);
+      for (const [x, z] of [[2.3, 2.3], [-2.3, 2.3], [2.3, -2.3], [-2.3, -2.3]]) {
+        m.add(cyl(0.025, 0.025, 1.3, 5), DARKWOOD, x, 0.65, z);
+        m.flag(0.4, 0.24, team, x + 0.2, 1.15, z);
       }
-      for (let i = -3; i <= 3; i++) { m.add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, 1.35).add(box(0.14, 0.14, 0.14), STONE, i * 0.33, 0.37, -1.35); }
-      m.add(box(0.4, 0.6, 0.04), DARKWOOD, 0, 0.6, 0.91);
-      m.add(cyl(0.025, 0.025, 1.0, 5), DARKWOOD, 0, 2.6, 0);
-      m.flag(0.5, 0.28, team, 0.25, 2.95, 0);
       break;
     }
     case K.Barracks:
@@ -755,22 +922,48 @@ function glbName(kind) {
     [K.BauxiteMine]: "BauxiteMine", [K.PowerPlant]: "PowerPlant", [K.HaberBosch]: "HaberBosch", [K.RadioFactory]: "RadioFactory", [K.TankWorks]: "TankWorks", [K.Airfield]: "Airfield",
     [K.RocketArtillery]: "RocketArtillery", [K.Jet]: "Jet", [K.TowerBlock]: "TowerBlock", [K.UraniumMine]: "UraniumMine", [K.Reactor]: "Reactor",
     [K.CarPlant]: "CarPlant", [K.TvPlant]: "TvPlant", [K.MissileSilo]: "MissileSilo",
-    [K.Sawmill]: "Lumbermill", [K.Stoneworks]: "Stoneworks", [K.Kiln]: "Kiln", [K.AirDefense]: "AirDefense" };
+    [K.Sawmill]: "Lumbermill", [K.Stoneworks]: "Stoneworks", [K.Kiln]: "Kiln", [K.AirDefense]: "AirDefense", [K.Pasture]: "Pasture" };
   return GLB_NAMES[kind];
 }
 const AO_STRENGTH = 0.9;
-let glbModels = null; // name -> { geo, team, ao, tool, pivot }
+// The Blender models, and the ones in use: none with the Models setting on
+// Simple, which draws the models built in code (unitModel, buildingModel,
+// resourceModels) that are otherwise only the fallback.
+let glbAll = null, glbModels = null; // name -> { geo, team, ao, tool, pivot }
 
 function loadGlbModels() {
   if (MODELS_B64.startsWith("/*")) return; // not built in
   try {
     const raw = atob(MODELS_B64), bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    glbModels = parseGlb(bytes.buffer);
+    glbAll = parseGlb(bytes.buffer);
   } catch (e) {
     console.warn("Couldn't load models.glb; using the built-in models.", e);
-    glbModels = null;
+    glbAll = null;
   }
+  glbModels = GFX.models === "simple" ? null : glbAll;
+}
+
+function setResourceGeos() {
+  R3.resGeo = resourceModels();
+  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"], ["horse", "Horse"], ["deer", "Deer"]]) {
+    if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
+  }
+}
+
+// Switching models: everything is made again with the other set (units and
+// buildings on the next frame, resources when they're next drawn, icons
+// when next shown).
+function applyModels() {
+  const want = GFX.models === "simple" ? null : glbAll;
+  if (want === glbModels || !R3.resGeo) return;
+  glbModels = want;
+  modelCache.clear(); iconCache.clear();
+  setResourceGeos();
+  if (R3.res) { for (const m of R3.res.values()) { R3.scene.remove(m); m.dispose(); } R3.res.clear(); R3.resKey = ""; }
+  for (const o of R3.objs.values()) R3.scene.remove(o.root);
+  R3.objs.clear();
+  R3.popFrom = performance.now() + 500; // (they're not new: no popping in)
 }
 
 // A small reader for the glTF Binary files Blender writes: meshes with
@@ -889,6 +1082,21 @@ function cachedModel(kind, owner) {
   return modelCache.get(key);
 }
 
+// Colour grading happens inside the tone mapping, which every material does
+// as it draws: warm the light, cool the shade, a touch more colour, then the
+// filmic curve. That costs nothing extra (no second pass), so Fast has it
+// too. With grading off the renderer uses plain filmic tone mapping instead
+// (a different tone mapping is a different shader, so switching recompiles).
+// The vignette is a CSS gradient over the canvas (#vignette).
+THREE.ShaderChunk.tonemapping_pars_fragment = THREE.ShaderChunk.tonemapping_pars_fragment.replace(
+  "vec3 CustomToneMapping( vec3 color ) { return color; }",
+  `vec3 CustomToneMapping( vec3 color ) {
+    float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color *= mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
+    color = max(mix(vec3(lum), color, 1.12), 0.0);
+    return ACESFilmicToneMapping(color);
+  }`);
+
 function initRenderer() {
   const r = new THREE.WebGLRenderer({ canvas: view, antialias: true });
   r.outputColorSpace = THREE.SRGBColorSpace;
@@ -966,6 +1174,8 @@ function initRenderer() {
   R3.puffMesh.frustumCulled = false; R3.puffMesh.count = 0;
   scene.add(R3.puffMesh);
   R3.puffs = [];
+  Fx.build(scene);
+  buildBlobs(scene);
   // Bullets: thin bright tracers, too fast to be anything else.
   R3.tracers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.016, 0.016), new THREE.MeshBasicMaterial({ color: "#ffe9a6", transparent: true, opacity: 0.85, depthWrite: false }), 128);
   R3.tracers.frustumCulled = false; R3.tracers.count = 0;
@@ -986,10 +1196,7 @@ function initRenderer() {
   scene.add(R3.rally);
 
   loadGlbModels();
-  R3.resGeo = resourceModels();
-  if (glbModels) for (const [k, name] of [["pine", "Pine"], ["oak", "Oak"], ["bush", "Bush"], ["stone", "Stone"], ["gold", "Gold"], ["iron", "IronOre"], ["clay", "ClayPit"], ["sheep", "Sheep"], ["nitrate", "Saltpeter"], ["coal", "CoalSeam"], ["oil", "OilField"], ["bauxite", "Bauxite"], ["uranium", "UraniumOre"]]) {
-    if (glbModels[name]) { R3.resGeo[k].dispose(); R3.resGeo[k] = glbModels[name].geo; }
-  }
+  setResourceGeos();
   buildSmoke();
   addGraphicsControls();
   applyGraphics();
@@ -1088,6 +1295,8 @@ function buildWorld() {
   R3.objs.clear();
   for (const d of R3.dying) scene.remove(d.root);
   R3.dying = [];
+  Fx.clear();
+  R3.popFrom = performance.now() + 1500; // (no popping in for what's there from the start)
   for (const k of ["terrain", "shore", "water", "tufts", "flowers", "pebbles"]) if (R3[k]) { disposeTree(R3[k]); R3[k] = null; }
   if (R3.terrainGeo) { R3.terrainGeo.dispose(); R3.terrainGeo = null; }
   if (R3.res) for (const m of R3.res.values()) { scene.remove(m); m.dispose(); }
@@ -1761,52 +1970,35 @@ function viewQuad() {
 }
 
 // --- Per-frame update --------------------------------------------------------
-// The Capitol's gathering spot, where free workers wait and newcomers turn
-// up: a town square in front of its door (+z; CAMPFIRE_AHEAD in people.rs).
-// Paving fills the area (CAMPFIRE_AREA) where a worker counts as free, with
-// a statue on a stepped plinth in the middle, holding a torch whose flame
-// flickers (`updateCampfires`). (Named for the campfire it replaced.)
-const CAMPFIRE = [0, 0.1, 3.2], CAMPFIRE_AREA = 3.0;
+// A Capitol is a town square, where free workers wait and newcomers turn up:
+// 5x5 tiles of paving (SQUARE_HALF in people.rs) round the statue, the
+// Capitol's own model. The paving is apart from that model so a click on
+// the square picks the ground or the workers on it, not the Capitol.
+// (Named for the campfire it replaced.)
+const SQUARE_HALF = 2.5, TORCH = [0.3, 2.6, 0];
 let campfireGeo = null, flameMat = null;
 function campfire() {
   if (!campfireGeo) {
     const m = new Model();
-    // Paving: a dark kerb, light stone inside, a paler inner ring, and
-    // eight spokes between the two.
-    m.add(cyl(CAMPFIRE_AREA, CAMPFIRE_AREA, 0.08, 40), "#7d766a", 0, 0.04, 0);
-    m.add(cyl(CAMPFIRE_AREA - 0.14, CAMPFIRE_AREA - 0.14, 0.1, 40), "#bdb29d", 0, 0.05, 0);
-    m.add(cyl(1.55, 1.55, 0.12, 32), "#a29a88", 0, 0.06, 0);
-    m.add(cyl(1.4, 1.4, 0.14, 32), "#d3c9b4", 0, 0.07, 0);
-    for (let k = 0; k < 8; k++) {
-      const a = k / 8 * Math.PI * 2, r = (1.55 + CAMPFIRE_AREA - 0.14) / 2;
-      m.add(box(0.12, 0.13, CAMPFIRE_AREA - 0.14 - 1.55), "#a29a88", Math.sin(a) * r, 0.065, Math.cos(a) * r, a);
-    }
-    // Stone bollards round the edge, between the spokes.
-    for (let k = 0; k < 8; k++) {
-      const a = (k + 0.5) / 8 * Math.PI * 2;
-      m.add(cyl(0.08, 0.1, 0.3, 8), "#8f887b", Math.sin(a) * (CAMPFIRE_AREA - 0.3), 0.2, Math.cos(a) * (CAMPFIRE_AREA - 0.3));
-    }
-    // The plinth: two round steps, a square block, a cap.
-    m.add(cyl(0.95, 1.0, 0.1, 20), "#b5ab98", 0, 0.19, 0);
-    m.add(cyl(0.7, 0.78, 0.12, 16), "#a89f8c", 0, 0.3, 0);
-    m.add(box(0.62, 0.62, 0.62), "#d8cfbb", 0, 0.66, 0);
-    m.add(box(0.76, 0.1, 0.76), "#bfb6a2", 0, 1.02, 0);
-    // The statue, in bronze: a robed figure with one arm up, holding a torch.
-    m.add(cone(0.3, 0.8, 10), "#a67c3d", 0, 1.47, 0);
-    m.add(cyl(0.12, 0.17, 0.3, 8), "#b98b45", 0, 1.8, 0);
-    m.add(ball(0.12, 1), "#c29650", 0, 2.05, 0);
-    const arm = box(0.07, 0.34, 0.07); arm.rotateZ(-0.35);
-    m.add(arm, "#b98b45", 0.2, 2.04, 0);
-    m.add(cyl(0.03, 0.03, 0.34, 6), "#6e4a26", 0.3, 2.28, 0);
-    m.add(cyl(0.07, 0.04, 0.08, 8), "#8a6330", 0.3, 2.46, 0);
+    const H = SQUARE_HALF, k = 0.14;
+    // A dark kerb that reaches into the ground (so slopes don't show under
+    // it), light stone inside, a paler square round the statue, and paths
+    // of darker stone from it to the middle of each side.
+    m.add(box(H * 2, 0.5, H * 2), "#7d766a", 0, -0.17, 0);
+    m.add(box(H * 2 - k * 2, 0.1, H * 2 - k * 2), "#bdb29d", 0, 0.05, 0);
+    m.add(box(2.2, 0.12, 2.2), "#a29a88", 0, 0.06, 0);
+    m.add(box(1.96, 0.14, 1.96), "#d3c9b4", 0, 0.07, 0);
+    const path = H - k - 1.1;
+    for (const [x, z, w, d] of [[0, 1.1 + path / 2, 0.5, path], [0, -1.1 - path / 2, 0.5, path], [1.1 + path / 2, 0, path, 0.5], [-1.1 - path / 2, 0, path, 0.5]]) m.add(box(w, 0.13, d), "#a29a88", x, 0.065, z);
+    // Stone bollards along the edges, either side of the paths.
+    for (const t of [-1.4, -0.7, 0.7, 1.4]) for (const [x, z] of [[t, H - 0.25], [t, -H + 0.25], [H - 0.25, t], [-H + 0.25, t]]) m.add(cyl(0.08, 0.1, 0.3, 8), "#8f887b", x, 0.2, z);
     campfireGeo = m.build();
     flameMat = new THREE.MeshBasicMaterial({ color: "#ffb347", transparent: true, opacity: 0.9 });
   }
   const g = new THREE.Group();
-  g.position.set(CAMPFIRE[0], 0, CAMPFIRE[2]);
   const square = new THREE.Mesh(campfireGeo, entMat); square.castShadow = true; square.receiveShadow = true; g.add(square);
   const flame = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 7), flameMat);
-  flame.position.set(0.3, 2.65, 0); flame.userData.flame = true; g.add(flame);
+  flame.position.set(TORCH[0], TORCH[1], TORCH[2]); flame.userData.flame = true; g.add(flame);
   (R3.flames ??= []).push(flame);
   return g;
 }
@@ -1827,8 +2019,8 @@ function makeObj(i) {
   body.userData.obj = o;
   if (isBld(kind)) {
     const s = stat(kind, 6);
-    o.baseY = flattenUnder(o.x, o.y, s);
-    o.height = { [K.Farm]: 0.3, [K.Pasture]: 0.7, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3 }[kind] || 1.6;
+    o.baseY = flattenUnder(o.x, o.y, groundSize(kind));
+    o.height = { [K.Farm]: 0.3, [K.Pasture]: 1.3, [K.Orchard]: 0.9, [K.Dock]: 1.2, [K.Tower]: 3, [K.Capitol]: 2.5 }[kind] || 1.6;
     if (glbModels && kind !== K.Farm) { mdl.body.computeBoundingBox(); o.height = Math.min(o.height + 0.6, mdl.body.boundingBox.max.y); }
     root.position.set(o.x, o.baseY, o.y);
     // A dock turns its pier (+z) to the water beside it.
@@ -2076,13 +2268,20 @@ function render3d(alpha, now, dt) {
   // What the camera sees, for skipping the walk cycles of units out of it.
   _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(R3.camera.projectionMatrix, R3.camera.matrixWorldInverse));
   const mark = ++R3.mark; // objects still in the world this frame get this mark
+  const blobs = GFX.shadows === -1 && R3.blobs;
+  blobN = 0;
   let pt = performance.now(); // (timing for the trace: `Prof`, net.js)
 
   for (let i = 0; i < entCount; i++) {
     const id = E(i, F.id), kind = E(i, F.kind);
-    let o = R3.objs.get(id);
-    if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; }
-    if (!o) o = makeObj(i);
+    let o = R3.objs.get(id), changed = false;
+    if (o && (o.kind !== kind || o.owner !== E(i, F.owner))) { R3.scene.remove(o.root); o = null; changed = true; }
+    if (!o) {
+      o = makeObj(i);
+      // A new unit of yours, or one that changed (a worker who became a
+      // soldier) pops in; anything else just came into view.
+      if (!isBld(kind) && GFX.effects && now > R3.popFrom && (changed || o.owner === ME)) o.pop = now;
+    }
     o.mark = mark;
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
@@ -2096,15 +2295,19 @@ function render3d(alpha, now, dt) {
       const planned = !!(flags & 512);
       o.body.visible = !planned;
       if (planned && !o.plan && E(i, F.owner) === ME) {
-        const s = stat(kind, 6);
+        const s = groundSize(kind);
         o.plan = new THREE.Mesh(new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: PCOL[ME], transparent: true, opacity: 0.28, depthWrite: false }));
         o.plan.position.y = 0.05; o.plan.renderOrder = 2;
         o.root.add(o.plan);
       }
       if (o.plan) o.plan.visible = planned;
+      // Finished: a ring of dust rolls out from its foot.
+      if (o.wasBuilding && !building && !planned) fxDustRing(o.x, o.y, stat(kind, 6) * 0.5, 14);
+      o.wasBuilding = !!building;
+      if (blobs && !planned && kind !== K.Farm) { const s = stat(kind, 6) * 1.25; addBlob(o.x, o.baseY, o.y, s, s, o.root.rotation.y); }
       o.body.scale.y = building ? Math.max(0.12, E(i, F.prog)) : 1;
       o.body.material = (flags & 8) ? hitMat : entMat;
-      setRing(o, !!(flags & 1), stat(kind, 6) * 0.78);
+      setRing(o, !!(flags & 1), kind === K.Capitol ? 1.2 : stat(kind, 6) * 0.78);
       continue;
     }
     let x = E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha;
@@ -2123,8 +2326,26 @@ function render3d(alpha, now, dt) {
     d = Math.atan2(Math.sin(d), Math.cos(d));
     o.face += d * Math.min(1, dt * 12);
     o.root.rotation.y = o.face;
+    if (blobs) {
+      const r = W.kind_radius(kind) * (isNaval(kind) ? BOAT_SCALE * 2.2 : 2.6), sc = o.pop ? o.root.scale.x : 1;
+      // Long things (horses, boats, guns) get a longer blob, turned with them.
+      const long = isMounted(kind) || isNaval(kind) || kind === K.Cannon || kind === K.FieldGun || kind === K.Tank ? 1.5 : 1;
+      addBlob(x, isNaval(kind) ? WATER_Y : groundAt(x, y), y, r * long * sc, r * sc, o.face); // (+x is its front)
+    }
     const anim = E(i, F.anim);
     const ph = t + id * 0.37;
+    if (GFX.effects) {
+      // Dust kicked up, or a wake, for the distance it went this frame.
+      const mv = o.fxX === undefined ? 0 : Math.hypot(x - o.fxX, y - o.fxY);
+      if (mv > 0.001 && mv < 1) fxTrail(o, kind, mv);
+      if (o.pop === now) fxDustRing(x, y, 0.25, 6);
+    }
+    o.fxX = x; o.fxY = y;
+    if (o.pop) {
+      const p = (now - o.pop) / POP_MS;
+      if (p >= 1) { o.root.scale.setScalar(1); o.pop = 0; }
+      else o.root.scale.setScalar(Math.max(0.001, popScale(p)));
+    }
     if (o.bones) {
       // Out of sight (with room for a shadow falling into it): no walk
       // cycle, which was the most garbage the page made after three.js.
@@ -2175,6 +2396,7 @@ function render3d(alpha, now, dt) {
     if (o.mark === mark) continue;
     R3.objs.delete(o.id);
     if (o.ring) o.ring.visible = false;
+    if (isBld(o.kind) && o.lastHp < 0.3) fxCollapse(o.x, o.y, stat(o.kind, 6));
     if (o.lastHp < 0.3) R3.dying.push({ root: o.root, t0: now, building: isBld(o.kind), o, dir: hash2(o.id, 3) < 0.5 ? 1 : -1 });
     else R3.scene.remove(o.root);
   }
@@ -2189,6 +2411,7 @@ function render3d(alpha, now, dt) {
     R3.dying[keep++] = d;
   }
   R3.dying.length = keep;
+  if (R3.blobs) { R3.blobs.count = blobN; R3.blobs.instanceMatrix.needsUpdate = true; }
   pt = Prof.add("draw: units and buildings", pt);
 
   updateResources();
@@ -2200,6 +2423,7 @@ function render3d(alpha, now, dt) {
   updateSmoke();
   updateCampfires(performance.now());
   updatePuffs(performance.now());
+  Fx.update(Math.min(0.1, dt));
   updateFlashes(performance.now());
   updateNukes(performance.now(), alpha);
   updateAimRings();
@@ -2241,7 +2465,9 @@ function updateNukes(now, alpha = 0) {
     const ring = new THREE.Mesh(new THREE.RingGeometry(W.nuke_numbers(2) - 0.25, W.nuke_numbers(2), 48).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: "#ff3b2f", transparent: true, opacity: 0.7, depthWrite: false }));
     R3.scene.add(ring); R3.nukeRings.push(ring);
-    const im = new THREE.Mesh(R3.nukeGeo, entMat); im.receiveShadow = true; im.scale.setScalar(1.0); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
+    // The air defense's missile: the very one it fires at aircraft (R3.missiles), pointing along y.
+    R3.interceptorGeo ??= R3.missiles.geometry.clone().rotateZ(-Math.PI / 2);
+    const im = new THREE.Mesh(R3.interceptorGeo, R3.missiles.material); im.visible = false; R3.scene.add(im); R3.interceptors.push(im);
   }
   for (let k = 0; k < R3.nukeMesh.length; k++) {
     const mesh = R3.nukeMesh[k], ring = R3.nukeRings[k], im = R3.interceptors[k];
@@ -2486,6 +2712,201 @@ function updatePuffs(now) {
   m.instanceMatrix.needsUpdate = true;
 }
 
+// --- Blob shadows ------------------------------------------------------------------
+// The cheap kind of shadow (Shadows: Blobs): a soft dark disc on the ground
+// under every unit and building, all in one instanced mesh. Without any
+// shadow, things look pasted onto the ground instead of standing on it.
+const BLOB_MAX = 2048;
+function buildBlobs(scene) {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d"), grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, "rgba(0,0,0,1)"); grd.addColorStop(0.45, "rgba(0,0,0,0.8)"); grd.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  const mat = withFow(new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0.5, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  R3.blobs = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat, BLOB_MAX);
+  R3.blobs.frustumCulled = false; R3.blobs.count = 0; R3.blobs.renderOrder = 1;
+  scene.add(R3.blobs);
+}
+let blobN = 0;
+// (Called while drawing each thing: `w` is its size along its +x, `d` across.)
+function addBlob(x, h, y, w, d = w, turn = 0) {
+  if (blobN >= BLOB_MAX) return;
+  _p.set(x, h + 0.04, y); _q.setFromAxisAngle(_up, turn); _s.set(w, 1, d);
+  _m4.compose(_p, _q, _s);
+  R3.blobs.setMatrixAt(blobN++, _m4);
+}
+
+// --- Small effects ---------------------------------------------------------------
+// Dust, wood chips, debris, splashes, wakes and sparks: short-lived bits that
+// fly, fall and shrink away. Three instanced meshes draw all of them: soft
+// round puffs, hard little blocks (chips, debris) and glowing sparks. Only
+// drawing: nothing here touches the game, so it can use Math.random.
+// Each spawns only where the player can see (the "Small effects" setting).
+const FX_MAX = 700;
+const Fx = {
+  list: [], meshes: null,
+  build(scene) {
+    const mk = (geo, mat) => {
+      const m = new THREE.InstancedMesh(geo, mat, FX_MAX);
+      m.frustumCulled = false; m.count = 0;
+      m.setColorAt(0, _c.set(1, 1, 1)); // (makes the colour buffer before the first draw)
+      scene.add(m);
+      return m;
+    };
+    this.meshes = [
+      mk(new THREE.IcosahedronGeometry(1, 1), withFow(new THREE.MeshLambertMaterial())), // (opaque, like the powder smoke)
+      mk(new THREE.BoxGeometry(1, 1, 1), withFow(new THREE.MeshLambertMaterial())),
+      mk(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshBasicMaterial({ blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })),
+    ];
+    this.meshes[1].castShadow = true;
+  },
+  clear() { this.list.length = 0; if (this.meshes) for (const m of this.meshes) m.count = 0; },
+  // kind: 0 soft, 1 hard, 2 glow. Sizes s0 -> s1 over the life (ms).
+  add(kind, x, y, z, vx, vy, vz, life, s0, s1, color, g = 0, drag = 0) {
+    if (this.list.length >= FX_MAX) this.list.shift();
+    this.list.push({ kind, x, y, z, vx, vy, vz, life, s0, s1, r: color[0], gr: color[1], b: color[2], g, drag, t: 0,
+      rx: Math.random() * 6, ry: Math.random() * 6, spin: (Math.random() - 0.5) * 14, floor: kind === 2 ? -99 : groundAt(x, z) });
+  },
+  update(dt) {
+    if (!this.meshes) return;
+    const n = [0, 0, 0];
+    let keep = 0;
+    for (const p of this.list) {
+      p.t += dt * 1000;
+      if (p.t >= p.life) continue;
+      const k = Math.exp(-p.drag * dt);
+      p.vx *= k; p.vz *= k; p.vy = p.vy * k - p.g * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+      // Hard bits land and lie there; the others just stop at the ground.
+      if (p.y < p.floor) { p.y = p.floor; p.vy = p.kind === 1 ? -p.vy * 0.25 : 0; p.vx *= 0.5; p.vz *= 0.5; p.spin *= 0.5; }
+      p.rx += p.spin * dt; p.ry += p.spin * 0.7 * dt;
+      const f = p.t / p.life, m = this.meshes[p.kind];
+      // Soft things swell then fade by shrinking; hard ones keep their size till the end.
+      const size = p.s0 + (p.s1 - p.s0) * f;
+      const s = p.kind === 1 ? size * Math.min(1, (1 - f) * 4) : size * Math.sin(Math.min(1, f * 3 + 0.15) * Math.PI / 2) * (1 - f * f);
+      _p.set(p.x, p.y, p.z);
+      _q.setFromEuler(_fxEul.set(p.rx, p.ry, 0));
+      _s.set(s, p.kind === 1 ? s * 0.45 : s, s);
+      _m4.compose(_p, _q, _s);
+      m.setMatrixAt(n[p.kind], _m4);
+      m.setColorAt(n[p.kind]++, _c.setRGB(p.r, p.gr, p.b));
+      this.list[keep++] = p;
+    }
+    this.list.length = keep;
+    this.meshes.forEach((m, i) => { m.count = n[i]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; });
+  },
+};
+const _fxEul = new THREE.Euler();
+const fxRnd = (a, b) => a + Math.random() * (b - a);
+const FX_DUST = [0.62, 0.53, 0.40], FX_DUST2 = [0.40, 0.35, 0.29], FX_WOOD = [0.62, 0.45, 0.25], FX_FOAM = [0.92, 0.96, 0.97], FX_SPARK = [3.0, 2.1, 0.8];
+// Is (x, y) in sight of the player now? Effects only happen where you can see.
+function fxSeen(x, y) {
+  if (!GFX.effects || !R3.fowData) return false;
+  const tx = Math.floor(x), ty = Math.floor(y);
+  return tx >= 0 && ty >= 0 && tx < MW && ty < MH && R3.fowData[(ty * MW + tx) * 4] === 255;
+}
+function fxOnWater(x, y) {
+  const tx = Math.floor(x), ty = Math.floor(y);
+  if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) return true;
+  const t = u8(W.terrain_ptr(), MW * MH)[ty * MW + tx];
+  return t === 1 || t === 5;
+}
+// A ring of dust rolling outward along the ground: a building finished, a unit appearing.
+function fxDustRing(x, y, r, n, col = FX_DUST) {
+  if (!fxSeen(x, y)) return;
+  const h = groundAt(x, y);
+  for (let k = 0; k < n; k++) {
+    const a = (k + fxRnd(-0.4, 0.4)) / n * 6.283, d = r * fxRnd(0.7, 1.1), sp = fxRnd(1, 2.4) * (0.6 + r * 0.25);
+    Fx.add(0, x + Math.cos(a) * d, h + fxRnd(0, 0.15), y + Math.sin(a) * d, Math.cos(a) * sp, fxRnd(0.1, 0.6), Math.sin(a) * sp, fxRnd(600, 1200), fxRnd(0.1, 0.2), fxRnd(0.25, 0.6) * (0.7 + r * 0.15), col, 0, 3);
+  }
+}
+// A building comes down: a big cloud and tumbling pieces.
+function fxCollapse(x, y, size) {
+  if (!fxSeen(x, y)) return;
+  const h = groundAt(x, y), r = size * 0.45;
+  for (let k = 0; k < 14; k++) {
+    const a = fxRnd(0, 6.283), d = fxRnd(0, r);
+    Fx.add(0, x + Math.cos(a) * d, h + fxRnd(0.2, 1.2), y + Math.sin(a) * d, Math.cos(a) * fxRnd(0.3, 1.2), fxRnd(0.3, 1.0), Math.sin(a) * fxRnd(0.3, 1.2), fxRnd(1300, 2200), fxRnd(0.25, 0.4), fxRnd(0.7, 1.1), Math.random() < 0.5 ? FX_DUST : FX_DUST2, -0.15, 1.2);
+  }
+  for (let k = 0; k < 12; k++) {
+    const a = fxRnd(0, 6.283), sp = fxRnd(1, 3);
+    Fx.add(1, x + Math.cos(a) * r * 0.5, h + fxRnd(0.4, 1.2), y + Math.sin(a) * r * 0.5, Math.cos(a) * sp, fxRnd(2, 4.5), Math.sin(a) * sp, fxRnd(1600, 2400), fxRnd(0.08, 0.16), fxRnd(0.08, 0.16), Math.random() < 0.5 ? FX_WOOD : [0.55, 0.53, 0.5], 9.8, 0.4);
+  }
+  fxDustRing(x, y, r, 12, FX_DUST2);
+}
+// A hammer blow on a building site: a few wood chips fly off its edge.
+function fxHammer(x, y, size = 2) {
+  if (!fxSeen(x, y)) return;
+  const a = fxRnd(0, 6.283), r = size * 0.4, cx = x + Math.cos(a) * r, cy = y + Math.sin(a) * r, h = groundAt(cx, cy) + fxRnd(0.2, 0.6);
+  for (let k = 0; k < 3; k++) Fx.add(1, cx, h, cy, Math.cos(a) * fxRnd(0.4, 1.4) + fxRnd(-0.5, 0.5), fxRnd(1.5, 3), Math.sin(a) * fxRnd(0.4, 1.4) + fxRnd(-0.5, 0.5), fxRnd(700, 1100), 0.06, 0.05, FX_WOOD, 9.8, 0.5);
+  Fx.add(0, cx, h - 0.1, cy, 0, 0.3, 0, 600, 0.08, 0.2, FX_DUST, 0, 2);
+}
+// Something was hit: a splash on water, chips off a building, sparks and a little dust on the ground.
+function fxHit(x, y, building, metal) {
+  if (!fxSeen(x, y)) return;
+  if (fxOnWater(x, y)) {
+    for (let k = 0; k < 6; k++) Fx.add(0, x + fxRnd(-0.15, 0.15), WATER_Y + 0.05, y + fxRnd(-0.15, 0.15), fxRnd(-0.6, 0.6), fxRnd(1.8, 3.2), fxRnd(-0.6, 0.6), fxRnd(500, 800), 0.07, 0.04, FX_FOAM, 9.8, 0.3);
+    return;
+  }
+  const h = groundAt(x, y) + (building ? fxRnd(0.4, 1.2) : 0.35);
+  if (building) for (let k = 0; k < 2; k++) Fx.add(1, x + fxRnd(-0.3, 0.3), h, y + fxRnd(-0.3, 0.3), fxRnd(-1, 1), fxRnd(1, 2.4), fxRnd(-1, 1), fxRnd(600, 900), 0.06, 0.05, FX_WOOD, 9.8, 0.5);
+  if (metal) for (let k = 0; k < 3; k++) Fx.add(2, x + fxRnd(-0.1, 0.1), h + 0.1, y + fxRnd(-0.1, 0.1), fxRnd(-2, 2), fxRnd(0.8, 2.5), fxRnd(-2, 2), fxRnd(150, 280), 0.035, 0.015, FX_SPARK, 6, 1);
+  Fx.add(0, x, groundAt(x, y) + 0.1, y, fxRnd(-0.2, 0.2), 0.3, fxRnd(-0.2, 0.2), 500, 0.06, 0.18, FX_DUST, 0, 2);
+}
+// A shell, cannonball or rocket lands: a flash, a burst of dark smoke and
+// earth (or a tall splash on water), clods flying out. Rockets are biggest.
+function fxBlast(x, y, kind) {
+  if (!fxSeen(x, y)) return;
+  const big = kind === K.RocketArtillery ? 1.4 : kind === K.Trebuchet ? 0.8 : 1;
+  const h = groundAt(x, y);
+  if (fxOnWater(x, y)) {
+    for (let k = 0; k < 16; k++) Fx.add(0, x + fxRnd(-0.25, 0.25) * big, WATER_Y + 0.05, y + fxRnd(-0.25, 0.25) * big, fxRnd(-0.8, 0.8), fxRnd(3, 5.5) * big, fxRnd(-0.8, 0.8), fxRnd(700, 1100), 0.1 * big, 0.06, FX_FOAM, 9.8, 0.3);
+    fxDustRing(x, y, 0.3 * big, 10, FX_FOAM);
+    return;
+  }
+  if (kind !== K.Trebuchet) for (let k = 0; k < 5; k++) Fx.add(2, x + fxRnd(-0.2, 0.2), h + fxRnd(0.1, 0.4), y + fxRnd(-0.2, 0.2), fxRnd(-1, 1), fxRnd(0.5, 1.5), fxRnd(-1, 1), fxRnd(120, 220), 0.35 * big, 0.6 * big, FX_SPARK, 0, 4);
+  for (let k = 0; k < 9; k++) {
+    const a = fxRnd(0, 6.283), sp = fxRnd(0.3, 1.1) * big;
+    Fx.add(0, x + Math.cos(a) * 0.15, h + fxRnd(0.1, 0.4), y + Math.sin(a) * 0.15, Math.cos(a) * sp, fxRnd(1, 2.2) * big, Math.sin(a) * sp, fxRnd(900, 1500), 0.12 * big, fxRnd(0.3, 0.5) * big, k < 5 ? FX_DUST2 : [0.3, 0.29, 0.28], -0.3, 2.2);
+  }
+  for (let k = 0; k < 8; k++) {
+    const a = fxRnd(0, 6.283), sp = fxRnd(1.5, 3.5) * big;
+    Fx.add(1, x, h + 0.15, y, Math.cos(a) * sp, fxRnd(2.5, 5) * big, Math.sin(a) * sp, fxRnd(900, 1400), fxRnd(0.06, 0.12), fxRnd(0.06, 0.12), k % 2 ? FX_DUST2 : [0.35, 0.3, 0.22], 9.8, 0.3);
+  }
+  fxDustRing(x, y, 0.35 * big, 10);
+}
+
+// Kinds that throw up dust as they go, and how much (0..1).
+function fxDustOf(kind) {
+  if (isMounted(kind)) return 1;
+  if (kind === K.Tank || kind === K.Cannon || kind === K.FieldGun || kind === K.RocketArtillery || kind === K.Trebuchet) return 0.8;
+  return 0.12;
+}
+// Called for each moving unit with how far it went this frame.
+function fxTrail(o, kind, dist) {
+  o.fxGone = (o.fxGone || 0) + dist;
+  if (isAir(kind)) return;
+  const naval = isNaval(kind), step = naval ? 0.35 : 0.5;
+  if (o.fxGone < step) return;
+  o.fxGone = 0;
+  if (!fxSeen(o.x, o.y)) return;
+  const back = o.face, bx = -Math.cos(-back), by = -Math.sin(-back); // behind it
+  if (naval) {
+    // A wake: foam to both sides of the stern, spreading out.
+    for (const side of [-1, 1]) {
+      const px = o.x + bx * 0.35 - by * side * 0.12, py = o.y + by * 0.35 + bx * side * 0.12;
+      Fx.add(0, px, WATER_Y + 0.03, py, -by * side * 0.4, 0, bx * side * 0.4, 1400, 0.1, 0.22, FX_FOAM, 0, 1.5);
+    }
+    return;
+  }
+  if (Math.random() > fxDustOf(kind) || fxOnWater(o.x, o.y)) return;
+  Fx.add(0, o.x + bx * 0.2 + fxRnd(-0.1, 0.1), groundAt(o.x, o.y) + 0.08, o.y + by * 0.2 + fxRnd(-0.1, 0.1), bx * 0.3, fxRnd(0.2, 0.5), by * 0.3, fxRnd(600, 900), 0.06, fxRnd(0.2, 0.3), FX_DUST, 0, 2);
+}
+// A new unit pops into the world: grows from nothing, overshoots a little, settles.
+const POP_MS = 380;
+function popScale(p) { const c = 2.2; return 1 + (c + 1) * (p - 1) ** 3 + c * (p - 1) ** 2; }
+
 // Rebuild the resource instances when anything about them changed.
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _v3 = new THREE.Vector3(), _c = new THREE.Color();
 // Which way the water is from a building's middle: the angle that turns
@@ -2618,7 +3039,7 @@ function updateArrows(alpha) {
       continue;
     }
     const missile = shooter === K.AirDefense;
-    const fromH = torpedo ? 0.02 : missile ? 0.7 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
+    const fromH = torpedo ? 0.02 : missile ? 1.1 : rocket ? 0.85 : shooter === K.Tower ? 2.5 : shooter === K.Capitol ? 1.9 : shooter === K.Trebuchet ? 1.2 : shooter === K.Cannon || shooter === K.FieldGun ? 0.45 : shooter === K.Tank ? 0.6 : 0.62;
     const ahead = isBld(shooter) ? 0 : 0.3;
     const ox = sx + dx * ahead, oy = sy + dy * ahead;
     const toH = torpedo ? 0.03 : missile ? AIR_ALT + 0.3 : atBuilding ? 0.9 : 0.55;
@@ -2671,7 +3092,7 @@ function updateGhost() {
     if (R3.ghost) R3.scene.remove(R3.ghost);
     R3.ghost = new THREE.Group();
     R3.ghost.add(new THREE.Mesh(cachedModel(placing, ME).body, ghostMat));
-    const s = stat(placing, 6);
+    const s = groundSize(placing);
     R3.footprint = new THREE.Mesh(new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#7be864", transparent: true, opacity: 0.35, depthWrite: false }));
     R3.footprint.position.y = 0.06;
     R3.ghost.add(R3.footprint);
@@ -2712,36 +3133,99 @@ function entScreen(i, atTop) {
   return worldToScreen(o.root.position.x, o.root.position.z, o.root.position.y + (atTop ? top : o.height * 0.5));
 }
 
-// --- Graphics quality ------------------------------------------------------------
-// One setting trades looks for speed. It only changes how things are drawn,
-// never the simulation, so players in one multiplayer game can each pick
-// their own. Saved per browser.
-const GFX_LEVELS = {
-  low:    { label: "Low",    pixelRatio: 1,   shadows: 0,    grass: 0.12, sway: 0, smoke: false, post: false, bloom: false, ao: false },
-  medium: { label: "Medium", pixelRatio: 1.5, shadows: 1024, grass: 0.22, sway: 1, smoke: true,  post: true,  bloom: false, ao: false },
-  high:   { label: "High",   pixelRatio: 2,   shadows: 2048, grass: 0.32, sway: 1, smoke: true,  post: true,  bloom: true,  ao: false },
-  ultra:  { label: "Ultra",  pixelRatio: 2,   shadows: 4096, grass: 0.42, sway: 1, smoke: true,  post: true,  bloom: true,  ao: true },
-};
-let gfxName = (() => {
-  try { const v = localStorage.getItem("vibecraftGraphics"); if (GFX_LEVELS[v]) return v; } catch (e) {}
-  // Phones and tablets start a notch lower: small GPUs and very dense screens.
-  return matchMedia("(pointer: coarse)").matches ? "medium" : "high";
-})();
-let GFX = GFX_LEVELS[gfxName];
+// --- Graphics settings -----------------------------------------------------------
+// Settings only change how things are drawn, never the simulation, so players
+// in one multiplayer game can each pick their own. Saved per browser.
+// Two presets, Fast and Fancy; any setting can then be changed on its own.
+// A changed setting stays changed when switching preset, and shows a button
+// to put it back to the preset's value.
+const gfxPct = v => Math.round(v * 100) + "%";
+const GFX_SETTINGS = [
+  { key: "pixelRatio", label: "Sharpness", type: "choice", options: [[1, "Normal"], [1.5, "Sharp"], [2, "Sharpest"]], fast: 1, fancy: 2,
+    hint: "How many pixels are drawn on high-resolution screens. The biggest cost on a weak graphics card." },
+  { key: "shadows", label: "Shadows", type: "choice", options: [[0, "Off"], [-1, "Blobs"], [1024, "Low"], [2048, "High"], [4096, "Highest"]], fast: -1, fancy: 2048,
+    hint: "Shadows from the sun; higher is sharper. Blobs: a soft dark patch under each unit and building, almost free." },
+  { key: "ao", label: "Contact shadows", type: "toggle", fast: false, fancy: false,
+    hint: "Darkens creases and where things meet the ground. Needs a strong graphics card." },
+  { key: "grading", label: "Colour grading", type: "toggle", fast: true, fancy: true,
+    hint: "Warm light, cool shade, a touch more colour and darker screen edges. Almost free." },
+  { key: "bloom", label: "Glow", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 1, fmt: gfxPct,
+    hint: "Bright things glow: fire, sunlit roofs, glints on the water." },
+  { key: "tilt", label: "Tilt-shift", type: "slider", min: 0, max: 2, step: 0.05, fast: 0, fancy: 0, fmt: gfxPct,
+    hint: "Blurs what's nearer and farther than where you look, like a model town. Strongest zoomed in; gone zoomed out." },
+  { key: "grass", label: "Grass and flowers", type: "slider", min: 0, max: 1, step: 0.05, fast: 0.75, fancy: 0.75, fmt: gfxPct,
+    hint: "How much grass, flowers and pebbles cover the ground." },
+  { key: "sway", label: "Wind", type: "toggle", fast: false, fancy: true, hint: "Trees, bushes and grass sway." },
+  { key: "smoke", label: "Chimney smoke", type: "toggle", fast: false, fancy: true, hint: "Smoke from chimneys, campfires and burning buildings." },
+  { key: "models", label: "Models", type: "choice", options: [["simple", "Simple"], ["detailed", "Detailed"]], fast: "detailed", fancy: "detailed",
+    hint: "Simple: the older models built in code. Detailed: the ones made in Blender." },
+  { key: "effects", label: "Small effects", type: "toggle", fast: true, fancy: true,
+    hint: "Dust, wood chips, splashes, sparks, boat wakes, and new units popping in." },
+];
+const GFX_PRESETS = { fast: "Fast", fancy: "Fancy" };
+const gfxDef = key => GFX_SETTINGS.find(s => s.key === key);
 
-function setGraphicsQuality(name) {
-  if (!GFX_LEVELS[name]) return;
-  gfxName = name; GFX = GFX_LEVELS[name];
-  try { localStorage.setItem("vibecraftGraphics", name); } catch (e) {}
-  for (const seg of document.querySelectorAll(".gfx-seg")) for (const b of seg.children) b.setAttribute("aria-pressed", b.dataset.q === name);
-  applyGraphics();
+let gfxPreset = "fancy", gfxOver = {};
+(() => {
+  try {
+    const v = JSON.parse(localStorage.getItem("vibecraftGfx") || "null");
+    if (v && GFX_PRESETS[v.preset]) {
+      gfxPreset = v.preset;
+      for (const [k, x] of Object.entries(v.over || {})) if (gfxDef(k) && typeof x === typeof gfxDef(k).fast) gfxOver[k] = x;
+      return;
+    }
+    // The old four levels: Low is Fast; the rest are Fancy, changed to match.
+    const old = localStorage.getItem("vibecraftGraphics");
+    if (old === "low") { gfxPreset = "fast"; return; }
+    if (old === "medium") { gfxOver = { pixelRatio: 1.5, shadows: 1024, bloom: 0, grass: 0.5 }; return; }
+    if (old === "ultra") { gfxOver = { shadows: 4096, ao: true, grass: 1 }; return; }
+    if (old === "high") return;
+  } catch (e) {}
+  // Phones and tablets start on Fast: small graphics cards and very dense screens.
+  if (matchMedia("(pointer: coarse)").matches) gfxPreset = "fast";
+})();
+
+let GFX = {}, gfxName = "";
+function computeGfx() {
+  for (const s of GFX_SETTINGS) GFX[s.key] = s.key in gfxOver ? gfxOver[s.key] : s[gfxPreset];
+  // The finishing pass is needed for any of these (see renderScene).
+  GFX.post = GFX.bloom > 0 || GFX.ao || GFX.tilt > 0;
+  // (For the trace.)
+  gfxName = gfxPreset + (Object.keys(gfxOver).length ? " " + JSON.stringify(gfxOver) : "");
+}
+computeGfx();
+
+function saveGfx() {
+  try { localStorage.setItem("vibecraftGfx", JSON.stringify({ preset: gfxPreset, over: gfxOver })); } catch (e) {}
+}
+function setGfxPreset(name) {
+  if (!GFX_PRESETS[name]) return;
+  gfxPreset = name;
+  // A changed setting stays; one that now matches the preset is no longer a change.
+  for (const k of Object.keys(gfxOver)) if (gfxOver[k] === gfxDef(k)[name]) delete gfxOver[k];
+  gfxChanged();
+}
+function setGfx(key, value) {
+  if (value === gfxDef(key)[gfxPreset]) delete gfxOver[key]; else gfxOver[key] = value;
+  gfxChanged();
+}
+function gfxChanged() {
+  computeGfx(); saveGfx(); applyGraphics(); refreshGfxControls();
 }
 
 function applyGraphics() {
   const r = R3.renderer; if (!r) return;
-  swayUniform.value = GFX.sway;
-  // Shadows: turning them on or off, or a new map size, means rebuilding the shaders.
+  swayUniform.value = GFX.sway ? 1 : 0;
+  // Shadows: turning them on or off, or a new map size, means rebuilding the
+  // shaders; so does a new tone mapping (colour grading on or off).
   const sun = R3.sun, on = GFX.shadows > 0;
+  const tm = GFX.grading ? THREE.CustomToneMapping : THREE.ACESFilmicToneMapping;
+  document.getElementById("vignette").hidden = !GFX.grading;
+  if (r.toneMapping !== tm) {
+    r.toneMapping = tm;
+    if (Post.mat) Post.mat.needsUpdate = true;
+    R3.scene.traverse(o => { if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true; });
+  }
   if (r.shadowMap.enabled !== on || (on && sun.shadow.mapSize.x !== GFX.shadows)) {
     r.shadowMap.enabled = on;
     sun.castShadow = on;
@@ -2754,42 +3238,122 @@ function applyGraphics() {
     R3.scene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
   }
   applyGrass();
+  applyModels();
   if (R3.smoke) R3.smoke.visible = GFX.smoke;
+  if (!GFX.effects) Fx.clear();
   if (view._w) resizeRenderer();
 }
 
 function applyGrass() {
   // (Each block draws that share of its own spots, which are shuffled.)
   const share = (g, f) => { if (g) for (const m of g.children) { m.count = Math.round(m.userData.spots.length * f); m.visible = m.count > 0; } };
-  share(R3.tufts, GFX.grass);
-  share(R3.flowers, GFX.grass);
-  share(R3.pebbles, Math.min(1, GFX.grass * 2.5));
+  const g = GFX.grass * 0.42; // (all of it was too much: 42% of the spots at most)
+  share(R3.tufts, g);
+  share(R3.flowers, g);
+  share(R3.pebbles, Math.min(1, g * 2.5));
 }
 
-// The setting appears on the start screen and in the in-game menu.
+// The controls appear on the start screen and in the in-game menu: the two
+// presets, "Hold to look" (hides the menu while held, to see the game behind
+// it), and every setting on its own under "More". While a setting is being
+// changed, the rest of the menu fades so the game shows through.
+const gfxPanels = [];
 function addGraphicsControls() {
   const make = () => {
-    const row = document.createElement("div");
-    row.className = "row gfx-row";
-    row.innerHTML = `<span class="note" id="gfxLabel${document.querySelectorAll(".gfx-row").length}">Graphics</span>`;
-    const seg = document.createElement("div");
-    seg.className = "seg gfx-seg";
-    seg.setAttribute("aria-labelledby", row.firstChild.id);
-    for (const [k, v] of Object.entries(GFX_LEVELS)) {
+    const box = document.createElement("div");
+    box.className = "gfx";
+    const n = gfxPanels.length;
+    box.innerHTML = `
+      <div class="row gfx-head">
+        <h2 id="gfxLabel${n}">Graphics</h2>
+        <div class="seg gfx-seg" aria-labelledby="gfxLabel${n}"></div>
+        <button class="ghost gfx-show" title="Hide the menu while held, to see the game behind it">Hold to look</button>
+      </div>
+      <div class="gfx-list" id="gfxList${n}"></div>`;
+    const seg = box.querySelector(".gfx-seg");
+    for (const [k, label] of Object.entries(GFX_PRESETS)) {
       const b = document.createElement("button");
-      b.dataset.q = k; b.textContent = v.label;
-      b.title = k === "ultra" ? "Adds soft contact shadows; needs a strong graphics card" : k === "low" ? "No shadows or wind: for slow computers" : "";
-      b.setAttribute("aria-pressed", k === gfxName);
-      b.onclick = () => setGraphicsQuality(k);
+      b.dataset.q = k; b.textContent = label;
+      b.title = k === "fast" ? "No shadows, glow or blur: for slow computers and phones" : "Everything but contact shadows and tilt-shift";
+      b.onclick = () => setGfxPreset(k);
       seg.append(b);
     }
-    row.append(seg);
-    return row;
+    const list = box.querySelector(".gfx-list");
+    for (const s of GFX_SETTINGS) {
+      const item = document.createElement("div");
+      item.className = "gfx-item"; item.dataset.key = s.key; item.title = s.hint || "";
+      const id = `gfx${n}-${s.key}`;
+      item.innerHTML = `<label for="${id}">${s.label}</label><div class="gfx-ctl"></div><span class="gfx-val"></span>`
+        + `<button class="gfx-reset" aria-label="Back to the preset's ${s.label.toLowerCase()}">↺</button>`;
+      const ctl = item.querySelector(".gfx-ctl");
+      if (s.type === "slider") {
+        const inp = document.createElement("input");
+        Object.assign(inp, { type: "range", id, min: s.min, max: s.max, step: s.step });
+        inp.oninput = () => setGfx(s.key, +inp.value);
+        ctl.append(inp);
+      } else {
+        // A drop-down, the more demanding choices further down.
+        const opts = s.type === "toggle" ? [[false, "Off"], [true, "On"]] : s.options;
+        const sel = document.createElement("select"); sel.id = id;
+        for (const [v, label] of opts) {
+          const o = document.createElement("option");
+          o.textContent = label; o.value = JSON.stringify(v);
+          sel.append(o);
+        }
+        sel.onchange = () => { setGfx(s.key, JSON.parse(sel.value)); sel.blur(); };
+        ctl.append(sel);
+      }
+      item.querySelector(".gfx-reset").onclick = () => setGfx(s.key, s[gfxPreset]);
+      // Fade the menu while the pointer is held on this setting (a slider).
+      if (s.type === "slider") item.querySelector(".gfx-ctl").addEventListener("pointerdown", () => {
+        const ov = box.closest(".overlay"); if (!ov) return;
+        item.classList.add("active"); ov.classList.add("gfx-fade");
+        const up = () => { item.classList.remove("active"); ov.classList.remove("gfx-fade"); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); };
+        addEventListener("pointerup", up); addEventListener("pointercancel", up);
+      });
+      list.append(item);
+    }
+    // Hold to look: the whole menu goes while the button is held.
+    const show = box.querySelector(".gfx-show");
+    show.addEventListener("pointerdown", e => {
+      const ov = box.closest(".overlay"); if (!ov) return;
+      e.preventDefault();
+      show.setPointerCapture(e.pointerId);
+      ov.classList.add("gfx-peek");
+      const up = () => { ov.classList.remove("gfx-peek"); show.removeEventListener("pointerup", up); show.removeEventListener("pointercancel", up); show.removeEventListener("lostpointercapture", up); };
+      show.addEventListener("pointerup", up); show.addEventListener("pointercancel", up); show.addEventListener("lostpointercapture", up);
+    });
+    show.addEventListener("contextmenu", e => e.preventDefault()); // (a long press on a phone)
+    gfxPanels.push(box);
+    return box;
   };
-  const start = document.querySelector("#startScreen .keys");
-  if (start) start.before(make());
-  const menu = document.querySelector("#menuScreen .card");
-  if (menu) menu.append(make());
+  // In the Settings tab of the start screen and of the menu, before the volume.
+  for (const id of ["startSettings", "menuSettings"]) { const at = document.getElementById(id); if (at) at.prepend(make()); }
+  refreshGfxControls();
+}
+
+function refreshGfxControls() {
+  const presetName = GFX_PRESETS[gfxPreset];
+  for (const box of gfxPanels) {
+    for (const b of box.querySelector(".gfx-seg").children) b.setAttribute("aria-pressed", b.dataset.q === gfxPreset);
+    for (const item of box.querySelectorAll(".gfx-item")) {
+      const s = gfxDef(item.dataset.key), v = GFX[s.key], changed = s.key in gfxOver;
+      if (s.type === "slider") {
+        const inp = item.querySelector("input");
+        if (+inp.value !== v) inp.value = v;
+        item.querySelector(".gfx-val").textContent = s.fmt(v);
+      } else {
+        const sel = item.querySelector("select");
+        if (sel.value !== JSON.stringify(v)) sel.value = JSON.stringify(v);
+      }
+      item.classList.toggle("changed", changed);
+      const reset = item.querySelector(".gfx-reset");
+      reset.classList.toggle("off", !changed); // (kept in place, invisible: hiding it would change the row's height)
+      reset.tabIndex = changed ? 0 : -1;
+      const d = s[gfxPreset];
+      reset.title = `Back to ${presetName}: ${s.type === "slider" ? s.fmt(d) : s.type === "toggle" ? (d ? "on" : "off") : s.options.find(o => o[0] === d)[1].toLowerCase()}`;
+    }
+  }
 }
 
 // --- Chimney smoke ------------------------------------------------------------------
@@ -2867,8 +3431,8 @@ function setSmokeEmitters(list) {
 }
 // Where smoke comes out, relative to the building's centre.
 function updateSmoke() {
-  // Chimneys, the smoke hole of a hut someone lives in, the Capitol's campfire.
-  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: [CAMPFIRE[0] + 0.3, 2.6, CAMPFIRE[2]],
+  // Chimneys, the smoke hole of a hut someone lives in, the Capitol's torch.
+  const CHIMNEYS = { [K.HuntingLodge]: [0.3, glbModels ? 1.2 : 1.1, -0.2], [K.Hut]: [0, 1.35, 0], [K.Capitol]: TORCH,
     [K.Cottage]: [-0.38, 1.3, -0.2], [K.Bakery]: [0.65, 0.92, -0.42], [K.Brickworks]: [0.15, 1.28, -0.55],
     [K.Townhouse]: [0.35, 1.75, -0.2], [K.PowderMill]: [-0.45, 1.1, -0.45],
     [K.Tenement]: [0.4, 2.35, -0.2], [K.SteelMill]: [-0.9, 2.65, -0.8], [K.Factory]: [1.0, 2.3, -0.9], [K.Cannery]: [0.55, 1.55, -0.35],
@@ -2885,17 +3449,19 @@ function updateSmoke() {
   R3.smoke.material.uniforms.uScale.value = view._h * R3.renderer.getPixelRatio() * 0.5 * R3.camera.projectionMatrix.elements[5];
 }
 
-// --- After the scene is drawn: grading, bloom, ambient occlusion ---------------------
-// From Medium up, the scene is drawn into an off-screen image first, and one
-// last full-screen pass finishes it:
-// - colour grading: warm light, cool slightly teal shade, a touch more
-//   colour, and a soft vignette (Medium and up);
-// - bloom: bright things (sunlit roofs, glints on water, the forge, gold
-//   veins) glow softly (High and up);
-// - ambient occlusion: creases and contact points darken, worked out from
-//   the depth image (Ultra).
-// That pass also applies the tone mapping, which three.js skips when drawing
-// into an image. On Low the scene goes straight to the screen.
+// --- After the scene is drawn: grading, bloom, ambient occlusion, tilt-shift --------
+// With any of these settings on, the scene is drawn into an off-screen image
+// first, and one last full-screen pass finishes it:
+// - ambient occlusion ("contact shadows"): creases and contact points
+//   darken, worked out from the depth image;
+// - tilt-shift: ground nearer or farther than the point the camera looks at
+//   is mixed with blurred copies of the image (a half down to a sixteenth
+//   of the size), more the farther it is, so the land looks like a model;
+// - bloom ("glow"): bright things (sunlit roofs, glints on water, the forge,
+//   gold veins) glow softly;
+// That pass also applies the tone mapping (and with it the colour grading),
+// which three.js skips when drawing into an image. With all of them off the
+// scene goes straight to the screen.
 const Post = { rt: null, scene: null, cam: null, mat: null, bloom: null, quad: null };
 const FULLSCREEN_VS = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -2907,13 +3473,15 @@ function buildPost() {
       tColor: { value: null }, tDepth: { value: null }, tBloom: { value: null },
       uProjInv: { value: new THREE.Matrix4() }, uProj: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2() },
       uRadius: { value: 0.55 }, uBloom: { value: 0 },
+      tBlur1: { value: null }, tBlur2: { value: null }, tBlur3: { value: null }, tBlur4: { value: null }, uTilt: { value: 0 }, uFocus: { value: 24 }, uPlaneN: { value: new THREE.Vector3() }, uPlaneD: { value: 0 },
     },
-    defines: { USE_AO: 0 },
+    defines: { USE_AO: 0, USE_TILT: 0 },
     depthTest: false, depthWrite: false,
     vertexShader: FULLSCREEN_VS,
     fragmentShader: `
       uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBloom;
       uniform mat4 uProjInv; uniform mat4 uProj; uniform vec2 uRes; uniform float uRadius; uniform float uBloom;
+      uniform sampler2D tBlur1; uniform sampler2D tBlur2; uniform sampler2D tBlur3; uniform sampler2D tBlur4; uniform float uTilt; uniform float uFocus; uniform vec3 uPlaneN; uniform float uPlaneD;
       varying vec2 vUv;
       vec3 viewPos(vec2 uv) {
         float d = texture2D(tDepth, uv).x;
@@ -2943,17 +3511,31 @@ function buildPost() {
           col *= clamp(1.0 - occ * 0.6 / float(N_S), 0.0, 1.0);
         }
         #endif
+        #if USE_TILT
+        {
+          // How far the ground seen through this pixel is from the focus, as
+          // a share of the focus distance: the plane of the ground, not what
+          // the pixel shows, so things standing up (a tower, a plane in the
+          // air) are as sharp as the ground under them. The sky is far away.
+          vec4 fp = uProjInv * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+          vec3 dir = normalize(fp.xyz / fp.w);
+          float dn = dot(dir, uPlaneN);
+          float dist = dn < -1e-4 ? -(dir * (uPlaneD / dn)).z : uFocus * 4.0;
+          float off = smoothstep(0.03, 0.3, abs(dist - uFocus) / uFocus);
+          float b = off * uTilt * 4.0;
+          col = mix(col, texture2D(tBlur1, vUv).rgb, clamp(b, 0.0, 1.0));
+          col = mix(col, texture2D(tBlur2, vUv).rgb, clamp(b - 1.0, 0.0, 1.0));
+          col = mix(col, texture2D(tBlur3, vUv).rgb, clamp(b - 2.0, 0.0, 1.0));
+          col = mix(col, texture2D(tBlur4, vUv).rgb, clamp(b - 3.0, 0.0, 1.0));
+          // A model looks brighter and more colourful than the real thing.
+          float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+          col = max(mix(vec3(l), col, 1.0 + 0.15 * min(uTilt, 1.0)), 0.0);
+        }
+        #endif
         col += texture2D(tBloom, vUv).rgb * uBloom;
-        // Grading, in linear light before tone mapping: cool the shade, warm the light.
-        float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-        col *= mix(vec3(0.9, 1.0, 1.07), vec3(1.07, 1.0, 0.9), smoothstep(0.04, 0.9, lum));
-        col = max(mix(vec3(lum), col, 1.12), 0.0);
         gl_FragColor = vec4(col, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
-        // A soft vignette pulls the eye to the middle of the view.
-        vec2 q = vUv - 0.5;
-        gl_FragColor.rgb *= 1.0 - 0.28 * smoothstep(0.25, 0.85, dot(q, q) * 2.2);
       }`,
   });
   Post.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), Post.mat);
@@ -2983,7 +3565,7 @@ function buildBloom() {
       float l = max(c.r, max(c.g, c.b));
       float k = smoothstep(uThreshold, uThreshold * 1.6, l);   // a soft knee, so the glow fades in
       gl_FragColor = vec4(min(c * k, vec3(8.0)), 1.0);
-    }`, { uThreshold: { value: 1.05 } });
+    }`, { uThreshold: { value: 0.8 } }); // (1.05 was too high: little but the sun on water glowed)
   const shrink = mk(down + `
     void main() {
       vec3 c = tap(vec2(0.0)) * 4.0 + tap(vec2(-1.0)) + tap(vec2(1.0)) + tap(vec2(-1.0, 1.0)) + tap(vec2(1.0, -1.0));
@@ -3020,6 +3602,22 @@ function renderBloom(r, sz) {
   return levels[0].texture;
 }
 
+// Tilt-shift's blurred copies: the image shrunk to a half, a quarter, an
+// eighth and a sixteenth, each step a soft five-tap filter (bloom's), so the
+// smallest is the blurriest. The finishing pass mixes them in by distance
+// from the focus.
+function renderTiltBlur(r, sz) {
+  if (!Post.bloom) buildBloom();
+  if (!Post.blur) Post.blur = [0, 1, 2, 3].map(() => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+  Post.blur.forEach((t, i) => { const w = Math.max(1, sz.x >> (i + 1)), h = Math.max(1, sz.y >> (i + 1)); if (t.width !== w || t.height !== h) t.setSize(w, h); });
+  blit(r, Post.bloom.shrink, Post.rt, Post.blur[0]);
+  blit(r, Post.bloom.shrink, Post.blur[0], Post.blur[1]);
+  blit(r, Post.bloom.shrink, Post.blur[1], Post.blur[2]);
+  blit(r, Post.bloom.shrink, Post.blur[2], Post.blur[3]);
+  const u = Post.mat.uniforms;
+  u.tBlur1.value = Post.blur[0].texture; u.tBlur2.value = Post.blur[1].texture; u.tBlur3.value = Post.blur[2].texture; u.tBlur4.value = Post.blur[3].texture;
+}
+
 const _black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
 _black.needsUpdate = true;
 
@@ -3036,11 +3634,21 @@ function renderScene() {
   r.render(R3.scene, R3.camera);
   note();
   const u = Post.mat.uniforms;
-  u.tBloom.value = GFX.bloom ? renderBloom(r, sz) : _black;
-  u.uBloom.value = GFX.bloom ? 0.32 : 0;
+  u.tBloom.value = GFX.bloom > 0 ? renderBloom(r, sz) : _black;
+  u.uBloom.value = GFX.bloom * 0.6;
+  // Tilt-shift fades out as the camera zooms out past the usual height
+  // (cam.dist 24; it goes from 9 to 48): from high up, a blurred edge only
+  // hides the overview. 100% blurs the edges fully at the usual height.
+  const tilt = GFX.tilt * Math.max(0, Math.min(1, (48 - cam.dist) / 24)) * 0.5;
+  if (tilt > 0) renderTiltBlur(r, sz);
+  u.uTilt.value = tilt; u.uFocus.value = cam.dist;
+  // The ground's plane, as the camera sees it (see placeCamera).
+  const V = R3.camera.matrixWorldInverse;
+  u.uPlaneN.value.set(0, 1, 0).transformDirection(V);
+  u.uPlaneD.value = _v3.set(cam.x, Math.max(0, hAt(cam.x, cam.y)), cam.y).applyMatrix4(V).dot(u.uPlaneN.value);
   r.setRenderTarget(null);
-  const ao = GFX.ao ? 1 : 0;
-  if (Post.mat.defines.USE_AO !== ao) { Post.mat.defines.USE_AO = ao; Post.mat.needsUpdate = true; }
+  const ao = GFX.ao ? 1 : 0, tl = tilt > 0 ? 1 : 0;
+  if (Post.mat.defines.USE_AO !== ao || Post.mat.defines.USE_TILT !== tl) { Post.mat.defines.USE_AO = ao; Post.mat.defines.USE_TILT = tl; Post.mat.needsUpdate = true; }
   u.tColor.value = Post.rt.texture; u.tDepth.value = Post.rt.depthTexture;
   u.uProj.value.copy(R3.camera.projectionMatrix); u.uProjInv.value.copy(R3.camera.projectionMatrixInverse);
   u.uRes.value.set(sz.x, sz.y);

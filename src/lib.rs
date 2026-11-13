@@ -444,8 +444,15 @@ fn scratch_ids(w: &World, n: u32) -> Vec<u32> {
 #[unsafe(no_mangle)]
 pub extern "C" fn command(owner: u32, code: u32, n: u32, x: f32, y: f32, arg: u32) -> i32 {
     with(|w| {
+        // The computer takes over seat `arg`; with x 1 to 3, as Easy, Normal
+        // or Hard (the host dragged a computer of that skill there). On a
+        // seat the computer already plays, that only changes its skill.
         if code == 7 {
-            w.game.set_ai(arg.min(4) as u8, true);
+            let p = arg.min(4) as u8;
+            w.game.set_ai(p, true);
+            if (1.0..=3.0).contains(&x) {
+                w.game.set_skill(p, x as u32 - 1);
+            }
             return 0;
         }
         if code == 13 {
@@ -546,7 +553,7 @@ pub extern "C" fn can_place_ignoring_deposit(kind: u32, tx: i32, ty: i32) -> u32
     game(|g| g.spot_free(kind, tx, ty, g.local, 0) as u32)
 }
 
-/// Make this a two-player game seen through player `local`'s eyes (1 or 2).
+/// Make this a multiplayer game seen through player `local`'s eyes (1 to the number of players).
 #[unsafe(no_mangle)]
 pub extern "C" fn setup_multiplayer(local: u32) {
     game(|g| g.setup_multiplayer(local.clamp(1, g.n_players as u32) as u8))
@@ -1134,6 +1141,25 @@ mod tests {
         command(1, 8, 0, 0.0, 0.0, 0);
         tick();
         assert_eq!((state_of(1), state_of(2), winner_player()), (2, 1, 2));
+    }
+
+    /// When the last players fall on the same tick, every computer names
+    /// the same winner, whoever's eyes it looks through.
+    #[test]
+    fn a_shared_last_tick_has_one_winner_for_everyone() {
+        let mut winners = Vec::new();
+        for view in [1, 2] {
+            init(3, 1, 2);
+            setup_multiplayer(view);
+            for _ in 0..40 {
+                tick();
+            }
+            command(1, 8, 0, 0.0, 0.0, 0);
+            command(2, 8, 0, 0.0, 0.0, 0);
+            tick();
+            winners.push(winner_player());
+        }
+        assert_eq!(winners, [1, 1]);
     }
 
     /// The host hands a seat back and forth between the computer and a person.

@@ -41,7 +41,7 @@ screen. Friends on your network use your computer's address, e.g.
 | src/lib.rs           | The Rust/JavaScript boundary: exported functions, render buffers, the two multiplayer copies |
 | web/index.html       | Page layout and styles; lists the scripts below                 |
 | web/main.js          | Game loop, camera, input, HUD, lobby, saving, multiplayer glue, the trace panel |
-| web/render3d.js      | three.js scene: terrain, water, models, effects, fog of war, picking, icons, graphics setting |
+| web/render3d.js      | three.js scene: terrain, water, models, effects (smoke, dust, splashes, sparks), fog of war, picking, icons, graphics settings |
 | web/audio.js         | Synthesized sound effects (Web Audio), volume                   |
 | web/net.js           | Multiplayer: transports, the trace, `Server` and `Client`       |
 | web/watch.js         | Recording games, replays, spectators, and watching after you're out |
@@ -71,8 +71,11 @@ the other way, like the ids in a command, go through `scratch_ptr()`.
 `[code, arg, x, y, ...ids]`, built in `issue()` in `main.js` and applied by
 `command()` in `lib.rs`. Codes: 1 smart order (right-click), 2 attack-move,
 3 stop, 4 train, 5 cancel, 6 place a building, 7 hand a player to the
-computer (only the host sends this), 8 surrender. In single player, `issue()` applies it
-at once. In multiplayer it's applied at once too, and sent to the host.
+computer (only the host sends this), 8 surrender, 9 demolish (or disband
+units), 10 pause or resume producers, 11 arm a nuke, 12 launch it,
+13 a person takes a seat back from the computer (host only), 14 upgrade
+houses, 15 the cheat switch (host only). In single player, `issue()`
+applies it at once. In multiplayer it's applied at once too, and sent to the host.
 
 **Starting up** shows a loading screen (`#boot` in `index.html`) from the
 first paint: the page then loads the wasm, sets up three.js and the models,
@@ -156,8 +159,8 @@ an icon to `RES_ICON` in `main.js`. Players' slot arrays grow with `N_RES`.
 **The economy, in one place.** `Game::resolve` (`src/game.rs`) recounts
 everything each tick in the design's fixed order: crews (house goods'
 producers first), supply, use, unsupplied units, house goods nearest the
-Capitol first, residents who no longer fit. Only houses' residents and
-goods are saved; `Game::recount` works out the rest after a load.
+Capitol first, residents who no longer fit. Only houses' goods are saved;
+`Game::recount` works out the rest after a load.
 
 **Add a command.**
 - Add a `Command` variant and its handling in `Game::apply` (`src/game.rs`),
@@ -276,9 +279,9 @@ Guest B, with a 60 ms round trip to the host, gives an order on tick 100:
 - **A guest's clock** is the host's tick count plus half the round trip,
   taken from the most hopeful recent message and adjusted gently. The host
   measures how far off each guest's clock is (shown in the trace).
-- **Pause and speed.** The speed is a slider in the top bar: up to 10× when
-  playing alone; online the host can pause (P) and set 1×, 1.5× or 2× for
-  everyone. The simulation doesn't change: only how many ticks come
+- **Pause and speed.** The speed is a slider in the top bar, 1× to 10× in
+  half steps, alone and online alike; online only the host can pause (P)
+  and set it, for everyone (a computer that can't keep up is told so). The simulation doesn't change: only how many ticks come
   a second. The server's clock runs at `rate` (0 while paused), the frames
   carry it, and guests' clocks follow it (a new rate restarts their
   estimate). Orders given while paused go in once it runs again. The
@@ -345,8 +348,19 @@ Two topics carry the game itself. Every message carries
 
 - **The lobby.** The start screen has four seats. Opening the page makes
   you the host of your own lobby. Friends join with an invite link (the
-  page address plus `#CODE`) and take an open seat, or a computer's if none
-  is open. Begin with no friends seated is single player.
+  page address plus `#CODE`) and take an empty seat, or wait with the
+  spectators if there's none (computers keep their seats). Begin with no
+  friends seated is single player.
+- **Moving people.** Everyone in a seat is a chip the host drags (or
+  clicks, then clicks where it goes): onto another seat (they swap; a
+  computer keeps its skill, the host too can take another colour), onto
+  the Spectators box (friends without a seat and anyone who came with the
+  watch link) or, for a computer, back onto the row of computers (Easy,
+  Normal, Hard), which empties its seat. A computer from that row dropped
+  on a seat plays it. A friend moved to the spectators stays in the room
+  and isn't seated again by themselves (`benched`); someone watching who
+  gets a seat turns into a guest of the lobby (their seat waits 15 s while
+  they switch, `seatHold`).
 - **Rooms.** Each lobby is a room named after its code; the game runs in
   that room, and the host's presence there carries the seat list
   (`openOwnLobby`, `joinLobby`, `beginGame` in `main.js`).
@@ -400,8 +414,17 @@ player's fog history is kept). The view is set with `set_view` in
   their game". Spectators follow the host into the next game, and keep a
   replay of what they watched. Players see "N watching" in the top bar.
   Spectating works over the relay, not claude.ai's room service.
-- **Taking a seat.** The host's menu lists the seats during a game, and a
-  seat the computer plays can be given to a spectator ("Spectator 3": the
+- **Moving people mid-game.** The host's menu has the same chips (the host
+  keeps their own seat). A computer from the row dropped on a computer's
+  seat changes its skill; on a player's seat, the computer takes over
+  (command 7, whose x is the skill + 1, `Server.toComputer`) and the
+  player, told by the frames' `left`, goes on as a spectator
+  (`movedToSpectators`). A player dropped on the Spectators box goes the
+  same way. A player dropped on another seat goes through the spectators
+  and is handed the new seat once they're watching (`moves`,
+  `processMoves`); two players swap that way too.
+- **Taking a seat.** A seat the computer plays can be given to a spectator
+  by dragging them onto it ("Spectator 3": the
   host numbers them as they arrive, and each sees their number). The
   server (`Server.claim`) picks a tick T a second ahead and puts "a person
   takes over" (command 13, the opposite of 7) into that tick's bundle, so
@@ -523,8 +546,9 @@ versions don't play together.
 - **Winning:** destroy every rival Capitol. From the Medieval era a player
   can found as many as they like (8 wood, 8 stone, 6 brick, 4 builders; the
   first holds nothing). Losing one costs only that one; lose the last (a
-  foundation doesn't count) and you're out. Every Capitol has a town
-  square, with its statue, in front of it: newcomers turn up at the one
+  foundation doesn't count) and you're out. A Capitol is a town square:
+  a statue on one tile in the middle of 5x5 tiles of paving, where nothing
+  else can be built. Newcomers turn up at the one
   nearest the house whose bed is free, free workers wait at the nearest,
   and a job takes the nearest free worker. So a second Capitol grows its
   own town.
@@ -703,6 +727,7 @@ versions don't play together.
   - H home, `.` free workers (in the town square)
   - Z on a producer: pause or resume it
   - Ctrl+1–9 make a group, Shift+1–9 add the selection to it, 1–9 recall it (twice to centre the camera)
+  - Esc cancel, deselect, then the menu
   - K tech tree, P pause (online: the host, for everyone), M sound, Ctrl+S save, F8 network details
   - Enter: chat. Menu: surrender, save a replay (any game, online too), copy a watch link for spectators, and
     (the host) give a computer's seat to a spectator

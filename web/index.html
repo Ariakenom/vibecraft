@@ -87,12 +87,44 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--bronze
 .menu-vol { align-items: center; gap: 12px; }
 .menu-vol input { width: 180px; accent-color: var(--bronze); cursor: pointer; }
 .menu-vol input.off { opacity: .45; }
+/* A button whose text changes: every text in one cell, only one visible (main.js: stableLabels) */
+.stack { display: inline-grid; }
+.stack > span { grid-area: 1 / 1; visibility: hidden; }
+.stack > span.on { visibility: visible; }
+/* Graphics settings (render3d.js: addGraphicsControls) */
+.gfx { display: grid; gap: 10px; }
+.gfx-head { gap: 10px; }
+.gfx-show { touch-action: none; user-select: none; -webkit-user-select: none; }
+.gfx-list { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 3px; }
+.gfx-list[hidden] { display: none; }
+.gfx-item { display: grid; grid-template-columns: 9.5em 1fr 3.2em 28px; gap: 10px; align-items: center; padding: 4px 6px; border-radius: 3px; transition: opacity .15s, background .15s; }
+.gfx-item label { font-size: 14px; }
+.gfx-item.changed label { color: var(--bronze); }
+.gfx-ctl select, .settings select { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 5px 8px; font: 500 14px var(--body); width: 100%; max-width: 14em; cursor: pointer; }
+.gfx-ctl input { width: 100%; accent-color: var(--bronze); cursor: pointer; touch-action: none; }
+.gfx-val { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.gfx-reset { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: transparent; cursor: pointer; font-size: 15px; line-height: 1; }
+.gfx-reset.off { visibility: hidden; }
+.seg.small button { padding: 4px 11px; font-size: 13px; }
+@media (max-width: 520px) { .gfx-item { grid-template-columns: 1fr 3.2em 28px; } .gfx-item label { grid-column: 1 / -1; } }
+/* While a setting is held, everything else in the menu fades, so the game
+   behind shows; "Hold to look" hides the menu altogether. */
+.overlay { transition: opacity .15s, background .15s; }
+.overlay.gfx-peek { opacity: 0; }
+.overlay.gfx-fade { background: transparent; }
+.overlay.gfx-fade .card { background: transparent; border-color: transparent; box-shadow: none; }
+.overlay.gfx-fade .card > *:not(.settings), .overlay.gfx-fade .settings > *:not(.gfx), .overlay.gfx-fade .gfx-head, .overlay.gfx-fade .gfx-list > .gfx-item:not(.active) { opacity: 0; }
+.overlay.gfx-fade .gfx-list { border-color: transparent; }
+.overlay.gfx-fade .gfx-item.active { background: var(--panel); box-shadow: 0 6px 24px #0008; }
+.card > *, .gfx-head, .gfx-list { transition: opacity .15s, background .15s, border-color .15s; }
 .tbtn[aria-pressed="true"] { background: var(--bronze); color: var(--ground); border-color: var(--bronze); }
 
 /* ---- map ---- */
 #stage { position: relative; min-height: 0; overflow: hidden; }
 #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; touch-action: none; }
 #over { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+/* Part of colour grading: the screen's edges darken a little (render3d.js: applyGraphics). */
+#vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse farthest-corner at center, transparent 48%, rgba(0, 0, 0, .14) 71%, rgba(0, 0, 0, .28) 100%); }
 #view.placing, #view.amode { cursor: crosshair; }
 #toasts { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: grid; gap: 6px; justify-items: center; pointer-events: none; z-index: 2; width: min(90%, 420px); }
 .toast { background: #1b1610e8; border: 1px solid var(--line); border-left: 3px solid var(--bronze); padding: 6px 12px; border-radius: 3px; font-size: 14px; animation: fade 3.2s forwards; text-align: center; }
@@ -272,7 +304,28 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .seat .swatch { width: 14px; height: 14px; border-radius: 2px; flex: none; }
 .seat .who { font-weight: 700; flex: 1; }
 .seat .tag { color: var(--muted); font-size: 13px; }
-.game-seats { display: grid; gap: 8px; margin-top: 14px; }
+.game-seats { display: grid; gap: 8px; }
+/* tabs in the start screen and the menu: the panels share the card's place */
+.tabs { margin-top: -4px; }
+.tabs button[aria-selected="true"] { background: var(--bronze); color: #1b1610; font-weight: 700; }
+.tabpanel { display: grid; gap: 14px; align-content: start; }
+.tabpanel[hidden] { display: none; }
+#menuScreen .card { min-height: 430px; align-content: start; }
+/* With tabs, the card's top stays put (centred, a taller tab would move the tabs under the mouse). */
+#startScreen, #menuScreen { place-items: start center; padding-top: max(24px, 5vh); }
+/* people to move between seats and the spectators (drag, or click then click) */
+.specs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 40px; padding: 4px 10px; border: 1px dashed var(--line); border-radius: 3px; }
+.specs .label { color: var(--muted); font-size: 13px; margin-right: 4px; }
+.specs .note { margin: 0; }
+.specs.ais { border-style: solid; }
+.seat .who.empty { color: var(--muted); font-weight: 500; }
+.chip { display: inline-block; font-weight: 700; }
+.chip.movable { padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--ground); cursor: grab; user-select: none; -webkit-user-select: none; }
+.chip.movable:hover { border-color: var(--bronze); }
+.chip.dragging { opacity: .45; }
+.chip.picked { outline: 2px solid var(--bronze); outline-offset: 1px; }
+.seat.drop-ok, .specs.drop-ok { outline: 1px dashed var(--bronze); outline-offset: 1px; cursor: pointer; }
+.seat.drop-over, .specs.drop-over { outline: 2px solid var(--bronze); outline-offset: 0; }
 .lobby select, .lobby input { background: var(--ground); border: 1px solid var(--line); border-radius: 3px; color: var(--ink); padding: 6px 8px; font: 500 15px var(--body); }
 .lobby .row { gap: 10px; }
 .map-pick { display: grid; gap: 8px; justify-items: start; }
@@ -289,8 +342,12 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 #startBtn:disabled { opacity: .55; cursor: default; filter: none; }
 #mpStatus:empty, #netStatus:empty, #openGames:empty { display: none; }
 .net-status { font-size: 12px; user-select: text; -webkit-user-select: text; }
-#netTrace { position: absolute; top: 10px; right: 10px; z-index: 4; display: grid; gap: 8px; max-width: min(560px, calc(100% - 20px)); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 10px 12px; user-select: text; -webkit-user-select: text; }
-#netTrace pre { margin: 0; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; color: var(--ink); }
+#netTrace { position: absolute; top: 10px; right: 10px; z-index: 4; display: grid; grid-template-rows: 1fr auto auto; gap: 8px; width: min(560px, calc(100% - 20px)); height: min(560px, calc(100% - 20px)); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 10px 12px; user-select: text; -webkit-user-select: text; }
+#netTraceBody { overflow-y: auto; display: grid; gap: 10px; align-content: start; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; color: var(--ink); }
+#netTrace .tr-sec h4 { margin: 0 0 3px; font: 700 11px var(--body); text-transform: uppercase; letter-spacing: .1em; color: var(--bronze); }
+#netTrace dl { margin: 0; display: grid; grid-template-columns: 11em 1fr; column-gap: 10px; }
+#netTrace dt { color: var(--muted); white-space: nowrap; }
+#netTrace dd { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 #netTrace .row { display: flex; gap: 8px; }
 #netTraceText { width: 100%; height: 80px; font: 11px ui-monospace, Menlo, Consolas, monospace; background: var(--ground); color: var(--ink); border: 1px solid var(--line); }
 #netWait { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); padding: 10px 16px; border-radius: 3px; font-size: 15px; z-index: 3; }
@@ -343,6 +400,13 @@ body.observing #hint { display: none; }
 }
 
 /* chat */
+/* free workers: a button at the bottom left of the view, with how many */
+.idle-btn { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; align-items: center; gap: 6px; height: 40px; min-width: 76px; padding: 0 12px; background: #1b1610e6; border: 1px solid var(--bronze); border-radius: 3px; color: var(--ink); cursor: pointer; font: 700 16px var(--body); font-variant-numeric: tabular-nums; }
+.idle-btn svg { width: 20px; height: 20px; color: #d9c9a8; }
+.idle-btn:hover { background: #2a2218f0; }
+.idle-btn.none { border-color: var(--line); color: var(--muted); }
+.idle-btn.none svg { color: var(--muted); }
+.idle-btn.gone { visibility: hidden; }
 #chat { position: absolute; left: 10px; bottom: 60px; z-index: 3; width: min(420px, calc(100% - 20px)); display: grid; gap: 4px; pointer-events: none; }
 #chatLog { display: grid; gap: 2px; max-height: 40vh; overflow: hidden; }
 #chatLog.open { overflow: auto; pointer-events: auto; background: #1b1610cc; border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
@@ -354,7 +418,7 @@ body.observing #hint { display: none; }
 #chatLine label { color: var(--muted); font-size: 13px; }
 #chatInput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: 500 15px var(--body); outline: none; }
 .lobby-chat { display: grid; gap: 6px; }
-.chat-log { max-height: 120px; overflow: auto; border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; display: grid; gap: 2px; align-content: start; }
+.chat-log { height: 96px; overflow: auto; border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; display: grid; gap: 2px; align-content: start; }
 #lobbyChatInput { flex: 1; min-width: 0; }
 
 /* ---- loading screen: shown from the very first paint until the title scene
@@ -415,7 +479,7 @@ body.observing #hint { display: none; }
     <g fill="#16110b"><path d="M90 262 l14 -40 l14 40z"/><path d="M110 266 l11 -30 l11 30z"/><path d="M1010 250 l15 -44 l15 44z"/><path d="M1036 254 l11 -32 l11 32z"/><path d="M300 258 l12 -34 l12 34z"/></g>
     <path d="M0 320 C220 290 420 318 640 300 S980 296 1200 310 V400 H0Z" fill="#15120d"/>
   </svg>
-  <!-- a far town on the ridge: the Capitol with its banner -->
+  <!-- a far town on the ridge: the Town Square with its banner -->
   <svg class="town" viewBox="530 70 190 140" aria-hidden="true">
     <g fill="#241b12" transform="translate(560 120)">
       <rect x="0" y="40" width="80" height="44"/><rect x="18" y="16" width="44" height="30"/><path d="M14 18 L40 -6 L66 18Z"/>
@@ -437,8 +501,8 @@ body.observing #hint { display: none; }
 (function () {
   var tips = ["<b>Foot soldiers</b> beat riders and tanks, <b>riders</b> beat archers and gunners, <b>archers</b> and gunners beat foot soldiers.",
     "Each different <b>food</b> a house gets gives it 2 more beds: mix grain, fruit, fish and meat.",
-    "Press <b>.</b> to find an idle citizen.", "Houses grow into bigger ones with every good they can use: ten bring the next <b>era</b>.",
-    "Your <b>Capitol</b> and towers shoot back.", "Press <b>K</b> to see the tech tree.",
+    "Press <b>.</b> (or the worker button by the minimap) to find a free worker.", "Houses grow into bigger ones with every good they can use: ten bring the next <b>era</b>.",
+    "Your <b>Town Square</b> and towers shoot back.", "Press <b>K</b> to see the tech tree.",
     "Send a friend the <b>watch link</b> from the menu, and they can spectate.", "Press <b>Enter</b> in an online game to chat."];
   document.getElementById("bootTip").innerHTML = tips[Math.floor(Math.random() * tips.length)];
 })();
@@ -460,14 +524,16 @@ body.observing #hint { display: none; }
     <label class="speed" id="speedBox" title="Game speed"><input type="range" id="speedSlider" min="1" max="10" step="0.5" value="1" aria-label="Game speed"><span id="speedLabel">1×</span></label>
     <button class="tbtn" id="chatBtn" title="Chat (Enter)" hidden>Chat</button>
     <button class="tbtn" id="netBtn" title="Frame times and network details (F8)" hidden>Trace</button>
-    <button class="tbtn" id="menuBtn" title="Menu">Menu</button>
+    <button class="tbtn" id="menuBtn" title="Menu (Esc)">Menu</button>
   </header>
   <main id="stage">
     <canvas id="view"></canvas>
+    <div id="vignette" aria-hidden="true" hidden></div>
     <canvas id="over" aria-hidden="true"></canvas>
     <div id="toasts" aria-live="polite"></div>
     <section id="buildList" hidden aria-label="Being built and trained"></section>
     <div id="hint" hidden></div>
+    <button id="idleBtn" class="idle-btn none" title="Free workers (.)" aria-label="Free workers: select them"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="4.5" r="2.8" fill="currentColor"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="currentColor"/></svg><span id="idleCount">0</span></button>
     <div id="netWait" hidden></div>
     <div id="chat">
       <div id="chatLog" aria-live="polite" hidden></div>
@@ -493,7 +559,7 @@ body.observing #hint { display: none; }
       <button class="tbtn" id="obsExit">Exit replay</button>
     </div>
     <section id="netTrace" hidden aria-label="Frame times and network details">
-      <pre id="netTraceBody"></pre>
+      <div id="netTraceBody"></div>
       <div class="row">
         <button class="tbtn" id="netTraceCopy">Copy trace</button>
         <button class="tbtn" id="netTraceClose">Close</button>
@@ -509,12 +575,17 @@ body.observing #hint { display: none; }
 
   <div class="overlay" id="startScreen">
     <div class="card">
-      <h1>VibeCraft<small>Grow a town through the eras, raise an army, and outlast your rivals.</small></h1>
-      <section class="lobby" aria-labelledby="seatsTitle">
-        <div class="lobby-head">
-          <h2 id="seatsTitle">Players</h2>
-        </div>
+      <h1>VibeCraft</h1>
+      <div class="seg tabs" role="tablist" aria-label="Start screen">
+        <button role="tab" data-tab="play" aria-selected="true">Play</button>
+        <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+        <button role="tab" data-tab="help" aria-selected="false">How to play</button>
+      </div>
+      <section class="lobby tabpanel on" data-tab="play" aria-labelledby="seatsTitle">
+        <h2 id="seatsTitle">Players</h2>
         <ol class="seats" id="seats"></ol>
+        <div class="specs" id="lobbySpecs" aria-label="Spectators" title="Friends without a seat, and anyone who came with the watch link" hidden></div>
+        <div class="specs ais" id="lobbyAis" aria-label="Computers" title="Drag a computer onto a seat; drag one back here to empty its seat" hidden></div>
         <div class="map-pick" id="mapRow">
           <div class="row">
             <label for="gameMode">Mode</label>
@@ -523,8 +594,6 @@ body.observing #hint { display: none; }
               <option value="frontier">Frontier (small)</option>
               <option value="frontier-large">Frontier (large)</option>
             </select>
-          </div>
-          <div class="row">
             <label for="mapMode">Map</label>
             <select id="mapMode">
               <option value="surprise">Surprise me</option>
@@ -542,8 +611,7 @@ body.observing #hint { display: none; }
           <input id="nameInput" maxlength="16" placeholder="So the others know you" autocomplete="nickname" spellcheck="false">
         </div>
         <div class="invite" id="inviteRow" hidden>
-          <label for="inviteLink">Invite friends with this link. They take a free seat when they open it.</label>
-          <div class="row"><input id="inviteLink" readonly spellcheck="false"><button class="ghost" id="copyLink">Copy link</button><button class="ghost" id="lobbyWatchLink" title="A link for people who only want to watch your games">Copy watch link</button></div>
+          <div class="row"><label for="inviteLink">Invite</label><input id="inviteLink" readonly spellcheck="false" title="Friends who open this link take an empty seat"><button class="ghost" id="copyLink">Copy link</button><button class="ghost" id="lobbyWatchLink" title="A link for people who only want to watch your games">Copy watch link</button></div>
         </div>
         <div class="row" id="openGames"></div>
         <div class="row" id="joinRow" hidden>
@@ -557,7 +625,7 @@ body.observing #hint { display: none; }
           <span class="note">To play with friends from your own copy, run <code>node server.js</code> (see README).</span>
         </div>
         <div class="lobby-chat" id="lobbyChat" hidden>
-          <div class="chat-log" id="lobbyChatLog" aria-live="polite" hidden></div>
+          <div class="chat-log" id="lobbyChatLog" aria-live="polite"></div>
           <div class="row"><input id="lobbyChatInput" placeholder="Say something to the others here" autocomplete="off" spellcheck="false" aria-label="Chat message"><button class="ghost" id="lobbyChatSend">Send</button></div>
         </div>
         <p class="note" id="mpStatus" aria-live="polite"></p>
@@ -569,20 +637,30 @@ body.observing #hint { display: none; }
           <button class="ghost" id="leaveLobbyBtn" hidden>Play my own game instead</button>
         </div>
       </section>
-      <dl class="keys">
-        <div><dt>Left-click / drag</dt><dd>Select, box-select</dd></div>
-        <div><dt>Right-click</dt><dd>Move, attack, build, work</dd></div>
-        <div><dt>Double-click</dt><dd>Select all of that type on screen</dd></div>
-        <div><dt><kbd class="k">Z</kbd> then click</dt><dd>Attack-move (<kbd class="k">X</kbd> stops)</dd></div>
-        <div><dt><kbd class="k">.</kbd></dt><dd>Next idle citizen</dd></div>
-        <div><dt><kbd class="k">H</kbd></dt><dd>Jump to your Capitol</dd></div>
-        <div><dt><kbd class="k">Ctrl</kbd>/<kbd class="k">Shift</kbd> + <kbd class="k">1</kbd>–<kbd class="k">9</kbd></dt><dd>Make a group; <kbd class="k">1</kbd>–<kbd class="k">9</kbd> recalls</dd></div>
-        <div><dt><kbd class="k">W</kbd><kbd class="k">A</kbd><kbd class="k">S</kbd><kbd class="k">D</kbd>, edges</dt><dd>Move the camera; wheel zooms</dd></div>
-        <div><dt>Middle-drag</dt><dd>Rotate and tilt the camera</dd></div>
-        <div><dt><kbd class="k">M</kbd></dt><dd>Mute or unmute</dd></div>
-        <div><dt><kbd class="k">Ctrl</kbd> + <kbd class="k">S</kbd></dt><dd>Save the game (Menu loads)</dd></div>
-      </dl>
-      <p class="note">Counters hold in every era: foot soldiers (spears, swords, muskets, rifles) beat riders and tanks; riders and tanks beat archers, crossbows and machine guns; those beat foot soldiers. Siege smashes buildings, and fighters rule the air. Your Capitol and towers shoot back. Everything you have holds its resources while it exists: lose a producer and your newest units that need it lose health. Grow from village to empire by building (<kbd class="k">K</kbd> shows the tech tree), and win by conquest.</p>
+      <section class="tabpanel settings" data-tab="settings" id="startSettings" hidden>
+        <div class="row menu-vol">
+          <label for="startVolume">Volume</label>
+          <input type="range" id="startVolume" min="0" max="100" step="1" aria-label="Volume">
+        </div>
+      </section>
+      <section class="tabpanel" data-tab="help" hidden>
+        <dl class="keys">
+          <div><dt>Left-click / drag</dt><dd>Select, box-select</dd></div>
+          <div><dt>Right-click</dt><dd>Move, attack, build, work</dd></div>
+          <div><dt>Double-click</dt><dd>Select all of that type on screen</dd></div>
+          <div><dt><kbd class="k">Z</kbd> then click</dt><dd>Attack-move (<kbd class="k">X</kbd> stops)</dd></div>
+          <div><dt><kbd class="k">.</kbd></dt><dd>Next free worker</dd></div>
+          <div><dt><kbd class="k">H</kbd></dt><dd>Jump to your Town Square</dd></div>
+          <div><dt><kbd class="k">Ctrl</kbd>/<kbd class="k">Shift</kbd> + <kbd class="k">1</kbd>–<kbd class="k">9</kbd></dt><dd>Make a group; <kbd class="k">1</kbd>–<kbd class="k">9</kbd> recalls</dd></div>
+          <div><dt><kbd class="k">W</kbd><kbd class="k">A</kbd><kbd class="k">S</kbd><kbd class="k">D</kbd>, edges</dt><dd>Move the camera; wheel zooms</dd></div>
+          <div><dt>Middle-drag</dt><dd>Rotate and tilt the camera</dd></div>
+          <div><dt><kbd class="k">K</kbd></dt><dd>Tech tree</dd></div>
+          <div><dt><kbd class="k">M</kbd></dt><dd>Mute or unmute</dd></div>
+          <div><dt><kbd class="k">Esc</kbd></dt><dd>Cancel, deselect, then the menu</dd></div>
+          <div><dt><kbd class="k">Ctrl</kbd> + <kbd class="k">S</kbd></dt><dd>Save the game</dd></div>
+        </dl>
+        <p class="note">Foot soldiers beat riders and tanks; riders and tanks beat archers and gunners; those beat foot soldiers. Siege smashes buildings, fighters rule the air. Everything you have holds its resources while it exists. Win by conquest.</p>
+      </section>
     </div>
   </div>
 
@@ -604,7 +682,7 @@ body.observing #hint { display: none; }
         <h1 style="font-size: 30px">Tech tree</h1>
         <button class="ghost" id="techClose">Close</button>
       </div>
-      <p class="note">Each building unlocks the next; nothing is researched. Costs are slots, held while the thing exists, and every unit is also a person. Later eras come as your houses grow: each era's house holds more kinds of goods.</p>
+      <p class="note">Nothing is researched: each building unlocks the next, and eras come as your houses grow.</p>
       <div id="techBody"></div>
     </div>
   </div>
@@ -612,38 +690,53 @@ body.observing #hint { display: none; }
   <div class="overlay" id="menuScreen" hidden>
     <div class="card">
       <h1 id="menuTitle">Paused</h1>
-      <div class="row">
-        <button class="go" id="resumeBtn">Resume</button>
-        <button class="ghost" id="saveBtn" title="Save (Ctrl+S)">Save game</button>
-        <button class="ghost" id="saveReplayBtn" title="Keep the game so far among the replays (on the start screen), to watch or download">Save replay</button>
-        <button class="ghost" id="menuLoadBtn">Load game</button>
-        <button class="ghost" id="restartBtn">Restart</button>
-        <button class="ghost" id="quitBtn">New game</button>
+      <div class="seg tabs" role="tablist" aria-label="Menu">
+        <button role="tab" data-tab="game" aria-selected="true">Game</button>
+        <button role="tab" data-tab="players" aria-selected="false" id="playersTab">Players</button>
+        <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
       </div>
-      <div class="row">
-        <button class="ghost" id="watchLinkBtn" title="Anyone with this link can watch the game live, seeing the whole map">Copy watch link</button>
-        <button class="ghost" id="cheatBtn" title="Every player a person plays (not the computer) can build and train anything, of any era, free">Cheat mode: off</button>
-        <button class="ghost danger" id="surrenderBtn">Surrender</button>
-      </div>
-      <div class="row menu-vol">
-        <label for="menuVolume">Volume</label>
-        <input type="range" id="menuVolume" min="0" max="100" step="1" aria-label="Volume">
-      </div>
-      <div id="gameSeats" class="game-seats" hidden>
-        <ol class="seats" id="gameSeatList" aria-label="Seats"></ol>
-        <p class="note" id="gameSeatNote"></p>
-      </div>
+      <section class="tabpanel on" data-tab="game">
+        <div class="row">
+          <button class="go" id="resumeBtn">Resume</button>
+          <button class="ghost" id="saveBtn" title="Save (Ctrl+S)">Save game</button>
+          <button class="ghost" id="menuLoadBtn">Load game</button>
+          <button class="ghost" id="saveReplayBtn" title="Keep the game so far among the replays, to watch or download">Save replay</button>
+        </div>
+        <div class="row">
+          <button class="ghost" id="restartBtn">Restart</button>
+          <button class="ghost" id="quitBtn">New game</button>
+          <button class="ghost danger" id="surrenderBtn">Surrender</button>
+        </div>
+        <div class="row">
+          <button class="ghost" id="watchLinkBtn" title="Anyone with this link can watch the game live, seeing the whole map">Copy watch link</button>
+          <button class="ghost" id="cheatBtn" title="Every player a person plays (not the computer) can build and train anything, of any era, free">Cheat mode: off</button>
+        </div>
+      </section>
+      <section class="tabpanel" data-tab="players" hidden>
+        <div id="gameSeats" class="game-seats" hidden>
+          <ol class="seats" id="gameSeatList" aria-label="Seats"></ol>
+          <div class="specs" id="gameSpecs" aria-label="Spectators" title="Drag a spectator onto a seat to give it to them; drag a player here and they watch"></div>
+          <div class="specs ais" id="gameAis" aria-label="Computers" title="Drag a computer onto a seat to have it play that seat"></div>
+          <p class="note" id="gameSeatNote"></p>
+        </div>
+        <p class="note" id="noSeatsNote">Only the host of an online game can move players.</p>
+      </section>
+      <section class="tabpanel settings" data-tab="settings" id="menuSettings" hidden>
+        <div class="row menu-vol">
+          <label for="menuVolume">Volume</label>
+          <input type="range" id="menuVolume" min="0" max="100" step="1" aria-label="Volume">
+        </div>
+      </section>
     </div>
   </div>
 
   <div class="overlay" id="outScreen" hidden>
     <div class="card">
-      <h1><span id="outTitle">Defeat</span><small id="outWhy">Your Capitol has fallen. The others play on.</small></h1>
+      <h1><span id="outTitle">Defeat</span><small id="outWhy">Your Town Square has fallen. The others play on.</small></h1>
       <div class="row">
         <button class="go" id="outWatchBtn">Watch the rest</button>
         <button class="ghost" id="outLeaveBtn">Leave the game</button>
       </div>
-      <p class="note">Watching, you see the whole map, or the game through any player's eyes.</p>
     </div>
   </div>
 
@@ -667,7 +760,7 @@ body.observing #hint { display: none; }
         <button class="ghost" id="loadFileBtn">Load from a file…</button>
         <input type="file" id="loadFile" accept=".vibecraft,application/json" hidden>
       </div>
-      <p class="note">Saves and replays are kept in this browser. Use Download to keep one as a file, or to carry it to another computer.</p>
+      <p class="note">Kept in this browser. Download one to keep it as a file.</p>
     </div>
   </div>
 </div>

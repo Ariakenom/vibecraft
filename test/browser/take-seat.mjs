@@ -18,14 +18,13 @@ async function same(pages, what) {
   const k = Math.max(...common);
   check(common.length > 0 && sums.every(s => s.find(e => e[0] === k)[1] === sums[0].find(e => e[0] === k)[1]), `${what}: the games agree at tick ${k}`);
 }
-// The host gives seat `slot` to the first spectator in the menu.
+// The host drags the first spectator in the menu onto seat `slot`.
 async function give(host, slot) {
-  await host.click("#menuBtn");
+  if (await host.evaluate(() => $("menuScreen").hidden)) await host.click("#menuBtn");
+  await host.click('#menuScreen [data-tab="players"]');
   await host.waitForSelector("#gameSeats:not([hidden])");
-  await host.waitForFunction(s => $("gameSeatList").children[s - 1].querySelector("select")?.options.length > 1, slot, { timeout: 15000 });
-  const sel = await host.$(`#gameSeatList li:nth-child(${slot}) select`);
-  const v = await sel.evaluate(s => s.options[1].value);
-  await sel.selectOption(v);
+  await host.waitForSelector("#gameSpecs .chip.movable", { timeout: 15000 });
+  await host.dragAndDrop("#gameSpecs .chip.movable", `#gameSeatList li:nth-child(${slot})`);
   await host.evaluate(() => { $("menuScreen").hidden = true; });
 }
 
@@ -87,10 +86,14 @@ async function give(host, slot) {
   await spec.waitForFunction(() => watcher && watcher.loaded, null, { timeout: 30000 });
   check(await spec.evaluate(() => pnames[1] === "Ada" && /Ada/.test($("sbBody").textContent)), "the spectator's scoreboard has the names");
   await host.click("#menuBtn");
-  await host.waitForFunction(() => /Give to Cy/.test($("gameSeatList").textContent), null, { timeout: 15000 });
-  check(true, "the host's menu offers the seat to the spectator by name");
+  await host.click('#menuScreen [data-tab="players"]');
+  await host.waitForFunction(() => /Cy/.test($("gameSpecs").textContent), null, { timeout: 15000 });
+  check(true, "the host's menu shows the spectator by name");
+  // Click and click works too (no mouse dragging): pick Cy up, then the seat.
+  await host.click("#gameSpecs .chip.movable");
+  check(await host.evaluate(s => $("gameSeatList").children[s - 1].classList.contains("drop-ok") && !$("gameSeatList").children[0].classList.contains("drop-ok"), aiSlot), "picked up, the computer's seat shows it can take them (not the host's)");
+  await host.click(`#gameSeatList li:nth-child(${aiSlot})`);
   await host.evaluate(() => { $("menuScreen").hidden = true; });
-  await give(host, aiSlot);
   await spec.waitForFunction(s => mp && ME === s && !watcher, aiSlot, { timeout: 20000 });
   check(true, "the spectator plays the computer's seat now");
   check(await friend.evaluate(s => W.is_ai(s) === 0, aiSlot), "the friend's game has it as a person's too");

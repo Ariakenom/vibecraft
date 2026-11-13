@@ -382,7 +382,7 @@ static DESTROYER: Stats = unit(800.0, 30.0, 9.0, 1.4, 3.6, 11.0, &[(Steel, 2), (
 // a player can found more, as many as they like; those hold their cost like
 // any building, the first one holds nothing. A player is out only when the
 // last one falls.
-static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 2), (Stone, 1), (Grain, 1), (Fruit, 1)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 3) };
+static CAPITOL: Stats = Stats { attack: 5.0, range: 6.0, cooldown: 2.0, produces: &[(Wood, 2), (Stone, 1), (Grain, 1), (Fruit, 1)], builders: 4, ..building(1600.0, 16.0, &[(Wood, 8), (Stone, 8), (Brick, 6)], 120.0, 1) };
 // Houses: beds depend on how many different goods they get. A hut that's
 // full and has all the goods it can use becomes a cottage by itself, if the
 // cottage's extra wood and stone are free (`Game::upgrade_houses`).
@@ -560,6 +560,9 @@ pub const SPLASH_SHARE: f32 = 0.5;
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
 pub const UNSUPPLIED_DAMAGE: f32 = 0.01;
+/// More people than beds: one person at a time starves, dying over this
+/// many seconds (then the next). Beds back in time, and they live.
+pub const STARVE_SECS: f32 = 5.0;
 
 /// Seconds between newcomers arriving at a player's campfire, while there's
 /// a free bed. A bigger town grows faster: 6.7 s with 8 beds, 2.9 s with
@@ -869,8 +872,11 @@ impl Kind {
     }
 
     /// Does this building block movement? Farms can be walked on.
+    /// Does it block movement on its tiles? Not fields, and not a Capitol:
+    /// its statue stands in the town square, and people walk all over the
+    /// square, the middle too.
     pub fn blocks(self) -> bool {
-        self != Kind::Farm
+        !matches!(self, Kind::Farm | Kind::Capitol)
     }
 
     pub fn radius(self) -> f32 {

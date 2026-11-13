@@ -11,7 +11,7 @@ pub fn town(seed: u32, difficulty: u32, players: u8) -> Game {
     let mut g = Game::new(seed, difficulty, players);
     for p in 1..=g.n_players {
         let c = g.find_first(p, Kind::Capitol).unwrap();
-        let (bx, by) = (g.ents[c].tx + 1, g.ents[c].ty + 1);
+        let (bx, by) = (g.ents[c].tx, g.ents[c].ty);
         for (hx, hy) in [(bx - 4, by + 1), (bx + 2, by - 4)] {
             g.spawn_building(Kind::Hut, p, hx, hy, 1.0);
         }
@@ -173,7 +173,7 @@ fn extractors_need_their_deposit() {
     let mut g = town(5, 1, 2);
     // A quarry right beside the Capitol is nowhere near stone.
     let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
-    let (x, y) = (cap.tx - 3, cap.ty - 3);
+    let (x, y) = (cap.tx - 5, cap.ty - 5);
     assert!(!g.near_deposit(Kind::Quarry, x, y));
     let r = g.apply(1, Command::Place { ids: vec![], kind: Kind::Quarry, tx: x, ty: y });
     assert_eq!(r.err(), Some(CmdError::NoDeposit(Dep::Stone)));
@@ -286,8 +286,19 @@ fn losing_a_farm_empties_the_furthest_houses_first() {
 fn a_free_worker_walks_over_and_becomes_the_soldier() {
     let mut g = town(5, 1, 2);
     build(&mut g, Kind::LumberCamp);
-    let barracks = build(&mut g, Kind::Barracks);
+    // A walk away from the square, so they're seen on the way.
+    let cap = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+    let (x, y) = spot_near(&g, Kind::Barracks, cap.tx + 6, cap.ty);
+    let barracks = g.spawn_building(Kind::Barracks, 1, x, y, 1.0);
+    g.resolve();
     g.tick();
+    // (The town starts one over its beds: let that settle first.)
+    for _ in 0..2000 {
+        if g.players[1].people <= g.players[1].beds {
+            break;
+        }
+        g.tick();
+    }
     let (people, free_before) = (g.players[1].people, g.players[1].free);
     g.apply(1, Command::Train { ids: vec![barracks], kind: Kind::Spearman }).unwrap();
     g.tick();
@@ -409,21 +420,56 @@ fn newcomers_fill_free_beds_faster_in_a_bigger_town() {
 }
 
 #[test]
-fn when_beds_run_short_free_workers_leave_first() {
+fn when_beds_run_short_one_person_at_a_time_starves() {
     let mut g = town(5, 1, 2);
     let lodge = build(&mut g, Kind::HuntingLodge); // 12 beds
     let camp = build(&mut g, Kind::LumberCamp);
     run(&mut g, 20.0);
     let soldiers: Vec<u32> = (0..3).map(|k| g.spawn_unit(Kind::Spearman, 1, 28.0 + k as f32, 28.0)).collect();
     g.tick();
-    // The lodge burns: back to 8 beds for 15 people. The free go first.
+    let before = g.players[1].people;
+    let workers = |g: &Game| g.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker).count();
+    let had = workers(&g);
+    // The lodge burns: back to 8 beds for 15 people. Nobody goes at once.
     g.ents[lodge as usize].hp = 0.0;
     g.tick();
     g.tick();
-    let p = g.players[1];
-    assert!(p.people <= p.beds, "{} people, {} beds", p.people, p.beds);
+    assert!(g.players[1].people > g.players[1].beds, "over the beds");
+    assert_eq!(workers(&g), had, "nobody leaves at once");
+    let hurt: Vec<&Entity> = g.ents.iter().filter(|e| e.alive && e.owner == 1 && e.kind == Kind::Worker && e.hp < e.kind.stats().hp).collect();
+    assert_eq!(hurt.len(), 1, "one starves at a time");
+    let first = hurt[0].id;
+    assert!(g.is_free_worker(hurt[0]), "a free worker first");
+    // About five seconds later they're dead, and only they are.
+    run(&mut g, STARVE_SECS + 0.2);
+    assert!(!g.alive(first), "dead within {STARVE_SECS} s");
+    assert_eq!(workers(&g), had - 1, "just one in that time");
     assert!(soldiers.iter().all(|&s| g.alive(s)), "soldiers keep their beds");
+    // In the end the town fits its beds again, the crew still at work.
+    run(&mut g, STARVE_SECS * 8.0);
+    let p = g.players[1];
+    assert!(p.people <= p.beds && p.people < before, "{} people, {} beds", p.people, p.beds);
     assert!(g.ents[camp as usize].crewed, "workers at work stay while the free ones can go");
+}
+
+#[test]
+fn starving_stops_when_beds_come_back() {
+    let mut g = town(5, 1, 2);
+    let lodge = build(&mut g, Kind::HuntingLodge);
+    build(&mut g, Kind::LumberCamp);
+    run(&mut g, 20.0);
+    let had = g.players[1].people;
+    // Take the lodge's crew away (it pauses, its meat is gone, beds drop)...
+    let crew: Vec<u32> = g.ents.iter().filter(|e| e.alive && e.order == Order::Work(lodge)).map(|e| e.id).collect();
+    let (x, y) = (g.ents[lodge as usize].x + 4.0, g.ents[lodge as usize].y);
+    g.apply(1, Command::Smart { ids: crew.clone(), x, y }).unwrap();
+    run(&mut g, 2.0);
+    assert!(g.players[1].people > g.players[1].beds, "too few beds without the lodge");
+    // ...and send them back (Hire turns it on again) before anyone dies.
+    g.apply(1, Command::Hire { ids: vec![lodge], on: true }).unwrap();
+    run(&mut g, 20.0);
+    let p = g.players[1];
+    assert_eq!(p.people, had, "nobody starved: the beds came back in time");
 }
 
 #[test]
@@ -1217,6 +1263,31 @@ fn beds_grow_faster_with_more_goods() {
     assert_eq!(beds_for(3), 6);
     assert_eq!(beds_for(5), 12);
     assert_eq!(beds_for(13), 36);
+}
+
+#[test]
+fn the_computer_aims_its_nuke_past_an_air_defense_it_has_seen() {
+    let mut g = town(5, 1, 2);
+    let cap = g.find_first(2, Kind::Capitol).unwrap();
+    let (cx, cy, tx, ty) = (g.ents[cap].x, g.ents[cap].y, g.ents[cap].tx, g.ents[cap].ty);
+    // Nothing in the way: at the Capitol.
+    let (x, y) = g.nuke_target(1).unwrap();
+    assert!((x - cx).hypot(y - cy) < 3.0, "aimed at ({x}, {y}), the Capitol is at ({cx}, {cy})");
+    // An air defense by it that player 1 hasn't seen changes nothing; once
+    // seen (here: it shot a nuke down), the next one falls outside its
+    // cover, and still close enough to hurt the Capitol.
+    let (ax, ay) = (3..9).flat_map(|r| (ty - r..=ty + r).flat_map(move |y| (tx - r..=tx + r).map(move |x| (x, y)))).find(|&(x, y)| g.can_place(Kind::AirDefense, x, y, 2, 0)).unwrap();
+    let def = g.spawn_building(Kind::AirDefense, 2, ax, ay, 1.0) as usize;
+    assert!(!g.explored_by(1, ax, ay), "the test wants the battery unseen at first");
+    assert_eq!(g.nuke_target(1), Some((x, y)));
+    let silo = g.spawn_building(Kind::MissileSilo, 1, 2, 2, 1.0);
+    g.ents[silo as usize].nuke = 2;
+    g.apply(1, Command::Launch { id: silo, x, y }).unwrap();
+    run(&mut g, NUKE_FLIGHT + 1.0);
+    assert!(g.ents[cap].hp == g.ents[cap].kind.stats().hp, "the first one was shot down");
+    let (x, y) = g.nuke_target(1).expect("a spot past the cover");
+    assert!(g.ents[def].edge_dist(x, y) > AIR_DEFENSE_COVER, "({x}, {y}) is inside the cover");
+    assert!(g.ents[cap].edge_dist(x, y) < NUKE_RADIUS, "({x}, {y}) is too far to hurt the Capitol");
 }
 
 #[test]
@@ -2186,4 +2257,17 @@ fn no_worker_is_sent_across_the_sea() {
     g.map.relabel_land();
     run(&mut g, 2.0);
     assert!(g.ents.iter().any(|e| e.alive && e.order == Order::Build(b)), "on the same land, builders come");
+}
+
+/// Playtest (Nov 2026): the whole town square is walkable, the statue's tile too.
+#[test]
+fn the_whole_town_square_is_walkable() {
+    let g = Game::new(9, 1, 2);
+    let c = &g.ents[g.find_first(1, Kind::Capitol).unwrap()];
+    let half = crate::people::SQUARE_HALF as i32;
+    for y in c.ty - half..=c.ty + half {
+        for x in c.tx - half..=c.tx + half {
+            assert!(g.map.passable(x, y), "({x}, {y}) on the square is blocked");
+        }
+    }
 }

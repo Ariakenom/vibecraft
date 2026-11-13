@@ -1,8 +1,8 @@
 //! People: beds, workers, builders and recruits.
 //!
 //! Everyone is a unit you can see. Workers with nothing to do stand around
-//! the **campfire** (the town square) in front of a Capitol: they are the
-//! free people. Every finished Capitol has one. Newcomers turn up at the
+//! the **campfire**: the town square that a Capitol is, a square of paving
+//! with a statue in the middle. They are the free people. Newcomers turn up at the
 //! Capitol nearest the house with the free bed, workers go home to the
 //! square nearest them, and a job takes the nearest free worker.
 //! - A producer needs workers standing at it (`Stats::workers`); without its
@@ -24,15 +24,20 @@
 use crate::defs::*;
 use crate::game::*;
 
-/// How far around the campfire an idle worker counts as free (tiles).
+/// Half the side of the town square round a Capitol's statue (tiles): it
+/// covers the 5x5 tiles centred on the Capitol, and nothing else may be
+/// built on them.
+pub const SQUARE_HALF: f32 = 2.5;
+/// How far from the statue (along x or y, so a square) an idle worker
+/// counts as free: the square, and a little round it for the jostling.
 pub const CAMPFIRE_AREA: f32 = 3.0;
-/// Nothing may be built this close to a campfire.
-pub const CAMPFIRE_CLEAR: f32 = 2.4;
 /// A worker this close to a building's edge is at work there.
 pub const AT_WORK: f32 = 1.0;
-/// The campfire burns this far in front of the Capitol's centre (+y, the
-/// side with the door).
-pub const CAMPFIRE_AHEAD: f32 = 3.2;
+
+/// Is (x, y) within `r` of (cx, cy) along both x and y?
+pub fn within_square(x: f32, y: f32, cx: f32, cy: f32, r: f32) -> bool {
+    (x - cx).abs() <= r && (y - cy).abs() <= r
+}
 
 /// Who's waiting for people at a building, worked out for `recruit`.
 #[derive(Clone, Copy, Default)]
@@ -45,16 +50,17 @@ impl Game {
     // -----------------------------------------------------------------------
     // Where people are
 
-    /// Where `owner`'s home campfire burns, if they still have a Capitol:
-    /// in front of their oldest one. (Every finished Capitol has one: see
+    /// Where `owner`'s home town square is, if they still have a Capitol:
+    /// their oldest one. (Every finished Capitol has one: see
     /// `campfires`.)
     pub fn campfire(&self, owner: u8) -> Option<(f32, f32)> {
         self.home_capitol(owner).map(|c| self.campfire_of(c))
     }
 
-    /// The campfire in front of Capitol `c` (an index into `ents`).
+    /// The middle of Capitol `c`'s town square (an index into `ents`): the
+    /// Capitol itself, its statue.
     pub fn campfire_of(&self, c: usize) -> (f32, f32) {
-        (self.ents[c].x, self.ents[c].y + CAMPFIRE_AHEAD)
+        (self.ents[c].x, self.ents[c].y)
     }
 
     /// `owner`'s finished Capitols, oldest first.
@@ -87,17 +93,10 @@ impl Game {
         let (cx, cy) = self.campfire_of(c);
         // The golden angle spreads people evenly, whatever their ids.
         let a = id as f32 * 2.399_963;
+        // Round the statue (half a tile each way, so not too close: playtest,
+        // workers stood in the Capitol, unable to walk out) and on the square.
         let r = 1.2 + (id % 3) as f32 * 0.5;
-        // The Capitol's front wall is `CAMPFIRE_AHEAD - half its size` behind
-        // the square's middle: a spot past it would be inside the building
-        // (playtest: workers stood in the Capitol, unable to walk out). Fold
-        // those spots to the front of the square, out of the wall's way.
-        let wall = CAMPFIRE_AHEAD - 1.5 - 0.35;
-        let (dx, mut dy) = (a.cos() * r, a.sin() * r);
-        if dy < -wall {
-            dy = -dy;
-        }
-        (cx + dx, cy + dy)
+        (cx + a.cos() * r, cy + a.sin() * r)
     }
 
     /// Is this a free worker: idle, at one of its owner's campfires?
@@ -107,7 +106,7 @@ impl Game {
         }
         self.capitols(e.owner).any(|c| {
             let (cx, cy) = self.campfire_of(c);
-            (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA
+            within_square(e.x, e.y, cx, cy, CAMPFIRE_AREA)
         })
     }
 
@@ -124,7 +123,7 @@ impl Game {
 
     /// `is_free_worker`, given `campfires_by_owner`.
     pub(crate) fn is_free_at(e: &Entity, fires: &[Vec<(f32, f32)>]) -> bool {
-        e.alive && e.kind == Kind::Worker && e.order == Order::Idle && e.aboard == 0 && fires.get(e.owner as usize).is_some_and(|f| f.iter().any(|&(cx, cy)| (e.x - cx).powi(2) + (e.y - cy).powi(2) <= CAMPFIRE_AREA * CAMPFIRE_AREA))
+        e.alive && e.kind == Kind::Worker && e.order == Order::Idle && e.aboard == 0 && fires.get(e.owner as usize).is_some_and(|f| f.iter().any(|&(cx, cy)| within_square(e.x, e.y, cx, cy, CAMPFIRE_AREA)))
     }
 
     /// Send a worker back to stand at the campfire nearest them, one they
@@ -599,41 +598,52 @@ impl Game {
         }
     }
 
-    /// Step 7: more people than beds. Free workers leave first (newest
-    /// first), then workers at producers that don't make house goods, then
-    /// any worker. Soldiers stay: they hold their beds while they live.
+    /// Step 7: more people than beds. One person at a time starves: they
+    /// lose health over `STARVE_SECS` until they die, then the next. Free
+    /// workers go first (newest first), then workers at producers that
+    /// don't make house goods, then any worker; whoever is weakest (already
+    /// starving) goes before the rest, so it's the same one until they die.
+    /// Soldiers stay: they hold their beds while they live. With beds back,
+    /// the starving stop losing health. Nothing is stored for this: the
+    /// choice comes from health and order alone, so every copy of the game
+    /// (and every save) agrees.
     fn leave(&mut self, owner: u8) {
         let p = self.players[owner as usize];
-        let mut over = p.people.saturating_sub(p.beds);
-        if over == 0 {
+        let over = p.people > p.beds;
+        let was = self.players[owner as usize].starving;
+        self.players[owner as usize].starving = over;
+        if !over {
             return;
         }
         let makes_goods = |g: &Game, e: &Entity| match e.order {
             Order::Work(b) => g.ents.get(b as usize).is_some_and(|t| t.kind.stats().produces.iter().any(|&(r, _)| r.is_house_good())),
             _ => false,
         };
-        for pass in 0..3 {
-            for i in (0..self.ents.len()).rev() {
-                if over == 0 {
-                    break;
-                }
-                let e = &self.ents[i];
-                if !e.alive || e.owner != owner || e.kind != Kind::Worker {
-                    continue;
-                }
-                let go = match pass {
-                    0 => self.is_free_worker(e),
-                    1 => !makes_goods(self, e),
-                    _ => true,
-                };
-                if go {
-                    self.vanish(i);
-                    over -= 1;
-                    let p = &mut self.players[owner as usize];
-                    p.people -= 1;
-                    p.free = p.free.saturating_sub(pass.eq(&0) as u32);
-                }
+        // (pass, health fraction) of the best so far: lower is sooner.
+        let mut pick: Option<(usize, u8, f32)> = None;
+        for i in (0..self.ents.len()).rev() {
+            let e = &self.ents[i];
+            if !e.alive || e.owner != owner || e.kind != Kind::Worker || e.aboard != 0 {
+                continue;
             }
+            let pass = if self.is_free_worker(e) { 0 } else if !makes_goods(self, e) { 1 } else { 2 };
+            let frac = e.hp / e.kind.stats().hp;
+            let better = match pick {
+                None => true,
+                // A starving one (hurt) first, then by pass, then newest.
+                Some((_, bp, bf)) => frac < bf - 1e-6 || ((frac - bf).abs() <= 1e-6 && pass < bp),
+            };
+            if better {
+                pick = Some((i, pass, frac));
+            }
+        }
+        let Some((i, _, _)) = pick else { return };
+        let (x, y) = (self.ents[i].x, self.ents[i].y);
+        let e = &mut self.ents[i];
+        e.hp -= e.kind.stats().hp * DT / STARVE_SECS;
+        e.unsupplied = true; // (drawn as suffering)
+        if !was && owner == self.local {
+            self.push_event(Ev::Starving, x, y, 0.0);
         }
     }
 

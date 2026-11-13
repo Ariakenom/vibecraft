@@ -50,6 +50,7 @@ const WATCH = {
   MAX: 6,             // watchers one game serves
   RATE: 12,           // messages a second, for all watchers together
   REFRESH: 200,       // ticks before a new snapshot is worth making (10 s)
+  QUIET_MS: 3000,     // a watcher not heard from for this long is no longer watching (for seats)
 };
 
 // ---- bytes <-> text ----
@@ -449,15 +450,22 @@ const Watchers = {
 
   attach(r) {
     this.list.clear(); this.snap = null;
-    r.on("watch", d => this.hear(d));
+    r.on("watch", (d, from) => this.hear(d, from));
   },
-  hear(d) {
+  hear(d, peer) {
     if (!d || d.v !== NET.PROTOCOL || !okToken(d.token) || d.token === myToken) return;
     let e = this.list.get(d.token);
     if (!e) {
       if (this.list.size >= WATCH.MAX) return;
-      e = { have: -1, game: null, parts: new Set(), snap: null, heard: 0, sent: 0, n: ++this.count, name: "" };
+      e = { have: -1, game: null, parts: new Set(), snap: null, heard: 0, sent: 0, n: ++this.count, name: "", peer };
       this.list.set(d.token, e);
+    }
+    if (e.peer !== peer) {
+      // Someone else using this spectator's token, or the same person back on
+      // a new connection (a player the host moved to the spectators): only
+      // once the old one has gone quiet.
+      if (performance.now() - e.heard < WATCH.QUIET_MS) return;
+      Object.assign(e, { peer, have: -1, game: null, parts: new Set(), snap: null, sent: 0 });
     }
     e.heard = performance.now();
     e.name = cleanName(d.name);
@@ -467,9 +475,12 @@ const Watchers = {
     e.parts = new Set(Array.isArray(d.parts) ? d.parts.filter(Number.isInteger) : []);
   },
   // Spectators who have the game running, who could take a seat: [[token, n]].
-  ready() { return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0).map(([t, e]) => [t, e.n, e.name]); },
+  // (Only those still asking: one who became a player stops.)
+  ready() { const now = performance.now(); return [...this.list].filter(([, e]) => e.game === Rec.id && e.have >= 0 && now - e.heard < WATCH.QUIET_MS).map(([t, e]) => [t, e.n, e.name]); },
   number(token) { const e = this.list.get(token); return e ? e.n : 0; },
   nameOf(token) { const e = this.list.get(token); return e ? e.name : ""; },
+  // The room's id for a spectator's connection (a seat handed to them is theirs alone).
+  peerOf(token) { const e = this.list.get(token); return e ? e.peer : null; },
   // How fast the game runs here (0: paused), so spectators play it back at that pace.
   rate() { return Rec.done ? 1 : mp ? mp.pace() : paused ? 0 : speed; },
   // Is there a game here to watch?
@@ -556,12 +567,13 @@ class Watcher {
     this.game = null; this.snapId = null; this.parts = []; this.loading = false;
     this.loaded = false; this.k = 0; this.avail = 0; this.cmds = new Map();
     this.host = null; this.hostSeen = performance.now(); this.lastHeard = performance.now();
+    this.hostPeer = null; // the host's connection: feeds and seats from anyone else are ignored
     this.ended = null;
     this.n = 0;          // which spectator I am, as the host counts us
     this.seat = null;    // { slot, T, seq0, gameId, host }: the host is handing me a seat
     this.rate = 1;       // how fast the host's game runs (0: paused), from the feed
-    r.on("feed", d => this.receive(d));
-    r.on("seat", d => this.offered(d));
+    r.on("feed", (d, from) => this.receive(d, from));
+    r.on("seat", (d, from) => this.offered(d, from));
     r.onPeers(p => this.peers(p));
     r.presence({ role: "watcher", v: NET.PROTOCOL, token: myToken, name: myName });
     this.timer = setInterval(() => this.ask(), WATCH.ASK_MS);
@@ -576,9 +588,23 @@ class Watcher {
   peers(peers) {
     if (!this.room) return; // not watching any more (maybe playing now)
     Chat.setOthers(peers.length);
-    const host = peers.map(p => p.presence || {}).find(pr => pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token));
+    const hp = hostAmong(peers, this.hostPeer), host = hp && hp.presence;
+    if (hp) this.hostPeer = hp.id;
     if (host) { this.host = host; this.hostSeen = performance.now(); if (this.loaded && host.names && typeof host.names === "object") setNames(host.names); }
     else this.host = null;
+    // The host gave me a seat in their lobby: join it as a guest.
+    if (host && !this.loaded && !host.playing && Array.isArray(host.seats) && host.seats.includes("f:" + myToken)) {
+      const code = this.code;
+      setTimeout(() => {
+        if (watcher !== this) return;
+        try { history.replaceState(null, "", location.href.split("#")[0] + "#" + code); } catch { /* not allowed here */ }
+        $("watchWait").hidden = true;
+        $("startScreen").hidden = false;
+        joinLobby(code);
+        toast("The host gave you a seat.", "good");
+      });
+      return;
+    }
     this.status();
   }
   // What the waiting card says, and giving up on a host that's gone.
@@ -596,8 +622,8 @@ class Watcher {
       : this.game === null && this.host && !this.host.playing ? "The host isn't in a game right now. You'll see the next one."
       : "Joining as a spectator…";
   }
-  receive(d) {
-    if (!this.room || !d || d.v !== NET.PROTOCOL || d.to !== myToken) return;
+  receive(d, peer) {
+    if (!this.room || !d || d.v !== NET.PROTOCOL || d.to !== myToken || peer !== this.hostPeer) return;
     this.lastHeard = performance.now();
     if (typeof d.rate === "number" && d.rate >= 0 && d.rate <= 16 && d.rate !== this.rate) {
       this.rate = d.rate;
@@ -629,14 +655,14 @@ class Watcher {
     const h = $("netWait");
     const lost = performance.now() - this.lastHeard > 4000, pausedHere = this.rate === 0 && this.k >= this.avail;
     h.hidden = !observe || observe.over || !(lost || pausedHere);
-    if (!h.hidden) h.textContent = lost ? "Waiting for the game…" : `Paused by ${pnames[1] || "the host"}.`;
+    if (!h.hidden) h.textContent = lost ? "Waiting for the game…" : `Paused by ${pnames[hostSlot] || "the host"}.`;
   }
   // The host is handing me a seat: run my copy up to the tick it changes
   // hands on, then play from there (takeSeat, in main.js).
-  offered(d) {
-    if (!this.room || !this.loaded || this.seat || !d || d.v !== NET.PROTOCOL || d.game !== this.game || !Array.isArray(d.offers)) return;
+  offered(d, peer) {
+    if (!this.room || !this.loaded || this.seat || peer !== this.hostPeer || !d || d.v !== NET.PROTOCOL || d.game !== this.game || !Array.isArray(d.offers)) return;
     const o = d.offers.find(o => o && o.to === myToken);
-    if (!o || !Number.isInteger(o.slot) || o.slot < 2 || o.slot > W.n_players() || !Number.isInteger(o.T) || !Number.isInteger(o.seq0) || typeof d.gameId !== "string" || !okToken(d.host)) return;
+    if (!o || !Number.isInteger(o.slot) || o.slot < 1 || o.slot > W.n_players() || !Number.isInteger(o.T) || !Number.isInteger(o.seq0) || typeof d.gameId !== "string" || !okToken(d.host)) return;
     if (this.k > o.T + 1) return; // too late: we're past it (the host gives it back to the computer)
     this.seat = { slot: o.slot, T: o.T, seq0: o.seq0, gameId: d.gameId, host: d.host };
     toast(`The host is giving you ${PNAME[o.slot]}. Get ready…`, "good");
@@ -697,6 +723,8 @@ class Watcher {
       if (!Array.isArray(e) || typeof e[0] !== "number") continue;
       const c = cleanCmd(e.slice(2));
       if (c) { applyCmd(e[0] >>> 0, c); Rec.add(k, e); }
+      // A seat changed hands (the host's 7 and 13): the recording says who plays it now.
+      if (c && e[0] === 0 && (c[0] === 7 || c[0] === 13) && Rec.meta && Rec.meta.who) Rec.meta.who[c[1]] = c[0] === 7 ? "computer" : "human";
     }
     this.cmds.delete(k);
     W.tick();

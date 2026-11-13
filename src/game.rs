@@ -73,7 +73,7 @@ pub enum Ev {
     Melee = 6,    // a melee blow landed (data = attacker kind)
     Shoot = 7,    // an arrow was loosed (data = shooter kind)
     Hammer = 9,   // a construction stroke
-    ArrowHit = 11, // an arrow struck (data = 1 if it hit a building)
+    ArrowHit = 11, // a shot struck (data = 1 if it hit a building, + 2 x the shooter's kind)
     Short = 12,   // the player holds more than they make, and units suffer (data = resource)
     // 13 was WonderBegun (the Wonder is gone).
     Eliminated = 14, // a player lost their Capitol and is out (data = player)
@@ -89,6 +89,7 @@ pub enum Ev {
     NukeArming = 24, // someone started arming a nuke (data = owner); everyone hears
     Cheats = 25,     // the host turned cheat mode on or off (data = 1 on); everyone hears
     SpotTaken = 26,  // the player's planned building was dropped: its spot was taken (data = kind)
+    Starving = 27,   // the player has more people than beds: one starts starving at (x, y)
 }
 
 /// Why a command was refused. `code()` is the number JavaScript receives.
@@ -377,6 +378,9 @@ pub struct Player {
     /// Some of this player's units were unsupplied last tick. Only used to
     /// tell the player once when it starts.
     pub short: bool,
+    /// More people than beds (someone is starving). Only used to tell the
+    /// player once when it starts.
+    pub starving: bool,
     pub trained: u32,
     pub lost: u32,
     /// Buildings finished, for the end-of-game numbers.
@@ -400,6 +404,7 @@ impl Player {
             defeated: false,
             cheat: false,
             short: false,
+            starving: false,
             trained: 0,
             lost: 0,
             built: 0,
@@ -559,8 +564,9 @@ impl Game {
         let mut g = Game::from_parts(seed, map, deps, Vec::new(), players, n_players, Vec::new(), vec![0; n], ais, PLAYER);
         for (i, &(bx, by)) in bases.iter().enumerate() {
             let owner = i as u8 + 1;
-            let cap = g.spawn_building(Kind::Capitol, owner, bx - 1, by - 1, 1.0);
+            let cap = g.spawn_building(Kind::Capitol, owner, bx, by, 1.0);
             g.ents[cap as usize].starting = true;
+            #[allow(clippy::reversed_empty_ranges)] // START_WORKERS is a tuning knob, 0 for now
             for _ in 0..START_WORKERS {
                 g.spawn_worker(owner, None);
             }
@@ -911,6 +917,20 @@ impl Game {
         }
     }
 
+    /// A computer's skill changed mid-game (a seat given to the computer
+    /// from the host's menu): its supply and difficulty, keeping its plans
+    /// and the time of its next attack.
+    pub fn set_skill(&mut self, player: u8, difficulty: u32) {
+        let d = difficulty.min(2);
+        if player < 1 || player as usize >= self.players.len() {
+            return;
+        }
+        if let Some(ai) = self.ais.get_mut(player as usize) {
+            ai.difficulty = d;
+        }
+        self.players[player as usize].supply_pct = handicap(d);
+    }
+
     /// How well one computer player plays (0 Easy, 1 Normal, 2 Hard): each
     /// seat in the lobby picks its own. Its next attack, wave size and
     /// supply come from it; at the start of a game, before the recording.
@@ -1192,9 +1212,11 @@ impl Game {
     }
 
     fn check_victory(&mut self) {
+        let mut fell = Vec::new();
         for p in self.seat_ids() {
             if !self.players[p as usize].defeated && self.home_capitol(p).is_none() {
                 self.players[p as usize].defeated = true;
+                fell.push(p);
                 for e in self.ents.iter_mut().filter(|e| e.alive && e.owner == p) {
                     e.hp = 0.0;
                 }
@@ -1204,7 +1226,10 @@ impl Game {
         let standing: Vec<u8> = self.seat_ids().filter(|&p| !self.players[p as usize].defeated).collect();
         let w = match standing.as_slice() {
             [only] => *only,
-            [] => self.local, // everyone fell at once: call it a draw, kindly
+            // The last ones fell on the same tick: the first of them (by
+            // number) has it. Never `local`: every computer must name the
+            // same winner (rule 5).
+            [] => fell.first().copied().unwrap_or(PLAYER),
             _ => 0,
         };
         if w != 0 {
@@ -1377,24 +1402,26 @@ impl Game {
     /// `spot_free`, as if building `except` (an index into `ents`) were gone.
     pub(crate) fn spot_free_but(&self, kind: Kind, tx: i32, ty: i32, owner: u8, margin: i32, except: i32) -> bool {
         let s = kind.stats().size;
-        for y in ty - margin..ty + s + margin {
-            for x in tx - margin..tx + s + margin {
+        // A Capitol needs its whole town square: dry, clear and free.
+        let sq = if kind == Kind::Capitol { SQUARE_HALF as i32 } else { 0 };
+        for y in ty - margin - sq..ty + s + margin + sq {
+            for x in tx - margin - sq..tx + s + margin + sq {
                 if !self.map.inside(x, y) {
                     return false;
                 }
                 let i = self.map.idx(x, y);
-                let inner = x >= tx && y >= ty && x < tx + s && y < ty + s;
+                let inner = x >= tx - sq && y >= ty - sq && x < tx + s + sq && y < ty + s + sq;
                 if (self.map.bld_at[i] >= 0 && self.map.bld_at[i] != except) || (inner && (self.map.wet(x, y) || self.map.dep_at[i] >= 0)) {
                     return false;
                 }
             }
         }
-        // Keep every campfire clear: the free workers stand there.
+        // Keep every town square clear: the free workers stand there.
         let (x0, y0, x1, y1) = (tx as f32, ty as f32, (tx + s) as f32, (ty + s) as f32);
-        // (Everyone's. A campfire is just in front of its Capitol, so only
-        // Capitols standing on the tiles round the footprint can matter:
-        // looking there, not at every entity, keeps the AI's searches cheap.)
-        let pad = (CAMPFIRE_CLEAR + CAMPFIRE_AHEAD).ceil() as i32 + Kind::Capitol.stats().size;
+        // (Everyone's, foundations too. Only Capitols standing on the tiles
+        // round the footprint can matter: looking there, not at every
+        // entity, keeps the AI's searches cheap.)
+        let pad = SQUARE_HALF.ceil() as i32 + Kind::Capitol.stats().size;
         for y in (ty - pad).max(0)..(ty + s + pad).min(self.map.h) {
             for x in (tx - pad).max(0)..(tx + s + pad).min(self.map.w) {
                 let b = self.map.bld_at[self.map.idx(x, y)];
@@ -1402,12 +1429,12 @@ impl Game {
                     continue;
                 }
                 let c = &self.ents[b as usize];
-                if !(c.alive && c.owner != GAIA && c.kind == Kind::Capitol && c.built >= 1.0) {
+                if !(c.alive && c.owner != GAIA && c.kind == Kind::Capitol) {
                     continue;
                 }
                 let (cx, cy) = self.campfire_of(b as usize);
                 let (nx, ny) = (cx.clamp(x0, x1), cy.clamp(y0, y1));
-                if (nx - cx).powi(2) + (ny - cy).powi(2) < CAMPFIRE_CLEAR * CAMPFIRE_CLEAR {
+                if (nx - cx).abs() < SQUARE_HALF && (ny - cy).abs() < SQUARE_HALF {
                     return false;
                 }
             }
@@ -2338,7 +2365,7 @@ impl Game {
                 let owner = self.ents[at as usize].owner;
                 self.damage(tg, dm, at);
                 self.splash(shooter, owner, at, tg, tx, ty);
-                self.push_event(Ev::ArrowHit, tx, ty, bld as u32 as f32);
+                self.push_event(Ev::ArrowHit, tx, ty, (bld as u32 + 2 * shooter as u32) as f32);
             } else {
                 p.x += dx / d * step;
                 p.y += dy / d * step;
@@ -2785,6 +2812,18 @@ impl Game {
                     let e = &mut self.ents[d];
                     e.progress = AIR_DEFENSE_RELOAD;
                     self.nukes[k].shot = Some((e.x, e.y));
+                    // Its missile gives the battery away: the nuke's owner
+                    // has now seen where it stands (the computer aims its
+                    // next one elsewhere, `nuke_target`).
+                    let (tx, ty, s) = (e.tx, e.ty, e.kind.stats().size);
+                    if owner < 8 {
+                        for (x, y) in (ty..ty + s).flat_map(|y| (tx..tx + s).map(move |x| (x, y))) {
+                            if self.map.inside(x, y) {
+                                let i = self.map.idx(x, y);
+                                self.explored[i] |= 1 << owner;
+                            }
+                        }
+                    }
                 }
             }
             let n = &self.nukes[k];

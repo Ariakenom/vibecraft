@@ -36,12 +36,12 @@
 
 const NET = {
   TICK_MS: 50,
-  PROTOCOL: 39,   // 39: computer players wait 30 s before looking again for room they lacked; 38: workers stay on their own land; 37: no fords between Frontier continents; 36: Frontier map sizes (`mode` 1 small, 2 large); 35: the Frontier mode (barbarian owners after the seats; the start carries `mode`); 34: a foundation takes its tiles only once a builder gets there; rivers and fords, a wider sea; 33: boats, docks, harbours and a wider sea; 32: an air defense fires at a nuke before it lands; 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
+  PROTOCOL: 42,   // 42: the host can set any speed up to 10x, seats move by drag and drop, one person starves at a time, the whole town square is walkable; 41: the Capitol is a town square, one tile with 5x5 kept clear round it; 40: players who fall on the same tick: one winner for everyone; 39: computer players wait 30 s before looking again for room they lacked; 38: workers stay on their own land; 37: no fords between Frontier continents; 36: Frontier map sizes (`mode` 1 small, 2 large); 35: the Frontier mode (barbarian owners after the seats; the start carries `mode`); 34: a foundation takes its tiles only once a builder gets there; rivers and fords, a wider sea; 33: boats, docks, harbours and a wider sea; 32: an air defense fires at a nuke before it lands; 31: the computer explores, builds several things at once, keeps materials stocked; 30: each computer seat has its own skill; 29: maps vary more from seed to seed; 28: Easy computer players pace their eras, fewer soldiers; 27: computer players explore their clay, keep stone for a Sawmill; 26: workers stand outside the Capitol; 25: clusters keep their distance, first worker after 2 s; 24: cheat mode (command 15); 23: at most 7 of a kind, Capitols, air defense, splash, disband; 22: manual house upgrades, targets, crews build; 21: builders stay, bigger maps; 20: pause and speed; 19: names; 18: seats change hands mid-game; 17: the Atomic era, nukes; 16 Modern, no Wonder; 15 Industrial; 14 ponds; 13 Gunpowder; 12 Medieval; 11 people are units; 10 the Phase 3 AI
   WINDOW: 4,      // ticks the confirmed copy runs behind now, to start with (200 ms)
   MIN_WINDOW: 2,
   MAX_WINDOW: 20,
   MAX_AHEAD: 60,  // the live copy may run at most 3 s ahead of the confirmed one (ticks, at 1x)
-  SPEEDS: [1, 1.5, 2], // what the host can set
+  SPEEDS: Array.from({ length: 19 }, (_, k) => 1 + k / 2), // what the host can set: 1x to 10x, as alone
   BEHIND: 20,     // ticks a computer may lag behind the clock before it counts as not keeping up
   SUM_EVERY: 20,  // compare checksums every 20 ticks (1 s)
 };
@@ -136,6 +136,17 @@ function openSocket(url, name) {
       else if (m.topic) (handlers[m.topic] || []).forEach(f => f(m.data, m.from));
     };
   });
+}
+
+// Which of the room's connections is the host. Tokens and presence are there
+// for everyone in the room to read, so they can't prove who someone is; the
+// room's own id for a connection can (the relay and claude.ai set it, not the
+// sender). The host is the connection first seen as one (`bound`), for as
+// long as it stays: anyone else calling themselves host meanwhile is ignored.
+function hostAmong(peers, bound, ok) {
+  const is = p => { const pr = p.presence || {}; return pr.role === "host" && pr.v === NET.PROTOCOL && okToken(pr.token) && (!ok || ok(pr)); };
+  if (bound != null && peers.some(p => p.id === bound)) return peers.find(p => p.id === bound && is(p)) || null;
+  return peers.find(is) || null;
 }
 
 // Open the lobby (where hosts advertise games) and, later, a game's own room.
@@ -248,8 +259,9 @@ const Trace = {
 // players can show them right away instead of a window later. Early news is
 // only a hint; the bundles are what everyone agrees on.
 class Server {
-  // `guests`: [[slot, token], ...] for the other human players. `local`: the
-  // host's own Client, which gets every bundle directly instead of by network.
+  // `guests`: [[slot, token, peer], ...] for the other human players (`peer`:
+  // the room's id for their connection). `local`: the host's own Client,
+  // which gets every bundle directly instead of by network.
   constructor(transport, guests, local, onEnd) {
     this.t = transport;
     this.local = local;
@@ -258,13 +270,17 @@ class Server {
     // ticks per tick-length of real time (0 while paused). Set by the host.
     this.c0 = 0; this.r0 = performance.now(); this.rate = 1;
     this.lag = new Map();                 // slot -> how many ticks behind the clock they say they are
+    this.slowAt = new Map();              // slot -> when they last said they were behind (see `slow`)
     this.window = NET.WINDOW;
     this.lowSince = 0;                    // since when the window could have been smaller
     this.final = -1;                      // newest tick bundled
     this.inbox = [];                      // [stamp, player, seq, cmd] waiting for their tick
     this.fresh = false;                   // new commands to pass on as early news
     this.sent = new Map();                // tick -> bundle (only ticks with commands), until every guest has it
-    this.tokens = new Map(guests);        // slot -> token
+    this.tokens = new Map(guests.map(g => [g[0], g[1]])); // slot -> token
+    // slot -> the connection that holds the seat. Tokens are no secret
+    // (everyone in the room sees them), so this is what says who may command.
+    this.peers = new Map(guests.map(g => [g[0], g[2]]));
     this.active = new Set(this.tokens.keys());
     this.lastSeq = new Map([[local.me, 0]]);
     this.ack = new Map();                 // slot -> they hold every bundle up to this tick
@@ -278,7 +294,7 @@ class Server {
     this.joining = new Map();             // slot -> { token, T, seq0, at }: seats handed to spectators, not taken up yet
     this.late = {};                       // player -> commands that arrived after their tick was bundled
     this.lastSend = 0;
-    transport.on("cmd", d => this.receive(d));
+    transport.on("cmd", (d, from) => this.receive(d, from));
   }
   // Now, in ticks (with a fraction): the one clock everybody follows.
   now() { return this.c0 + (performance.now() - this.r0) * this.rate / NET.TICK_MS; }
@@ -337,19 +353,27 @@ class Server {
     if (w > this.window) { Trace.event("window", { from: this.window, to: w, why }); this.window = w; }
     this.lowSince = 0;
   }
+  // A computer that lags behind the clock, now or in the last 5 s. (What it
+  // reports flickers: its lag is gone for a moment each time its game jumps
+  // forward to catch up, and one such moment used to let its slow round
+  // trips stretch everyone's window to the maximum.)
+  slow(s) { return performance.now() - (this.slowAt.get(s) ?? -1e9) < 5000; }
   // Long enough for a command to reach us from the slowest guest, with room
   // for wobble. It grows at once but shrinks only after five calm seconds,
   // one tick at a time, so a ping right on a boundary doesn't make it flap.
-  updateWindow() {
+  // (`atOnce`: a guest just turned out to be a slow computer, so what its
+  // round trips added while it was getting slow goes at once.)
+  updateWindow(atOnce) {
     let need = 0;
     // (Not counting a computer that lags behind the clock: its round trips
     // are slow from its own work, and it would only make everyone wait longer.)
-    for (const s of this.active) { const r = this.rtt.get(s); if (r && (this.lag.get(s) || 0) <= 3) need = Math.max(need, r.srtt / 2 + 2 * r.dev + 25); }
+    for (const s of this.active) { const r = this.rtt.get(s); if (r && !this.slow(s)) need = Math.max(need, r.srtt / 2 + 2 * r.dev + 25); }
     // In ticks, which come faster at a higher speed.
     const w = Math.max(NET.MIN_WINDOW, Math.min(NET.MAX_WINDOW, Math.ceil(need * Math.max(1, this.rate) / NET.TICK_MS)));
     const now = performance.now();
     if (w > this.window) this.grow(w, `ping needs ${Math.round(need)} ms`);
     else if (w === this.window) this.lowSince = 0;
+    else if (atOnce) { Trace.event("window", { from: this.window, to: w, why: "a slow computer doesn't count" }); this.window = w; this.lowSince = 0; }
     else if (!this.lowSince) this.lowSince = now;
     else if (now - this.lowSince > 5000) {
       Trace.event("window", { from: this.window, to: this.window - 1, why: "calm" });
@@ -367,13 +391,26 @@ class Server {
     this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, 0, 0]]);
     this.updateWindow();
   }
+  // The host's menu: the computer takes seat `slot` as `skill` (0 Easy to
+  // 2 Hard). A person playing it is dropped (they go on as a spectator); on
+  // a seat the computer already plays, only its skill changes.
+  toComputer(slot, skill) {
+    this.joining.delete(slot);
+    if (this.active.delete(slot)) {
+      Trace.event("drop", { slot, moved: true });
+      this.left.add(slot);
+      if (this.local.hooks.left) this.local.hooks.left(slot);
+    }
+    this.inbox.push([Math.ceil(this.now()), 0, 0, [7, slot, skill + 1, 0]]);
+    this.updateWindow();
+  }
   // Hand a seat the computer is playing to a spectator (`token`). On tick T
   // (a second from now) the seat goes back to a person for everyone; the
   // spectator's copy of the game, fed by the recording, stops right after
   // that tick and carries on as a player from there. Their commands
   // continue the seat's numbering (`seq0`), so nobody mistakes them for old
   // ones. Returns the offer, which the page passes on until they answer.
-  claim(slot, token) {
+  claim(slot, token, peer) {
     if (slot === this.local.me || this.active.has(slot) || this.joining.has(slot)) return null;
     for (const j of this.joining.values()) if (j.token === token) return null;
     const T = Math.ceil(this.now()) + 20;
@@ -381,12 +418,14 @@ class Server {
     this.joining.set(slot, offer);
     this.left.delete(slot);
     this.tokens.set(slot, token);
+    this.peers.set(slot, peer);
     this.active.add(slot);
     this.started.add(slot);
     this.lastSeq.set(slot, offer.seq0);
     this.ack.set(slot, T);            // keep every bundle after T until they have it
     this.heard.set(slot, performance.now());
     this.rtt.delete(slot); this.clockErr.delete(slot); this.guestClock.delete(slot);
+    this.lag.delete(slot); this.slowAt.delete(slot);
     delete this.late[slot];
     this.inbox.push([T, 0, 0, [13, slot, 0, 0]]);
     Trace.event("claim", { slot, T });
@@ -435,15 +474,28 @@ class Server {
     Trace.msgOut(this.t.emit("frame", msg));
     this.lastSend = now;
   }
-  receive(d) {
+  receive(d, peer) {
     if (!d || d.v !== NET.PROTOCOL || !this.active.has(d.from) || this.tokens.get(d.from) !== d.token) return;
+    // Only from the connection that holds the seat (the first to speak for
+    // it, if the lobby didn't say which).
+    const holder = this.peers.get(d.from);
+    if (holder == null) this.peers.set(d.from, peer); else if (holder !== peer) return;
     const s = d.from, now = performance.now();
     this.heard.set(s, now);
     if (this.joining.delete(s)) Trace.event("joined", { slot: s });
     this.started.add(s);
     Trace.msgIn(Trace.inBytes);
     if (typeof d.gt === "number") this.guestClock.set(s, [d.gt, now]);
-    if (typeof d.lag === "number") this.lag.set(s, d.lag);
+    if (typeof d.lag === "number") {
+      this.lag.set(s, d.lag);
+      if (d.lag > 3) {
+        // Behind the clock: its round trips measure its own work, not the
+        // network. Forget them (it's measured afresh once it keeps up again).
+        const was = this.slow(s);
+        this.slowAt.set(s, now);
+        if (!was) { this.rtt.delete(s); this.updateWindow(true); }
+      }
+    }
     for (const e of Array.isArray(d.cmds) ? d.cmds : []) {
       if (!Array.isArray(e) || typeof e[0] !== "number" || typeof e[1] !== "number") continue;
       const cmd = cleanCmd(e[2]);
@@ -453,7 +505,7 @@ class Server {
     // The round trip: our clock when we sent, minus how long they held it.
     if (Array.isArray(d.echo) && typeof d.echo[0] === "number" && typeof d.echo[1] === "number") {
       const sample = now - d.echo[0] - d.echo[1];
-      if (sample >= 0 && sample < 5000) {
+      if (sample >= 0 && sample < 5000 && !this.slow(s)) {
         const r = this.rtt.get(s);
         if (!r) this.rtt.set(s, { srtt: sample, dev: sample / 2 });
         else { r.dev = 0.75 * r.dev + 0.25 * Math.abs(r.srtt - sample); r.srtt = 0.875 * r.srtt + 0.125 * sample; }
@@ -513,6 +565,7 @@ class Client {
     this.ended = false;
     this.onEnd = why => { if (this.ended) return; this.ended = true; onEnd(why); };
     this.server = null;                  // set on the host
+    this.hostPeer = null;                // guests: the host's connection; frames from anyone else are ignored
     this.live = 0;                       // ticks the live copy has run
     this.final = -1;                     // newest tick the confirmed copy has run
     this.got = -1;                       // we hold every bundle up to this tick
@@ -553,7 +606,7 @@ class Client {
       desyncs: 0,
       seenLate: [],    // ticks between a friend giving a command and us seeing it (recent)
     };
-    if (transport) transport.on("frame", d => this.receive(d));
+    if (transport) transport.on("frame", (d, from) => this.receive(d, from));
   }
 
   // Where "now" is, in ticks: the host's clock (guests: as best we know it).
@@ -604,8 +657,8 @@ class Client {
   }
 
   // A guest: bundles, early news and the clock, from the host.
-  receive(d) {
-    if (this.ended || !d || d.v !== NET.PROTOCOL) return;
+  receive(d, peer) {
+    if (this.ended || !d || d.v !== NET.PROTOCOL || peer !== this.hostPeer) return;
     const now = performance.now();
     this.lastHeard = now;
     Trace.msgIn(Trace.inBytes);
@@ -626,7 +679,7 @@ class Client {
     // trust the most hopeful of the recent ones, and move there gently.
     // At another speed (or paused) the clock runs at `rate`: a new rate
     // starts the estimate afresh.
-    const rate = typeof d.rate === "number" && d.rate >= 0 && d.rate <= 4 ? d.rate : 1;
+    const rate = typeof d.rate === "number" && d.rate >= 0 && d.rate <= 10 ? d.rate : 1;
     if (rate !== this.rate) {
       this.rate = rate; this.offsets = []; this.offset = null;
       if (this.hooks.pace) this.hooks.pace(rate);
@@ -652,7 +705,7 @@ class Client {
     for (const e of Array.isArray(d.early) ? d.early : []) {
       if (Array.isArray(e) && e.length >= 7 && e.slice(0, 3).every(v => typeof v === "number")) this.early(e[0], e[1], Math.floor(e[2]), cleanCmd(e.slice(3)));
     }
-    if (Array.isArray(d.sum)) { this.hostSums.set(d.sum[0], d.sum[1]); this.checkSum(d.sum[0]); }
+    if (Array.isArray(d.sum)) { this.hostSums.set(d.sum[0], d.sum[1]); if (typeof d.sum[0] === "number") for (const t of this.hostSums.keys()) if (t < d.sum[0] - 600) this.hostSums.delete(t); this.checkSum(d.sum[0]); }
   }
 
   send() {

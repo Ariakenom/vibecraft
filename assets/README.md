@@ -22,6 +22,29 @@ The script bakes ambient occlusion with Cycles (a few seconds on a CPU),
 then packs the file: normals and colours are stored as bytes using the
 standard `KHR_mesh_quantization` extension, which roughly halves its size.
 
+## Looking at them
+
+With the page built and served as for the browser tests (`test/browser/run.sh`
+says how), two scripts draw the models with the game's own icon renderer:
+
+    cd test/browser
+    node serve.cjs ../../dist/vibecraft.html &
+    node gallery.mjs out-dir            # every model on four sheets, named
+    node closeup.mjs out.png Knight,Bakery,deer   # a few, large, from two sides
+
+Add `simple` to either for the models built in code. Boats, the Hut, the
+Orchard, the Dock and the fish have no Blender model: they are built in
+`web/render3d.js` (`boatModel`, `buildingModel`, `resourceModels`).
+
+## Telling them apart
+
+From the game's camera a model is a roof and an outline, a few dozen pixels
+across. So every model should have one big thing nobody else has (the
+bakery's loaf, the quarry's rock face, the rifleman's spiked helmet), and
+its own colour among its neighbours in the build menu. Small props at the
+door don't count: they can't be seen. The riders share one horse
+(`horse()`), which is also the wild herd's, the stable's and the pasture's.
+
 ## Editing a model by hand
 
 Import `web/models.glb` into Blender (File > Import > glTF 2.0). Keep these
@@ -39,8 +62,9 @@ conventions, which the game relies on:
   `Tenement`, `CoalMine`, `SteelMill`, `ExplosivesWorks`, `Cannery`,
   `CoalYard`, `Press`, `Factory`, `CoalSeam`, `Rifleman`, `MachineGunner`,
   `FieldGun`; and `Lumbermill` (the Sawmill), `Stoneworks`, `Kiln`,
-  `AirDefense`, which draw from their own random seed so adding them
-  doesn't change the models made after them. (The Trebuchet, the Cannon and the Field Gun have no
+  `AirDefense`; and `Pasture`, and the deposits' animals `Horse` and `Deer`.
+  Every model draws from its own random seed (from its function's name), so
+  changing one doesn't change the wobble of the others. (The Trebuchet, the Cannon and the Field Gun have no
   skeleton: no bone pivots, so the game rolls them whole and moves their
   tool, the arm or the barrel.) The object's own location doesn't matter.
 - **Units** face +X with their feet at the ground. The weapon or tool is a

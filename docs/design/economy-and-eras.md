@@ -93,7 +93,9 @@ beds; nobody sits inside them.
   more plentiful later rather than scarcer. Total beds = the sum over all
   houses. Everyone alive holds a bed: workers + soldiers ≤ beds.
 - **The campfire.** Each Capitol has a campfire in front of it with a
-  marked circle around it (radius 3) where nothing can be built. Newcomers
+  marked circle around it (radius 3) where nothing can be built. (Since
+  November 2026 the Capitol *is* the square: a statue on one tile in the
+  middle of 5x5 tiles of paving, kept clear.) Newcomers
   appear there, and workers with nothing to do go back there. **A worker
   standing idle in the circle is free**: the top bar's people chip counts
   them. So the number of free people is something you see, not a figure.
@@ -105,9 +107,13 @@ beds; nobody sits inside them.
   worker, no order. Cancelling sends the recruit back out as a worker.
 - **Death** frees the bed. Someone new has to arrive to fill it, which is
   the real cost of losses.
-- **Too few beds** (a house lost its food): free workers leave first, then
-  workers at producers of things other than house goods, then anyone.
-  Soldiers never leave.
+- **Too few beds** (a house lost its food): one person at a time starves,
+  losing health over 5 seconds (`STARVE_SECS`) until they die, then the
+  next. Free workers go first, then workers at producers of things other
+  than house goods, then anyone; soldiers never starve. Beds back in time
+  (the producers crewed again), and the starving live. (Until November
+  2026 everyone over the beds left on the same tick: one misplaced order
+  that pulled every worker off their producer emptied a whole town.)
 
 **Why growth is not instant.** The playtest asked whether visible workers
 make the slow growth unnecessary. They don't: a lost worker gives back his

@@ -85,8 +85,9 @@ await pg.keyboard.press("Shift+R");
 check(await pg.evaluate(() => buildPage) === 1, "Shift+R: the Medieval page");
 await pg.keyboard.press("Shift+E");
 check(await pg.evaluate(() => buildPage) === 0, "Shift+E: back to the Ancient page");
-const tab = await pg.$("#cmd button.page:nth-of-type(3)");
-const tb = await tab.boundingBox();
+// (Its place, read in one go: the panel is redrawn every few frames, and a
+// handle to the button would then point at one that's gone.)
+const tb = await pg.evaluate(() => { const r = document.querySelector("#cmd button.page:nth-of-type(3)").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
 await pg.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2);
 await pg.mouse.down();
 await pg.evaluate(() => { selKey = "changed"; renderSelection(false); }); // something changed meanwhile
@@ -95,7 +96,7 @@ await pg.evaluate(() => renderSelection(false));
 check(await pg.evaluate(() => buildPage) === 2, "clicking an era tab works even if the panel changed while it was held");
 // The Medieval page has the Sawmill and a second Capitol.
 const med = await pg.evaluate(() => { buildPage = 1; selKey = ""; renderSelection(true); return [...$("cmd").querySelectorAll("button")].map(b => b.getAttribute("aria-label")); });
-check(med.includes("Build Sawmill") && med.includes("Build Capitol"), `the Medieval page has a Sawmill and a Capitol (${med.filter(l => /Build/.test(l)).join(", ")})`);
+check(med.includes("Build Sawmill") && med.includes("Build Town Square"), `the Medieval page has a Sawmill and a Town Square (${med.filter(l => /Build/.test(l)).join(", ")})`);
 // Disband: select your own soldier, Shift+Q twice and it's gone.
 const sold = await pg.evaluate(() => {
   readWorld(); const c = findOwn(K.Capitol);
@@ -144,12 +145,11 @@ for (const round of [1, 2]) {
   prev = n[0];
 }
 check(pg.errors.filter(e => !/WebSocket/.test(e)).length === 0, "no page errors"); if (pg.errors.length) console.log(pg.errors);
-// The lobby: each computer seat picks its own skill, and the game gets them.
+// The lobby: each computer seat picks its own skill (dragged from the row of computers), and the game gets them.
+await pg.evaluate(() => { seats = ["host", "ai", "ai", "open"]; seatDiff = [1, 1, 1, 1]; renderLobby(); });
+await pg.dragAndDrop('#lobbyAis .chip[data-token="ai:2"]', "#seats li:nth-child(2)");
+await pg.dragAndDrop('#lobbyAis .chip[data-token="ai:0"]', "#seats li:nth-child(3)");
 const skills = await pg.evaluate(() => {
-  seats = ["host", "ai", "ai", "open"]; seatDiff = [1, 1, 1, 1]; renderLobby();
-  const sels = [...document.querySelectorAll("#seats select")];
-  sels[0].value = "ai:2"; sels[0].dispatchEvent(new Event("change"));
-  [...document.querySelectorAll("#seats select")][1].value = "ai:0"; [...document.querySelectorAll("#seats select")][1].dispatchEvent(new Event("change"));
   const shown = [...document.querySelectorAll("#seats .who")].map(e => e.textContent);
   const noGlobal = !document.getElementById("diff");
   beginGame();
