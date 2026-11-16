@@ -1746,7 +1746,7 @@ impl Game {
                     if self.ents[id as usize].is_building() {
                         continue;
                     }
-                    // Anyone who can fight, workers too.
+                    // Anyone who can fight (workers can't: they just walk).
                     if self.ents[id as usize].kind.stats().attack > 0.0 {
                         self.order_attack_move(id, x, y);
                     } else {

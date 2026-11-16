@@ -74,3 +74,13 @@ not straight away (see `CLAUDE.md`).
   not a building: the lookup for the missing building ran off the end
   (2000 + -1, read as a resource). It now says "Not until the Gunpowder
   era: it takes 10 townhouses, you have 4" (`lockedText` in main.js).
+- **Units by era, workers, guns, sight** (Nov 2026 review): workers can't
+  fight and have 25 health (was 45, and two of them matched a spearman for
+  free); each era's soldiers have about a third more health and 40% more
+  damage a second than the last in the same role (one beats its
+  forerunner, two of the old still win); cannon, field guns and rocket
+  artillery do 0.75 of their damage to units (was 0.3; bombers 0.5,
+  trebuchets still 0.3); ships see 3 to 4 tiles further, riders 2, watch
+  towers and docks more; Industrial and later producers take bigger crews.
+  `cargo test --release diag_fights -- --ignored --nocapture` prints the
+  fights on paper. Wants a playtest.
