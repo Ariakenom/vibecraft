@@ -100,14 +100,19 @@ const HOUSE_RESERVE: i32 = 4;
 /// Supply the computer keeps ahead of use in wood, stone and brick.
 const RAW_MARGIN: i32 = 6;
 /// What every project but the material producers leaves free from the
-/// Medieval era: enough for the next quarry (wood), Kiln (stone) and
-/// Stoneworks (brick).
+/// Medieval era: enough for the next quarry or Stoneworks (wood) and
+/// brickworks (stone).
 fn reserve_of(r: Res) -> i32 {
     match r {
-        Res::Wood | Res::Stone => 2,
+        Res::Wood => STONE_WOOD,
+        Res::Stone => 2,
         _ => 0,
     }
 }
+/// Wood only a stone producer may take: the price of a Stoneworks. Stone
+/// then never runs dry for good, and brick (which costs stone) neither.
+/// Sawmills and kilns once took the last of it and towns stood still.
+const STONE_WOOD: i32 = 3;
 /// How far the scout keeps from other towns' buildings it has seen.
 const SCOUT_KEEP_AWAY: f32 = 26.0;
 /// A material with fewer free than this gets a producer first.
@@ -884,8 +889,13 @@ impl Game {
         self.ai_short_of(me, kind).or_else(|| {
             let p = &self.players[me as usize];
             let material = kind.stats().produces.first().is_some_and(|&(r, _)| !r.is_house_good());
-            if material || p.era < 1 {
+            if p.era < 1 {
                 return None;
+            }
+            if material {
+                let stone = kind.stats().produces.first().is_some_and(|&(r, _)| r == Res::Stone);
+                let wood = kind.stats().cost.iter().find(|&&(r, _)| r == Res::Wood).map_or(0, |&(_, k)| k as i32);
+                return (!stone && wood > 0 && p.free(Res::Wood) - wood < STONE_WOOD).then_some(Res::Wood);
             }
             kind.stats().cost.iter().find(|&&(r, k)| p.free(r) - (k as i32) < reserve_of(r)).map(|&(r, _)| r)
         })

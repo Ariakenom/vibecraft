@@ -326,14 +326,14 @@ const fn converter(hp: f32, cost: Slots, takes: Slots, makes: Slots, workers: u8
 use Res::*;
 
 // Units. Every unit is a worker who went to train (see `Game::queue_unit`).
-// A worker can't fight, and falls quickly: people are no army.
+// A worker fights badly and falls quickly: people are no army.
 // Each era's soldiers are a clear step up from the last: about a third more
 // health and 40% more damage a second in the same role, so one beats its
 // forerunner with half its health left, and two of the old still beat one of
 // the new (`diag_fights` prints these fights). Riders and ships see far
 // (scouts); guns see about as far as they shoot.
 //                                    hp   atk  range  cd   speed sight cost          time
-static WORKER: Stats = unit(25.0, 0.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
+static WORKER: Stats = unit(25.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
 static SPEARMAN: Stats = unit(95.0, 8.0, 0.4, 1.5, 2.1, 6.0, &[(Wood, 1)], 15.0);
 static ARCHER: Stats = unit(55.0, 6.0, 5.5, 1.8, 2.1, 8.0, &[(Wood, 1)], 16.0);
 static HORSEMAN: Stats = unit(120.0, 9.0, 0.4, 1.6, 3.6, 9.0, &[(Horses, 1)], 20.0);
@@ -442,7 +442,7 @@ static CIRCUS: Stats = Stats { produces: &[(Circus, 8)], consumes: &[(Horses, 2)
 
 // Industrial.
 static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 16)], 3, Some(Dep::Coal), 20.0, 2);
-static STEEL_MILL: Stats = Stats { produces: &[(Steel, 12)], consumes: &[(Iron, 2), (Coal, 2)], workers: 4, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
+static STEEL_MILL: Stats = Stats { produces: &[(Steel, 30)], consumes: &[(Iron, 4), (Coal, 4)], workers: 4, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
 static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 8)], 3, 25.0);
 static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 10)], 3, 22.0);
 static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 10)], 2, 16.0);
@@ -469,7 +469,9 @@ static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum
 // stone works by stone like a quarry, a kiln by clay like a brickworks, and
 // each makes as much as several of them with fewer hands.
 static SAWMILL: Stats = extractor(900.0, &[(Stone, 2), (Brick, 1)], &[(Wood, 16)], 2, Some(Dep::Forest), 30.0, 3);
-static STONEWORKS: Stats = extractor(1000.0, &[(Wood, 2), (Brick, 2)], &[(Stone, 14)], 2, Some(Dep::Stone), 30.0, 3);
+// Wood only: stone must never wait for brick, since brick (a Kiln) waits
+// for stone. Towns stood still with neither to spare.
+static STONEWORKS: Stats = extractor(1000.0, &[(Wood, 3)], &[(Stone, 14)], 2, Some(Dep::Stone), 30.0, 3);
 static KILN: Stats = extractor(900.0, &[(Stone, 4)], &[(Brick, 20)], 2, Some(Dep::Clay), 30.0, 3);
 // Modern: a surface-to-air missile battery, and the only defense against a
 // nuke: one falling within `AIR_DEFENSE_COVER` of it is shot down
