@@ -10,7 +10,7 @@
 //! turned images, so every player gets the same.
 
 use crate::defs::Dep;
-use crate::map::{dist, fbm, hash, ring_point, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map::{dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 
 /// Land per side, before the open sea round it, for a Large map: ten times
 /// a Skirmish map's area (120 and 144).
@@ -186,45 +186,52 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
             })
         })
     };
-    let roomy = |feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| {
-        let ri = (r + GAP).ceil() as i32;
-        images(cx, cy).all(|(ix, iy)| {
-            (-ri..=ri).all(|dy| {
-                (-ri..=ri).all(|dx| {
-                    let (x, y) = (ix + dx, iy + dy);
-                    let d = ((dx * dx + dy * dy) as f32).sqrt();
-                    d > r + GAP || !(x >= 0 && y >= 0 && x < w && y < h) || matches!(feat[(y * w + x) as usize], Feat::None | Feat::Tree) || feat[(y * w + x) as usize] == f
-                })
-            })
-        })
-    };
     // Spots that must stay clear (town and camp sites): no deposit within `r`.
     let mut keep_clear: Vec<(f32, f32, f32)> = all_bases.iter().map(|&(x, y)| (x, y, 10.0)).collect();
     let clear_of = |keep: &[(f32, f32, f32)], cx: i32, cy: i32, r: f32| {
         images(cx, cy).all(|(ix, iy)| keep.iter().all(|&(x, y, k)| dist((ix as f32, iy as f32), (x, y)) > k + r + 1.0))
     };
     let place = |terrain: &mut Vec<u8>, feat: &mut Vec<Feat>, keep: &[(f32, f32, f32)], cx: i32, cy: i32, f: Feat, r: f32, ring_max: i32| -> bool {
+        // (Shapes and what each resource likes to lie by: `map::in_shape`.)
+        let far = reach(f, r);
+        let fits = |terrain: &[u8], feat: &[Feat], x: i32, y: i32| {
+            let tiles = shape_tiles(terrain, w, h, f, x, y, r, seed);
+            tiles.iter().all(|&(a, b)| clear_of(keep, x + a, y + b, 0.5)) && shape_fits(terrain, feat, w, h, syms, &tiles, x, y, f, GAP, &[WATER, SAND]) == (true, true)
+        };
         let mut at = None;
-        'search: for ring in 0..=ring_max {
+        'liked: for ring in 0..=ring_max.min(7) {
             for k in 0..(8 * ring).max(1) {
                 let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
                 let (x, y) = (cx + dx, cy + dy);
-                if dry(terrain, x, y, r) && roomy(feat, x, y, r, f) && clear_of(keep, x, y, r) {
+                if liking(terrain, w, h, f, x, y, far).is_some() && fits(terrain, feat, x, y) {
                     at = Some((x, y));
-                    break 'search;
+                    break 'liked;
+                }
+            }
+        }
+        if at.is_none() {
+            'search: for ring in 0..=ring_max {
+                for k in 0..(8 * ring).max(1) {
+                    let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
+                    let (x, y) = (cx + dx, cy + dy);
+                    if fits(terrain, feat, x, y) {
+                        at = Some((x, y));
+                        break 'search;
+                    }
                 }
             }
         }
         let Some((cx, cy)) = at else { return false };
-        let ri = r.ceil() as i32 + 2;
+        let tiles = shape_tiles(terrain, w, h, f, cx, cy, r, seed);
+        let ri = far.ceil() as i32 + 3;
         for dy in -ri..=ri {
             for dx in -ri..=ri {
                 let (x, y) = (cx + dx, cy + dy);
                 if x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
                     continue;
                 }
-                let d = ((dx * dx + dy * dy) as f32).sqrt();
-                if d <= r + 2.2 && f != Feat::Tree {
+                let d = tiles.iter().map(|&(a, b)| (((dx - a) * (dx - a) + (dy - b) * (dy - b)) as f32).sqrt()).fold(f32::MAX, f32::min);
+                if d <= 2.3 && f != Feat::Tree {
                     for (px, py) in images(x, y) {
                         let i = (py * w + px) as usize;
                         if feat[i] == Feat::Tree {
@@ -232,14 +239,7 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
                         }
                     }
                 }
-                if d > r {
-                    continue;
-                }
-                let keep = match f {
-                    Feat::Fertile | Feat::Horses | Feat::Game | Feat::Hills => (dx + dy) % 2 == 0,
-                    _ => true,
-                };
-                if keep {
+                if d < 0.5 {
                     for (px, py) in images(x, y) {
                         let i = (py * w + px) as usize;
                         if matches!(terrain[i], WATER | SAND) {
