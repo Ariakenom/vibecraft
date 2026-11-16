@@ -25,8 +25,8 @@ pub const CROSSING_RIVER_CHANCE: f32 = 0.4;
 /// wider and taller on each side (about four times the sea there was).
 pub const OPEN_SEA: i32 = 18;
 /// Fishing spots by every base, and out on the open sea along each edge.
-const FISH_NEAR_BASE: usize = 4;
-const FISH_OPEN: i32 = 5;
+const FISH_NEAR_BASE: usize = 7;
+const FISH_OPEN: i32 = 8;
 
 pub const GRASS: u8 = 0;
 pub const WATER: u8 = 1;
@@ -245,6 +245,170 @@ pub(crate) enum Feat {
     Uranium,
     /// A fish shoal: on the water.
     Fish,
+}
+
+/// How far from its middle a cluster of `f` with size `r` can reach: what
+/// has to be dry and free of other clusters before it goes down.
+pub(crate) fn reach(f: Feat, r: f32) -> f32 {
+    match f {
+        Feat::Stone => r * 2.1,
+        Feat::Clay => r * 2.2,
+        Feat::Coal => r * 2.0,
+        Feat::Iron => r * 1.7,
+        Feat::Fertile => r * 1.6,
+        Feat::Game | Feat::Horses => r * 1.3,
+        Feat::Nitrate => r * 1.5,
+        Feat::Oil => 2.3,
+        Feat::Bauxite => 2.3,
+        _ => r,
+    }
+}
+
+/// Whether the tile (dx, dy) from a cluster's middle belongs to it. Every
+/// resource lies in its own way, so a glance tells them apart (they were all
+/// a 3x3 block or a plus):
+/// - stone, a long ridge, a little bent;
+/// - clay, a winding bank (along the water where there is some, see `liking`);
+/// - coal, two thin seams side by side;
+/// - iron, a crescent (round the foot of a hill where there is one);
+/// - fruit land, a wide ragged meadow; game and horses, scattered;
+/// - saltpeter, a broken crust; oil, seeps apart from each other;
+/// - bauxite, steps down a slope.
+///
+/// `r` is the cluster's size (1.5 for a first quarry's worth), `turn` the
+/// way it lies as (cos, sin), `key` its own random number.
+pub(crate) fn in_shape(f: Feat, dx: i32, dy: i32, r: f32, turn: (f32, f32), key: u32) -> bool {
+    let (x, y) = (dx as f32, dy as f32);
+    let (u, v) = (x * turn.0 + y * turn.1, -x * turn.1 + y * turn.0); // along it, across it
+    let d = (x * x + y * y).sqrt();
+    let k = r / 1.5;
+    match f {
+        Feat::Stone => u.abs() <= 3.0 * k && (v - 0.07 * u * u + 0.3).abs() <= 0.85,
+        Feat::Clay => u.abs() <= 3.0 * k && (v - 0.6 * (u * 1.1).sin()).abs() <= 0.8,
+        Feat::Coal => u.abs() <= 2.6 * k && (v.abs() - 1.1).abs() <= 0.5,
+        Feat::Iron => d >= 1.4 * k && d <= 2.5 * k && u >= -0.18 * d,
+        Feat::Fertile => {
+            // A meadow with a ragged edge, bushes on every other tile.
+            let (a, b) = if d > 0.0 { (u / d, v / d) } else { (0.0, 0.0) };
+            let (p, q) = (hash(1, 2, key) * 2.0 - 1.0, hash(3, 4, key) * 2.0 - 1.0);
+            d <= r * (1.0 + 0.4 * (a * p + b * q) + 0.5 * a * b) && (dx + dy) % 2 == 0
+        }
+        // Scattered, but the same number every time (a knight's-move
+        // lattice, two tiles in five), so no town is short of game.
+        Feat::Game | Feat::Horses => d <= r * 1.3 && matches!((dx + 2 * dy + (key % 5) as i32).rem_euclid(5), 0 | 2),
+        Feat::Nitrate => d <= r * 1.5 && matches!((2 * dx + dy + (key % 5) as i32).rem_euclid(5), 0 | 2),
+        Feat::Oil => {
+            // Five seeps: one in the middle, four round it like a pinwheel.
+            let m = key & 1 == 0;
+            [(0, 0), (2, 1), (-1, 2), (-2, -1), (1, -2)].iter().any(|&(a, b)| (if m { (a, b) } else { (b, a) }) == (dx, dy))
+        }
+        Feat::Bauxite => {
+            // Steps: a diagonal two tiles wide.
+            let dy = if key & 1 == 0 { dy } else { -dy };
+            dx.abs() <= 1 && (dy == dx || dy == dx + 1)
+        }
+        Feat::Hills => d <= r && (dx + dy) % 2 == 0,
+        _ => d <= r,
+    }
+}
+
+/// What a cluster likes to lie by, and which way that is from (cx, cy) as
+/// (cos, sin): clay by water, iron and coal at the foot of a hill. None if
+/// there's none of it near.
+pub(crate) fn liking(terrain: &[u8], w: i32, h: i32, f: Feat, cx: i32, cy: i32, reach: f32) -> Option<(f32, f32)> {
+    let (want_hill, far) = match f {
+        Feat::Clay => (false, reach + 6.0),
+        Feat::Iron | Feat::Coal => (true, reach + 4.0),
+        _ => return None,
+    };
+    let ri = far.ceil() as i32;
+    let (mut sx, mut sy, mut n) = (0.0f32, 0.0f32, 0);
+    let mut nearest: Option<(f32, f32, f32)> = None;
+    for dy in -ri..=ri {
+        for dx in -ri..=ri {
+            let (x, y) = (cx + dx, cy + dy);
+            let d = ((dx * dx + dy * dy) as f32).sqrt();
+            if d > far || d < 0.5 || x < 0 || y < 0 || x >= w || y >= h {
+                continue;
+            }
+            let t = terrain[(y * w + x) as usize];
+            if want_hill && t == HILL {
+                sx += dx as f32;
+                sy += dy as f32;
+                n += 1;
+            } else if !want_hill && matches!(t, WATER | SHALLOW) && nearest.is_none_or(|(_, _, best)| d < best) {
+                nearest = Some((dx as f32 / d, dy as f32 / d, d));
+            }
+        }
+    }
+    if want_hill {
+        let len = (sx * sx + sy * sy).sqrt();
+        (n >= 6 && len > 1.0).then(|| (sx / len, sy / len))
+    } else {
+        nearest.map(|(x, y, _)| (x, y))
+    }
+}
+
+/// Where a cluster of `f` goes down round (cx, cy) and which way it lies:
+/// the tiles it takes (as offsets). Iron's crescent opens toward its hill;
+/// clay and coal lie along the shore or the hillside; the rest by chance.
+pub(crate) fn shape_tiles(terrain: &[u8], w: i32, h: i32, f: Feat, cx: i32, cy: i32, r: f32, seed: u32) -> Vec<(i32, i32)> {
+    let reach = reach(f, r);
+    let key = (hash(cx, cy, seed ^ 0x5A17) * 16_777_216.0) as u32;
+    let turn = match (f, liking(terrain, w, h, f, cx, cy, reach)) {
+        (Feat::Iron, Some(t)) => t,
+        (_, Some((c, s))) => (-s, c),
+        _ => {
+            let a = hash(cx, cy, seed ^ 0x7E57) * std::f32::consts::PI;
+            (a.cos(), a.sin())
+        }
+    };
+    let ri = reach.ceil() as i32;
+    let mut out = Vec::new();
+    for dy in -ri..=ri {
+        for dx in -ri..=ri {
+            if in_shape(f, dx, dy, r, turn, key) {
+                out.push((dx, dy));
+            }
+        }
+    }
+    out
+}
+
+/// Whether a cluster's `tiles` round (cx, cy) would lie on dry ground (no
+/// `wet` terrain within two tiles of any of them, nor the map's edge), and
+/// whether there's room: no deposit of another kind within `gap` tiles of
+/// any of them, on any image of the spot (trees don't count; they are
+/// cleared around a cluster anyway).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shape_fits(terrain: &[u8], feat: &[Feat], w: i32, h: i32, syms: &[Sym], tiles: &[(i32, i32)], cx: i32, cy: i32, f: Feat, gap: f32, wet: &[u8]) -> (bool, bool) {
+    let gi = gap.ceil() as i32;
+    let (mut dry, mut roomy) = (true, true);
+    for &(tx, ty) in tiles {
+        for oy in -gi..=gi {
+            for ox in -gi..=gi {
+                let d = ((ox * ox + oy * oy) as f32).sqrt();
+                let (x, y) = (cx + tx + ox, cy + ty + oy);
+                let inside = x >= 1 && y >= 1 && x < w - 1 && y < h - 1;
+                if d <= 2.0 && (!inside || wet.contains(&terrain[(y * w + x) as usize])) {
+                    dry = false;
+                }
+                if d <= gap && x >= 0 && y >= 0 && x < w && y < h {
+                    for s in syms {
+                        let (ix, iy) = s.apply(x, y, w, h);
+                        let there = feat[(iy * w + ix) as usize];
+                        if !(matches!(there, Feat::None | Feat::Tree) || there == f) {
+                            roomy = false;
+                        }
+                    }
+                }
+            }
+        }
+        if !dry {
+            return (false, roomy);
+        }
+    }
+    (dry, roomy)
 }
 
 /// A symmetry of the map: a way to turn it that lands it on itself.
@@ -544,46 +708,39 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
     // A cluster that would sit in a lake moves to the nearest dry ground
-    // instead (playtest: deposits stood on islands of their own). Every
-    // image of a spot looks the same, so checking one is enough.
-    let dry = |terrain: &[u8], cx: i32, cy: i32, r: f32| {
-        let ri = r.ceil() as i32 + 2;
-        (-ri..=ri).all(|dy| {
-            (-ri..=ri).all(|dx| {
-                let (x, y) = (cx + dx, cy + dy);
-                let d = ((dx * dx + dy * dy) as f32).sqrt();
-                d > r + 2.0 || (x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && !matches!(terrain[(y * w + x) as usize], WATER | SAND | SHALLOW))
-            })
-        })
-    };
-    // Room between clusters (playtest: clay right up against the sheep hills,
-    // no space to put a building between them): no deposit of another kind
-    // within `CLUSTER_GAP` tiles of a cluster's edge. Trees don't count;
-    // they are cleared around a cluster anyway.
-    // Round every image of the spot: a cluster is copied to each, and an
-    // image can land next to another cluster's image though the spot itself
-    // has room (a 4-player map put clay against sheep hills that way).
-    let roomy = |feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| {
-        let ri = (r + CLUSTER_GAP).ceil() as i32;
-        images(cx, cy).all(|(ix, iy)| {
-            (-ri..=ri).all(|dy| {
-                (-ri..=ri).all(|dx| {
-                    let (x, y) = (ix + dx, iy + dy);
-                    let d = ((dx * dx + dy * dy) as f32).sqrt();
-                    d > r + CLUSTER_GAP || !(x >= 0 && y >= 0 && x < w && y < h) || matches!(feat[(y * w + x) as usize], Feat::None | Feat::Tree) || feat[(y * w + x) as usize] == f
-                })
-            })
-        })
-    };
+    // instead (playtest: deposits stood on islands of their own), and keeps
+    // `CLUSTER_GAP` tiles from clusters of other kinds (playtest: clay right
+    // up against the sheep hills, no space for a building between them);
+    // on every image of the spot, since a cluster is copied to each
+    // (`shape_fits`).
     // The nearest dry spot with room around it (and true); failing that,
     // the nearest dry spot; failing that, where it was meant to go.
-    let on_land = |terrain: &[u8], feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat| -> ((i32, i32), bool) {
+    let on_land = |terrain: &[u8], feat: &[Feat], cx: i32, cy: i32, r: f32, f: Feat, home: Option<(i32, i32)>| -> ((i32, i32), bool) {
+        // (dry, with room) for the cluster's own tiles at a spot.
+        let fits = |x: i32, y: i32| {
+            let tiles = shape_tiles(terrain, w, h, f, x, y, r, seed);
+            shape_fits(terrain, feat, w, h, syms, &tiles, x, y, f, CLUSTER_GAP, &[WATER, SAND, SHALLOW])
+        };
+        // Clay by the water, iron and coal by a hill, if there's such a
+        // spot within a few tiles (a town's own: no further from it).
+        let far = reach(f, r);
+        let from_home = |x: i32, y: i32| home.map_or(0.0, |(hx, hy)| dist((x as f32, y as f32), (hx as f32, hy as f32)));
+        for ring in 0..=6 {
+            for k in 0..(8 * ring).max(1) {
+                let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
+                let (x, y) = (cx + dx, cy + dy);
+                if from_home(x, y) <= from_home(cx, cy) + 1.0 && liking(terrain, w, h, f, x, y, far).is_some() && fits(x, y) == (true, true) {
+                    return ((x, y), true);
+                }
+            }
+        }
         let mut dry_only = None;
         for ring in 0..=22 {
             for k in 0..(8 * ring).max(1) {
                 let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
-                if dry(terrain, cx + dx, cy + dy, r) {
-                    if roomy(feat, cx + dx, cy + dy, r, f) {
+                let (dry, roomy) = fits(cx + dx, cy + dy);
+                if dry {
+                    if roomy {
                         return ((cx + dx, cy + dy), true);
                     }
                     dry_only.get_or_insert((cx + dx, cy + dy));
@@ -596,21 +753,24 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     // map with no room for it anywhere near is left out instead, on every
     // image alike (a crossing river can leave the middle that crowded).
     let mut place = |cx: i32, cy: i32, f: Feat, r: f32, needed: bool| {
-        let ((cx, cy), room) = on_land(&terrain, &feat, cx, cy, r, f);
+        let far = reach(f, r);
+        let ((cx, cy), room) = on_land(&terrain, &feat, cx, cy, r, f, needed.then_some(b1));
         if !room && !needed {
             return;
         }
-        let ri = r.ceil() as i32 + 2;
+        let tiles = shape_tiles(&terrain, w, h, f, cx, cy, r, seed);
+        let ri = far.ceil() as i32 + 3;
         for dy in -ri..=ri {
             for dx in -ri..=ri {
                 let (x, y) = (cx + dx, cy + dy);
                 if x < 1 || y < 1 || x >= w - 1 || y >= h - 1 {
                     continue;
                 }
-                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                // How far this tile is from the cluster's own tiles.
+                let d = tiles.iter().map(|&(a, b)| (((dx - a) * (dx - a) + (dy - b) * (dy - b)) as f32).sqrt()).fold(f32::MAX, f32::min);
                 // Ground under and around a cluster: no deposit in a lake,
                 // nor buried in a forest, with room around it to build.
-                if d <= r + 1.0 {
+                if d <= 1.5 {
                     for (px, py) in images(x, y) {
                         let i = (py * w + px) as usize;
                         if matches!(terrain[i], WATER | SAND | SHALLOW) {
@@ -619,7 +779,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                         }
                     }
                 }
-                if d <= r + 2.2 && f != Feat::Tree {
+                if d <= 2.3 && f != Feat::Tree {
                     for (px, py) in images(x, y) {
                         let i = (py * w + px) as usize;
                         if feat[i] == Feat::Tree {
@@ -627,16 +787,8 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                         }
                     }
                 }
-                if d > r {
-                    continue;
-                }
-                // Bushes and animals are sparse; trees a little ragged; rock is solid.
-                let keep = match f {
-                    Feat::Fertile | Feat::Horses | Feat::Game | Feat::Hills => (dx + dy) % 2 == 0,
-                    Feat::Tree => hash(dx + cx, dy + cy, 3) < 0.88,
-                    _ => true,
-                };
-                if keep {
+                // (Trees a little ragged.)
+                if d < 0.5 && (f != Feat::Tree || hash(dx + cx, dy + cy, 3) < 0.88) {
                     for (px, py) in images(x, y) {
                         feat[(py * w + px) as usize] = f;
                     }
@@ -1007,7 +1159,19 @@ mod map_pictures {
                     let c = match m.terrain[i] { WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], _ => [90, 170, 70] };
                     px[i * 3..i * 3 + 3].copy_from_slice(&c);
                 }
-                for d in &deps { let i = m.idx(d.tx, d.ty); px[i * 3..i * 3 + 3].copy_from_slice(&[60, 60, 60]); }
+                // Each kind of deposit in its own colour, and how many tiles of each.
+                let mut count = [0u32; 16];
+                for d in &deps {
+                    let i = m.idx(d.tx, d.ty);
+                    count[d.kind as usize] += 1;
+                    let c: [u8; 3] = match d.kind {
+                        Dep::Forest => [30, 100, 40], Dep::Stone => [150, 150, 150], Dep::Clay => [200, 110, 60], Dep::Iron => [150, 40, 40], Dep::Coal => [20, 20, 20],
+                        Dep::Fertile => [240, 220, 60], Dep::Game => [240, 150, 200], Dep::Horses => [130, 80, 30], Dep::Hills => [255, 255, 255], Dep::Nitrate => [200, 240, 240],
+                        Dep::Oil => [90, 0, 120], Dep::Bauxite => [255, 120, 0], Dep::Uranium => [0, 255, 0], _ => [60, 60, 60],
+                    };
+                    px[i * 3..i * 3 + 3].copy_from_slice(&c);
+                }
+                println!("{players}p seed {seed}: {}", [Dep::Stone, Dep::Clay, Dep::Iron, Dep::Coal, Dep::Fertile, Dep::Game, Dep::Horses, Dep::Hills, Dep::Nitrate, Dep::Oil, Dep::Bauxite, Dep::Uranium].iter().map(|&k| format!("{k:?} {}", count[k as usize])).collect::<Vec<_>>().join(", "));
                 for &(bx, by) in &bases { for dy in -1..=1 { for dx in -1..=1 { let i = m.idx(bx + dx, by + dy); px[i * 3..i * 3 + 3].copy_from_slice(&[230, 30, 30]); } } }
                 let mut f = format!("P6 {} {} 255\n", m.w, m.h).into_bytes();
                 f.extend_from_slice(&px);

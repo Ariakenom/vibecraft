@@ -931,7 +931,12 @@ impl Game {
                 Kind::Barracks => g.count_of(me, e.kind) > 1 && e.queue.is_empty(),
                 // Luxuries when a house upgrade has waited for stone: the
                 // plan doesn't rebuild them meanwhile (see `hold`).
-                Kind::Range | Kind::Stable | Kind::SiegeWorkshop | Kind::Dock => e.queue.is_empty(),
+                Kind::Range | Kind::Stable | Kind::SiegeWorkshop => e.queue.is_empty(),
+                // The dock too, but not while the houses count on its fish:
+                // `ai_fish` would plan it again at once, and the town
+                // waited for ever on a dock it kept tearing down (three
+                // towns stood still in the Ancient era, all wood held).
+                Kind::Dock => e.queue.is_empty() && e.built >= 1.0 && target(g.players[me as usize].era).count(Kind::FishingBoat) == 0,
                 Kind::Tower => true,
                 // The Kiln (4 stone) makes three times a Brickworks' bricks,
                 // and the old ones hold the stone it is waiting for.

@@ -94,3 +94,20 @@ not straight away (see `CLAUDE.md`).
   worker's workplace kind). Builders carry a hammer.
   Nine jobs have a hat of their own shape (`jobHat`: knitted cap, miner's
   helmet, flat cap, hunter's cap and so on), hung on the head bone.
+- **Resources lie in their own shapes** (Nov 2026; they were all a 3x3
+  block or a plus): stone a long bent ridge, clay a winding bank (by water
+  when some is near), coal two thin seams, iron a crescent (round a
+  hill's foot when one is near), fruit land a ragged meadow, game, horses
+  and saltpeter scattered, oil five seeps apart, bauxite steps. Both map
+  generators share `in_shape`, `liking`, `shape_tiles` and `shape_fits`
+  in map.rs; room and dry ground are checked per tile of the shape.
+  `cargo test --release draw_maps -- --ignored --nocapture` draws maps with
+  each kind in its own colour and counts tiles. Still one model per tile:
+  bigger models per patch (an outcrop, a pit) and wandering herds were the
+  other ideas.
+- **More fish; the sea at the map's edge** (Nov 2026): 7 shoals by each
+  town (was 4; Frontier 9, was 6) and 8 along each edge of the open sea
+  (was 5). Past the map's edge there's no fog of war (its edge texels
+  smeared to the horizon in black bands): the sea runs on into a haze the
+  colour of the horizon. Out at sea: whitecaps, wide lighter patches, and
+  wave noise turned off the tile axes (it showed a grid).
