@@ -92,3 +92,5 @@ not straight away (see `CLAUDE.md`).
   the shirt follow the building they work at (`jobOf`, `jobTool`,
   `jobBody` in render3d.js; the render buffer's `residents` holds a
   worker's workplace kind). Builders carry a hammer.
+  Nine jobs have a hat of their own shape (`jobHat`: knitted cap, miner's
+  helmet, flat cap, hunter's cap and so on), hung on the head bone.
