@@ -173,7 +173,7 @@ function setOwnerColors() {
 const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()];
 // The mode chosen on the start screen (kept in the browser): 0 Skirmish,
 // 1 Frontier on a small map, 2 Frontier on a large one.
-const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large"];
+const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large", "world"];
 let gameMode = 0, lastMode = 0;
 try { gameMode = Math.max(0, MODES.indexOf(localStorage.getItem(MODE_KEY))); } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
@@ -496,7 +496,7 @@ function bakeTerrain() {
     c = mixc(c, [c[0] * 1.08, c[1] * 1.05, c[2] * 0.95], Math.max(0, Math.min(1, ht - 0.8))); // sunnier up high
     // Beaches follow the (smooth) height near the water, not the square tiles.
     if (beach) c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
-    if (t === 1 || t === 5) c = mixc(SAND, SEABED, Math.min(1, -ht));
+    if (t === 1 || t === 5 || t === 6) c = mixc(SAND, SEABED, Math.min(1, -ht));
     const k = 0.98 + n3 * 0.04;
     return [c[0] * k, c[1] * k, c[2] * k];
   };
@@ -506,7 +506,8 @@ function bakeTerrain() {
   const img = sc.createImageData(MW, MH);
   for (let i = 0; i < MW * MH; i++) {
     // Deep water blue, shallow fords a paler blue-green, land its colours.
-    const c = ter[i] === 1 ? [40, 96, 118] : ter[i] === 5 ? [92, 150, 150] : colourAt((i % MW) + 0.5, ((i / MW) | 0) + 0.5);
+    // (6: past the rim of a round map, the World's: the dark beyond.)
+    const c = ter[i] === 1 ? [40, 96, 118] : ter[i] === 6 ? [14, 18, 30] : ter[i] === 5 ? [92, 150, 150] : colourAt((i % MW) + 0.5, ((i / MW) | 0) + 0.5);
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   sc.putImageData(img, 0, 0);
@@ -2284,7 +2285,7 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
 function newGame(seedArg, local = 0, players = 2, mode = 0) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  lastMode = mode === 1 || mode === 2 ? mode : 0;
+  lastMode = mode >= 1 && mode <= 3 ? mode : 0;
   if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
   else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);

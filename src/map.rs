@@ -36,6 +36,9 @@ pub const HILL: u8 = 3;
 pub const CRATER: u8 = 4;
 /// Shallow water: a ford across a river. Boats sail it and people wade it.
 pub const SHALLOW: u8 = 5;
+/// Past the rim of a round map (the World map): nothing walks, sails or
+/// builds there. Drawn as sea running into the haze.
+pub const EDGE: u8 = 6;
 /// Where water meets land in `Map::shade` (0..1), whatever a map's water
 /// level: the 3D view draws its waterline there (`elevOf` in render3d.js).
 pub const SHADE_WATER: f32 = 0.36;
