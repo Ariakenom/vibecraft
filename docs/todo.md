@@ -105,3 +105,9 @@ not straight away (see `CLAUDE.md`).
   each kind in its own colour and counts tiles. Still one model per tile:
   bigger models per patch (an outcrop, a pit) and wandering herds were the
   other ideas.
+- **More fish; the sea at the map's edge** (Nov 2026): 7 shoals by each
+  town (was 4; Frontier 9, was 6) and 8 along each edge of the open sea
+  (was 5). Past the map's edge there's no fog of war (its edge texels
+  smeared to the horizon in black bands): the sea runs on into a haze the
+  colour of the horizon. Out at sea: whitecaps, wide lighter patches, and
+  wave noise turned off the tile axes (it showed a grid).

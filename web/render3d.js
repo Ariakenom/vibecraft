@@ -57,7 +57,11 @@ function withFow(mat, extra) {
       vFowW = (modelMatrix * fowP).xz;`);
     sh.uniforms.uCloudT = timeUniform;
     let fs = sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
-      gl_FragColor.rgb *= texture2D(uFow, vFowW / uMapSize).r;`);
+      // Past the map's edge there is nothing to explore: no fog there (the
+      // sea runs on into the haze; see buildWater). Reading the fog texture
+      // out there smeared its edge texels to the horizon in black bands.
+      float fowOut = max(max(-vFowW.x, vFowW.x - uMapSize.x), max(-vFowW.y, vFowW.y - uMapSize.y));
+      gl_FragColor.rgb *= mix(texture2D(uFow, vFowW / uMapSize).r, 1.0, smoothstep(0.0, 2.5, fowOut));`);
     if (fs.includes("#include <lights_fragment_begin>")) {
       fs = fs.replace("#include <lights_fragment_begin>", THREE.ShaderChunk.lights_fragment_begin.replace(
         "getDirectionalLightInfo( directionalLight, directLight );",
@@ -1684,13 +1688,22 @@ function buildWater() {
         vec2 g = vec2(0.0);
         // (direction, frequency, speed, height) of each wave
         vec2 d1 = normalize(vec2(1.0, 0.35)), d2 = normalize(vec2(-0.45, 1.0)), d3 = normalize(vec2(0.8, -0.9)), d4 = normalize(vec2(-1.0, -0.2));
-        g += d1 * 1.6 * 0.060 * cos(dot(d1, p) * 1.6 + t * 1.10);
-        g += d2 * 2.3 * 0.040 * cos(dot(d2, p) * 2.3 + t * 1.35);
-        g += d3 * 3.7 * 0.022 * cos(dot(d3, p) * 3.7 + t * 1.90);
-        g += d4 * 5.9 * 0.012 * cos(dot(d4, p) * 5.9 + t * 2.60);
-        vec2 q = p * 1.9 + vec2(t * 0.18, -t * 0.13);
-        float e = 0.08, n0 = vnoise2(q);
-        g += vec2(vnoise2(q + vec2(e, 0.0)) - n0, vnoise2(q + vec2(0.0, e)) - n0) / e * 0.05;
+        // (Bent a little from place to place: four straight wave trains
+        // cross in a regular pattern, which showed as a grid in the sky's
+        // reflection.)
+        vec2 w = p + 1.4 * vec2(vnoise2(p * 0.21 + 3.7), vnoise2(p * 0.21 + 11.3));
+        g += d1 * 1.6 * 0.060 * cos(dot(d1, w) * 1.6 + t * 1.10);
+        g += d2 * 2.3 * 0.040 * cos(dot(d2, w) * 2.3 + t * 1.35);
+        g += d3 * 3.7 * 0.022 * cos(dot(d3, w) * 3.7 + t * 1.90);
+        g += d4 * 5.9 * 0.012 * cos(dot(d4, w) * 5.9 + t * 2.60);
+        // Two layers of noise, each turned off the tiles' axes and off each
+        // other: one layer along the axes showed its square grid on the
+        // open sea.
+        mat2 r1 = mat2(0.8, -0.6, 0.6, 0.8), r2 = mat2(0.28, 0.96, -0.96, 0.28);
+        vec2 q = r1 * p * 1.9 + vec2(t * 0.18, -t * 0.13), q2 = r2 * p * 3.1 + vec2(-t * 0.21, t * 0.16);
+        float e = 0.08, n0 = vnoise2(q), m0 = vnoise2(q2);
+        g += (vec2(vnoise2(q + vec2(e, 0.0)) - n0, vnoise2(q + vec2(0.0, e)) - n0) / e * r1) * 0.035;
+        g += (vec2(vnoise2(q2 + vec2(e, 0.0)) - m0, vnoise2(q2 + vec2(0.0, e)) - m0) / e * r2) * 0.022;
         return g;
       }
     ` + sh.fragmentShader
@@ -1701,7 +1714,17 @@ function buildWater() {
         float d = clamp(dRaw, 0.0, 2.0);
         // Light is soaked up with depth: turquoise in the shallows, deep blue out at sea.
         vec3 shallow = vec3(0.02, 0.40, 0.52), deep = vec3(0.005, 0.07, 0.24);
-        diffuseColor.rgb = mix(shallow, deep, 1.0 - exp(-d * 3.0));
+        float deepness = 1.0 - exp(-d * 3.0);
+        diffuseColor.rgb = mix(shallow, deep, deepness);
+        // The open sea isn't one flat blue: wide slow patches, a little
+        // lighter and greener, as over banks and currents.
+        float bank = vnoise2(vWPos * 0.05 + 7.3) * 0.65 + vnoise2(vWPos * 0.13 + 2.1) * 0.35;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.012, 0.15, 0.34), smoothstep(0.4, 0.75, bank) * deepness * 0.75);
+        // How far past the map's edge (tiles): out there the sea melts into
+        // a haze, so the end of the world reads as distance, not as a wall.
+        vec2 mapWH = uHeightBox.zw - 2.0 * uHeightBox.xy;
+        float outside = max(max(-vWPos.x, vWPos.x - mapWH.x), max(-vWPos.y, vWPos.y - mapWH.y));
+        float haze = smoothstep(2.0, 38.0, outside);
         // Caustics: the waves focus the sunlight into a moving net of bright
         // lines on the sand, seen through clear shallow water.
         vec2 cp = vWPos * 2.4;
@@ -1714,14 +1737,18 @@ function buildWater() {
         float edge = 1.0 - smoothstep(0.0, 0.008 + 0.022 * fn, d);
         float wash = sin(uTime * 1.5 - d * 70.0 + sin(vWPos.x * 1.7) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
         float wave = smoothstep(0.7, 0.95, wash) * (1.0 - smoothstep(0.015, 0.08, d)) * smoothstep(0.3, 0.7, fn);
-        float foam = clamp(max(edge, wave * 0.8), 0.0, 1.0);
+        // Whitecaps out at sea: small crests that come and go.
+        vec2 wq = mat2(0.8, -0.6, 0.6, 0.8) * vWPos;
+        float cap = smoothstep(0.74, 0.86, vnoise2(wq * 0.9 + vec2(uTime * 0.2, uTime * 0.07))) * smoothstep(0.55, 0.8, vnoise2(wq * vec2(3.0, 9.0) + vec2(-uTime * 0.5, 0.0))) * smoothstep(0.5, 1.2, d) * (1.0 - haze);
+        float foam = clamp(max(max(edge, wave * 0.8), cap * 0.4), 0.0, 1.0);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.95, 0.95), foam);
         // Clear in the shallows (the sand shows through), darker further out.
         diffuseColor.a = mix(0.55, 0.97, smoothstep(0.0, 0.35, d));
-        diffuseColor.a = max(diffuseColor.a, foam * 0.92);`)
+        diffuseColor.a = max(diffuseColor.a, foam * 0.92);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.20, 0.31, 0.42), haze * 0.9);`)
       .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
         // Waves fade out with distance: there they're finer than a pixel and would shimmer.
-        float waveAmt = 1.0 - smoothstep(30.0, 80.0, length(vViewPosition));
+        float waveAmt = (1.0 - smoothstep(30.0, 80.0, length(vViewPosition))) * (1.0 - haze);
         {
           vec2 sl = waterSlope(vWPos, uTime) * waveAmt;
           vec3 nw = normalize(vec3(-sl.x, 1.0, -sl.y));
@@ -1743,7 +1770,9 @@ function buildWater() {
           refl = mix(refl, vec3(1.0, 0.95, 0.88), smoothstep(0.48, 0.7, cn) * smoothstep(0.0, 0.25, R.y) * 0.85);
           float sun = max(dot(R, SUN_DIR), 0.0);
           vec3 glint = vec3(1.0, 0.88, 0.66) * (pow(sun, 2500.0) * 3.5 + pow(sun, 250.0) * 0.1);
-          totalEmissiveRadiance += (refl * fres * 0.8 + glint) * (1.0 - foam);
+          totalEmissiveRadiance += (refl * fres * 0.8 + glint) * (1.0 - foam) * (1.0 - haze);
+          // (The haze has the horizon's own colour: the far sea and the sky meet in it.)
+          totalEmissiveRadiance += vec3(0.42, 0.56, 0.68) * 0.2 * haze;
         }`);
     sh.fragmentShader = NOISE_GLSL + SKY_GLSL + sh.fragmentShader;
   });

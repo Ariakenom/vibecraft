@@ -25,8 +25,8 @@ pub const CROSSING_RIVER_CHANCE: f32 = 0.4;
 /// wider and taller on each side (about four times the sea there was).
 pub const OPEN_SEA: i32 = 18;
 /// Fishing spots by every base, and out on the open sea along each edge.
-const FISH_NEAR_BASE: usize = 4;
-const FISH_OPEN: i32 = 5;
+const FISH_NEAR_BASE: usize = 7;
+const FISH_OPEN: i32 = 8;
 
 pub const GRASS: u8 = 0;
 pub const WATER: u8 = 1;

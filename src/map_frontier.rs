@@ -33,7 +33,7 @@ impl Size {
     }
 }
 /// Fishing spots by every base.
-const FISH_NEAR_BASE: usize = 6;
+const FISH_NEAR_BASE: usize = 9;
 /// No barbarian site this close to a player's start.
 const SITE_FROM_BASE: f32 = 48.0;
 /// Barbarian sites at least this far apart.
