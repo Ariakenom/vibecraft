@@ -12,6 +12,7 @@ mod econ;
 mod game;
 mod map;
 mod map_frontier;
+mod map_world;
 mod prof;
 mod barbarians;
 mod path;
@@ -76,7 +77,7 @@ pub extern "C" fn init(seed: u32, difficulty: u32, players: u32) {
 
 #[unsafe(no_mangle)]
 /// `init`, for a Frontier game: the big map of continents, with barbarians.
-/// `size`: 0 Small, 1 Large.
+/// `size`: 0 Small, 1 Large, 2 the World map.
 pub extern "C" fn init_frontier(seed: u32, difficulty: u32, players: u32, size: u32) {
     let world = World { game: Game::new_frontier(seed, difficulty, players.clamp(2, 4) as u8, map_frontier::Size::from_u32(size)), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
     WORLD.with(|w| *w.borrow_mut() = Some(world));
@@ -122,6 +123,13 @@ thread_local! { static PROF_OUT: std::cell::RefCell<Vec<f64>> = const { std::cel
 #[unsafe(no_mangle)]
 pub extern "C" fn game_mode() -> u32 {
     game(|g| g.frontier.is_some() as u32)
+}
+
+/// The radius of a round map (the World map) in tiles, or 0 for a square
+/// one: the page draws the haze past its rim in a circle.
+#[unsafe(no_mangle)]
+pub extern "C" fn map_round() -> u32 {
+    game(|g| (g.map.terrain.first() == Some(&map::EDGE)) as u32 * map_world::RADIUS as u32)
 }
 
 /// Is `owner` a barbarian (Frontier)? 1 or 0.
@@ -1310,7 +1318,7 @@ thread_local! {
 /// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width; it's
 /// square. `preview_ptr` has the bytes.
 #[unsafe(no_mangle)]
-/// `mode`: 0 Skirmish, 1 Frontier Small, 2 Frontier Large.
+/// `mode`: 0 Skirmish, 1 Frontier Small, 2 Frontier Large, 3 the World map.
 pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
     let players = players.clamp(2, 4) as usize;
     // (On a Frontier map, the barbarian sites are drawn in white too.)
@@ -1322,7 +1330,7 @@ pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
         map::generate(seed, players)
     };
     let mut px: Vec<u8> = m.terrain.iter().map(|&t| match t {
-        map::WATER => 0,
+        map::WATER | map::EDGE => 0,
         map::SHALLOW => 1,
         map::SAND => 2,
         map::HILL => 4,

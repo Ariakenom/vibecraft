@@ -111,3 +111,16 @@ not straight away (see `CLAUDE.md`).
   smeared to the horizon in black bands): the sea runs on into a haze the
   colour of the horizon. Out at sea: whitecaps, wide lighter patches, and
   wave noise turned off the tile axes (it showed a grid).
+- **The World map** (Nov 2026, "a world map that is also round"): a third
+  kind of Frontier game (mode 3, `Size::World`, `src/map_world.rs`): the
+  Earth seen from above the North Pole on a round map, to 58° south, from
+  a hand-drawn 5° grid of land (`EARTH`). Not symmetric: each player starts
+  by a coast of a different homeland (Europe, China, North America, South
+  America, Africa, India, Australia; the seed picks) with a Skirmish
+  start's deposits round the town; the rest of the deposits and the
+  barbarian sites are scattered. Past the rim is `map::EDGE`: nothing
+  walks or sails there, and the page draws the sea running into haze in a
+  circle (`map_round`, `uRound`). Open: about half the computer seats stall
+  early there (all wood held before the Sawmill, the same wall as on other
+  maps but met more often); a real globe would need the simulation to wrap
+  round, which it doesn't.

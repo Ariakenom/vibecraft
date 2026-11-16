@@ -33,7 +33,8 @@ const R3 = {
 // One texture, a texel per tile,, sampled in every material's fragment shader to darken
 // what you can't see. three.js lets us patch its built-in shaders with
 // `onBeforeCompile`, so we keep normal lighting and shadows for free.
-const fowUniforms = { uFow: { value: null }, uMapSize: { value: null } };
+// (uRound: the radius of a round map, the World's, or 0 for a square one.)
+const fowUniforms = { uFow: { value: null }, uMapSize: { value: null }, uRound: { value: 0 } };
 // Time in seconds, shared by the water and the swaying grass, trees and flags.
 const timeUniform = { value: 0 };
 // How much things move in the wind (0 with the Wind setting off).
@@ -49,6 +50,7 @@ function withFow(mat, extra) {
     if (extra) extra(sh);
     sh.uniforms.uFow = fowUniforms.uFow;
     sh.uniforms.uMapSize = fowUniforms.uMapSize;
+    sh.uniforms.uRound = fowUniforms.uRound;
     sh.vertexShader = "varying vec2 vFowW;\n" + sh.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
       vec4 fowP = vec4(transformed, 1.0);
       #ifdef USE_INSTANCING
@@ -60,14 +62,14 @@ function withFow(mat, extra) {
       // Past the map's edge there is nothing to explore: no fog there (the
       // sea runs on into the haze; see buildWater). Reading the fog texture
       // out there smeared its edge texels to the horizon in black bands.
-      float fowOut = max(max(-vFowW.x, vFowW.x - uMapSize.x), max(-vFowW.y, vFowW.y - uMapSize.y));
+      float fowOut = uRound > 0.0 ? length(vFowW - uMapSize * 0.5) - uRound : max(max(-vFowW.x, vFowW.x - uMapSize.x), max(-vFowW.y, vFowW.y - uMapSize.y));
       gl_FragColor.rgb *= mix(texture2D(uFow, vFowW / uMapSize).r, 1.0, smoothstep(0.0, 2.5, fowOut));`);
     if (fs.includes("#include <lights_fragment_begin>")) {
       fs = fs.replace("#include <lights_fragment_begin>", THREE.ShaderChunk.lights_fragment_begin.replace(
         "getDirectionalLightInfo( directionalLight, directLight );",
         "getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cloudShade(vFowW);"));
     }
-    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nvarying vec2 vFowW;\n" + NOISE_GLSL + CLOUD_GLSL + fs;
+    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nuniform float uRound;\nvarying vec2 vFowW;\n" + NOISE_GLSL + CLOUD_GLSL + fs;
   };
   return mat;
 }
@@ -1404,7 +1406,7 @@ function computeHeights() {
       if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
       sum += elevOf(shade[ty * MW + tx] / 255); n++;
       const t = ter[ty * MW + tx];
-      if (t === 1 || t === 5) { wet[cy * cw + cx] = 1; if (t === 5) shallow++; } else land++;
+      if (t === 1 || t === 5 || t === 6) { wet[cy * cw + cx] = 1; if (t === 5) shallow++; } else land++;
     }
     h[cy * cw + cx] = n ? sum / n : -1;
     landShare[cy * cw + cx] = n ? land / n : 0;
@@ -1519,6 +1521,7 @@ function buildWorld() {
   R3.fowTex.magFilter = THREE.LinearFilter; R3.fowTex.minFilter = THREE.LinearFilter;
   fowUniforms.uFow.value = R3.fowTex;
   fowUniforms.uMapSize.value = new THREE.Vector2(MW, MH);
+  fowUniforms.uRound.value = W.map_round ? W.map_round() : 0;
 
   // Resources: one instanced mesh per kind and block (`BLOCK`), made when
   // the first of that kind in that block comes into view (`updateResources`).
@@ -1723,8 +1726,9 @@ function buildWater() {
         // How far past the map's edge (tiles): out there the sea melts into
         // a haze, so the end of the world reads as distance, not as a wall.
         vec2 mapWH = uHeightBox.zw - 2.0 * uHeightBox.xy;
-        float outside = max(max(-vWPos.x, vWPos.x - mapWH.x), max(-vWPos.y, vWPos.y - mapWH.y));
-        float haze = smoothstep(2.0, 38.0, outside);
+        float outside = uRound > 0.0 ? length(vWPos - mapWH * 0.5) - uRound : max(max(-vWPos.x, vWPos.x - mapWH.x), max(-vWPos.y, vWPos.y - mapWH.y));
+        // (A round map's rim is where the world ends: the haze closes in sooner.)
+        float haze = smoothstep(uRound > 0.0 ? -4.0 : 2.0, uRound > 0.0 ? 22.0 : 38.0, outside);
         // Caustics: the waves focus the sunlight into a moving net of bright
         // lines on the sand, seen through clear shallow water.
         vec2 cp = vWPos * 2.4;
@@ -1739,7 +1743,8 @@ function buildWater() {
         float wave = smoothstep(0.7, 0.95, wash) * (1.0 - smoothstep(0.015, 0.08, d)) * smoothstep(0.3, 0.7, fn);
         // Whitecaps out at sea: small crests that come and go.
         vec2 wq = mat2(0.8, -0.6, 0.6, 0.8) * vWPos;
-        float cap = smoothstep(0.74, 0.86, vnoise2(wq * 0.9 + vec2(uTime * 0.2, uTime * 0.07))) * smoothstep(0.55, 0.8, vnoise2(wq * vec2(3.0, 9.0) + vec2(-uTime * 0.5, 0.0))) * smoothstep(0.5, 1.2, d) * (1.0 - haze);
+        float cap = smoothstep(0.74, 0.86, vnoise2(wq * 0.9 + vec2(uTime * 0.2, uTime * 0.07))) * smoothstep(0.55, 0.8, vnoise2(wq * vec2(3.0, 9.0) + vec2(-uTime * 0.5, 0.0))) * smoothstep(0.5, 1.2, d) * (1.0 - haze)
+          * (1.0 - smoothstep(70.0, 150.0, length(vViewPosition)));   // (from far off they'd be specks of noise)
         float foam = clamp(max(max(edge, wave * 0.8), cap * 0.4), 0.0, 1.0);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.95, 0.95), foam);
         // Clear in the shallows (the sand shows through), darker further out.
@@ -3036,7 +3041,7 @@ function fxOnWater(x, y) {
   const tx = Math.floor(x), ty = Math.floor(y);
   if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) return true;
   const t = u8(W.terrain_ptr(), MW * MH)[ty * MW + tx];
-  return t === 1 || t === 5;
+  return t === 1 || t === 5 || t === 6;
 }
 // A ring of dust rolling outward along the ground: a building finished, a unit appearing.
 function fxDustRing(x, y, r, n, col = FX_DUST) {

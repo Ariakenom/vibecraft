@@ -1,0 +1,560 @@
+//! The World map: the Earth's continents on a round map. It is the world as
+//! seen from above the North Pole (an azimuthal map, like the one on the UN's
+//! flag): the Arctic in the middle, Europe and Africa toward the bottom,
+//! Asia on the right, the Americas on the left, and the map ends in a circle
+//! at 58° south. Past the circle there is nothing (`EDGE`).
+//!
+//! Unlike the other maps it isn't symmetric: every player starts in a
+//! different part of the world, with the same deposits laid round their
+//! town; the rest of the world's deposits and its barbarian sites are
+//! scattered, so some starts are better placed than others. It plays as a
+//! Frontier game (barbarians, the big map's rules).
+
+use crate::defs::Dep;
+use crate::map::{dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map_frontier::Site;
+
+/// The map's radius in tiles, and the radius of 58° south (sea beyond it).
+pub const RADIUS: i32 = 212;
+const LAT_RADIUS: f32 = 200.0;
+/// Latitudes the disc covers: the pole in the middle to this far south.
+const SOUTH: f32 = -58.0;
+
+/// The Earth, coarsely: one row per 5° of latitude from 80° north to 55°
+/// south, one column per 5° of longitude from 180° west. Drawn by hand from
+/// the atlas, for a game map: don't navigate by it.
+const EARTH: [&str; 27] = [
+    "............#########.##########.......##..............###..............",
+    "...........##########....#######..............##....##############......",
+    "##.#####################..#####........#################################",
+    "...##############...###...##...##....##################################.",
+    "....#....########....###...........#..##########################...##...",
+    "..........###############.........##.###########################...#....",
+    "...........##############..........#############################........",
+    "...........###########............###.####..##.###############..#.......",
+    "............#########...................######.#############.#.#........",
+    ".............#######..............##########################..#.........",
+    ".............####................###########################............",
+    "...............##.###............###############..#########.............",
+    "...............###...#...........##############....##..###..............",
+    "..................#..###.........#############.....#....##..#...........",
+    "...................#######.......#############.........##..##...........",
+    "....................######............#######...........#.####..........",
+    "....................#######...........######............#.###.####......",
+    "....................#########.........######.............####...##......",
+    ".....................########..........#####..................#.........",
+    ".....................#######..........######.#..............#####.......",
+    "......................######...........####..#.............#######......",
+    "......................####.............####................########.....",
+    "......................####..............##.................#######......",
+    ".....................####.......................................##.....#",
+    ".....................##..........................................#....#.",
+    ".....................##.................................................",
+    ".....................#.................................................."
+];
+
+/// How much of the ground at (lat, lon) is land, 0 to 1: `EARTH`, smoothed
+/// between its cells.
+fn land(lat: f32, lon: f32) -> f32 {
+    let cell = |r: i32, c: i32| -> f32 {
+        if r < 0 || r >= EARTH.len() as i32 {
+            return 0.0;
+        }
+        (EARTH[r as usize].as_bytes()[c.rem_euclid(72) as usize] == b'#') as u8 as f32
+    };
+    let (fr, fc) = ((77.5 - lat) / 5.0, (lon + 177.5) / 5.0);
+    let (r0, c0) = (fr.floor(), fc.floor());
+    let (tr, tc) = (fr - r0, fc - c0);
+    let (r0, c0) = (r0 as i32, c0 as i32);
+    let top = cell(r0, c0) * (1.0 - tc) + cell(r0, c0 + 1) * tc;
+    let bottom = cell(r0 + 1, c0) * (1.0 - tc) + cell(r0 + 1, c0 + 1) * tc;
+    top * (1.0 - tr) + bottom * tr
+}
+
+/// Where the towns can stand: (latitude, longitude) of a homeland.
+const HOMES: [(f32, f32); 7] = [
+    (50.0, 18.0),   // Europe
+    (34.0, 108.0),  // China
+    (40.0, -98.0),  // North America
+    (-10.0, -55.0), // South America
+    (8.0, 22.0),    // Africa
+    (23.0, 78.0),   // India
+    (-25.0, 134.0), // Australia
+];
+/// Towns start at least this far apart.
+const HOME_GAP: f32 = 90.0;
+const FISH_NEAR_BASE: usize = 7;
+const SITE_FROM_BASE: f32 = 48.0;
+const SITE_GAP: f32 = 34.0;
+const GAP: f32 = 4.0;
+
+/// Build the World map for `players` (2 to 4). Returns the map, its
+/// deposits, one base centre per player, and the barbarian sites.
+pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>, Vec<Site>) {
+    let players = players.clamp(2, 4);
+    let (w, h) = (RADIUS * 2 + 2, RADIUS * 2 + 2);
+    let n = (w * h) as usize;
+    let centre = (w as f32 / 2.0, h as f32 / 2.0);
+    let syms: &[Sym] = &[Sym::Id];
+    let pick = |k: i32, lo: f32, hi: f32| lo + (hi - lo) * hash(k, 919, seed);
+    // A tile for a place on the globe, and back.
+    let tile_of = |lat: f32, lon: f32| {
+        let (d, a) = ((90.0 - lat) / (90.0 - SOUTH) * LAT_RADIUS, lon.to_radians());
+        ((centre.0 + d * a.sin()) as i32, (centre.1 + d * a.cos()) as i32)
+    };
+    let globe_of = |p: (f32, f32)| {
+        let (dx, dy) = (p.0 - centre.0, p.1 - centre.1);
+        (90.0 - dist(p, centre) / LAT_RADIUS * (90.0 - SOUTH), dx.atan2(dy).to_degrees())
+    };
+
+    // The towns: homelands in an order the seed picks, far enough apart.
+    let mut order: Vec<usize> = (0..HOMES.len()).collect();
+    for i in (1..order.len()).rev() {
+        let j = (hash(i as i32, 921, seed) * (i + 1) as f32) as usize;
+        order.swap(i, j.min(i));
+    }
+    // Each town stands near a coast of its homeland (the nearest spot with
+    // solid land round it and the sea about 10 tiles off): its houses want
+    // fish, and a town far inland ran out of wood feeding itself without.
+    let land_at = |x: f32, y: f32| {
+        let (lat, lon) = globe_of((x, y));
+        if lat < SOUTH + 1.0 { 0.0 } else { land(lat, lon) }
+    };
+    let by_the_sea = |home: (i32, i32)| -> (i32, i32) {
+        let dirs: Vec<(f32, f32)> = (0..16).map(|k| (k as f32 / 16.0 * std::f32::consts::TAU).sin_cos()).collect();
+        for ring in 0..=45 {
+            for k in 0..(8 * ring).max(1) {
+                let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
+                let (x, y) = ((home.0 + dx) as f32 + 0.5, (home.1 + dy) as f32 + 0.5);
+                let solid = dirs.iter().all(|&(s, c)| land_at(x + s * 6.0, y + c * 6.0) >= 0.8);
+                let sea = dirs.iter().any(|&(s, c)| land_at(x + s * 7.0, y + c * 7.0) >= 0.5 && land_at(x + s * 11.0, y + c * 11.0) < 0.3);
+                if solid && sea {
+                    return (home.0 + dx, home.1 + dy);
+                }
+            }
+        }
+        home
+    };
+    let mut bases: Vec<(i32, i32)> = Vec::new();
+    for gap in [HOME_GAP, HOME_GAP * 0.75, 0.0] {
+        for &k in &order {
+            let b = by_the_sea(tile_of(HOMES[k].0, HOMES[k].1));
+            if bases.len() < players && bases.iter().all(|&o| o != b && dist((o.0 as f32, o.1 as f32), (b.0 as f32, b.1 as f32)) >= gap) {
+                bases.push(b);
+            }
+        }
+    }
+    let all_bases: Vec<(f32, f32)> = bases.iter().map(|&(x, y)| (x as f32 + 0.5, y as f32 + 0.5)).collect();
+    let near_base = |p: (f32, f32)| all_bases.iter().map(|&b| dist(p, b)).fold(f32::MAX, f32::min);
+
+    let coast_scale = pick(1, 7.0, 11.0);
+    let water_at = 0.45;
+    let hill_at = pick(3, 0.64, 0.72);
+    let wood_scale = pick(4, 6.0, 10.0);
+    let wood_at = pick(5, 0.54, 0.62);
+    let mut terrain = vec![WATER; n];
+    let mut shade = vec![0u8; n];
+    let mut feat = vec![Feat::None; n];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            let p = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = dist(p, centre);
+            if d > RADIUS as f32 {
+                terrain[i] = EDGE;
+                shade[i] = 10;
+                continue;
+            }
+            let (lat, lon) = globe_of(p);
+            let noise = fbm(x as f32 / coast_scale, y as f32 / coast_scale, seed);
+            // The atlas says where the land is; noise makes the coast.
+            let mut ht = if lat < SOUTH + 1.0 { 0.1 } else { 0.08 + land(lat, lon) * 0.5 + noise * 0.24 };
+            let near = near_base(p);
+            if near < 9.0 {
+                ht = ht.max(0.53 + (9.0 - near) / 9.0 * 0.1);
+            }
+            let hills = fbm(x as f32 / 9.0 + 70.0, y as f32 / 9.0 + 70.0, seed ^ 0x411);
+            terrain[i] = if ht < water_at {
+                WATER
+            } else if ht < water_at + 0.03 {
+                SAND
+            } else if hills > hill_at && near > 14.0 {
+                HILL
+            } else {
+                GRASS
+            };
+            let drawn = if terrain[i] == WATER { ht } else { (water_at + 0.05 + (ht - water_at) * 0.4).min(0.62) + if terrain[i] == HILL { 0.18 } else { 0.0 } };
+            shade[i] = ((drawn - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
+            // Forests, thinner in the desert belts and the far north.
+            let dry_belt = (lat.abs() > 15.0 && lat.abs() < 32.0) || lat > 68.0;
+            let f = fbm(x as f32 / wood_scale + 40.0, y as f32 / wood_scale + 40.0, seed ^ 0xBEEF);
+            if matches!(terrain[i], GRASS | HILL) && f > wood_at + if dry_belt { 0.1 } else { 0.0 } && hash(x, y, seed ^ 7) < 0.82 && near > 11.0 {
+                feat[i] = Feat::Tree;
+            }
+        }
+    }
+
+    // Placing a cluster of a deposit, as on the other maps (`map::in_shape`).
+    let mut keep_clear: Vec<(f32, f32, f32)> = all_bases.iter().map(|&(x, y)| (x, y, 10.0)).collect();
+    let place = |terrain: &mut Vec<u8>, feat: &mut Vec<Feat>, keep: &[(f32, f32, f32)], cx: i32, cy: i32, f: Feat, r: f32, ring_max: i32| -> bool {
+        let far = reach(f, r);
+        let fits = |terrain: &[u8], feat: &[Feat], x: i32, y: i32| {
+            if dist((x as f32, y as f32), centre) > LAT_RADIUS - far - 3.0 {
+                return false;
+            }
+            let tiles = shape_tiles(terrain, w, h, f, x, y, r, seed);
+            tiles.iter().all(|&(a, b)| keep.iter().all(|&(kx, ky, k)| dist(((x + a) as f32, (y + b) as f32), (kx, ky)) > k + 1.5))
+                && shape_fits(terrain, feat, w, h, syms, &tiles, x, y, f, GAP, &[WATER, SAND, EDGE]) == (true, true)
+        };
+        let mut at = None;
+        'search: for liked in [true, false] {
+            for ring in 0..=if liked { ring_max.min(7) } else { ring_max } {
+                for k in 0..(8 * ring).max(1) {
+                    let (dx, dy) = if ring == 0 { (0, 0) } else { ring_point(ring, k) };
+                    let (x, y) = (cx + dx, cy + dy);
+                    if x < 4 || y < 4 || x >= w - 4 || y >= h - 4 {
+                        continue;
+                    }
+                    if (!liked || liking(terrain, w, h, f, x, y, far).is_some()) && fits(terrain, feat, x, y) {
+                        at = Some((x, y));
+                        break 'search;
+                    }
+                }
+            }
+        }
+        let Some((cx, cy)) = at else { return false };
+        let tiles = shape_tiles(terrain, w, h, f, cx, cy, r, seed);
+        let ri = far.ceil() as i32 + 3;
+        for dy in -ri..=ri {
+            for dx in -ri..=ri {
+                let i = ((cy + dy) * w + cx + dx) as usize;
+                let d = tiles.iter().map(|&(a, b)| (((dx - a) * (dx - a) + (dy - b) * (dy - b)) as f32).sqrt()).fold(f32::MAX, f32::min);
+                if d <= 2.3 && f != Feat::Tree && feat[i] == Feat::Tree {
+                    feat[i] = Feat::None;
+                }
+                if d < 0.5 {
+                    feat[i] = f;
+                }
+            }
+        }
+        true
+    };
+
+    // Round every town: what a Skirmish start has (dx, dy, kind, size),
+    // turned by chance for each.
+    let home: [(i32, i32, Feat, f32); 13] = [
+        (-8, -9, Feat::Tree, 3.4),
+        (6, -6, Feat::Fertile, 2.4),
+        (9, 4, Feat::Horses, 1.6),
+        (-6, 6, Feat::Stone, 1.5),
+        (2, 9, Feat::Game, 2.4),
+        (-2, -14, Feat::Iron, 1.5),
+        (14, 8, Feat::Clay, 1.5),
+        (14, -2, Feat::Hills, 1.6),
+        (-10, -2, Feat::Nitrate, 1.4),
+        (2, -19, Feat::Coal, 1.5),
+        (-12, 8, Feat::Tree, 3.0),
+        (-6, 15, Feat::Stone, 1.5),
+        (10, -13, Feat::Fertile, 2.2),
+    ];
+    for (bi, &(bx, by)) in bases.iter().enumerate() {
+        let turn = hash(bi as i32, 923, seed) * std::f32::consts::TAU;
+        for &(dx, dy, f, r) in &home {
+            let (fx, fy) = (dx as f32 * 1.5, dy as f32 * 1.5);
+            let (fx, fy) = (fx * turn.cos() - fy * turn.sin(), fx * turn.sin() + fy * turn.cos());
+            place(&mut terrain, &mut feat, &keep_clear, bx + fx.round() as i32, by + fy.round() as i32, f, r, 22);
+        }
+    }
+
+    // Barbarian sites: spots on land, apart from each other and from the
+    // towns; the further from every town, the later the era they reach.
+    let dry = |terrain: &[u8], cx: i32, cy: i32, r: i32| (-r..=r).all(|dy| (-r..=r).all(|dx| matches!(terrain[((cy + dy) * w + cx + dx) as usize], GRASS | HILL)));
+    let mut sites: Vec<Site> = Vec::new();
+    let mut tries = 0;
+    while sites.len() < 14 && tries < 6000 {
+        tries += 1;
+        let (x, y) = ((hash(tries, 61, seed) * w as f32) as i32, (hash(tries, 63, seed) * h as f32) as i32);
+        let p = (x as f32 + 0.5, y as f32 + 0.5);
+        if dist(p, centre) > LAT_RADIUS - 12.0 || !dry(&terrain, x, y, 7) {
+            continue;
+        }
+        let from = near_base(p);
+        if from < SITE_FROM_BASE || sites.iter().any(|s| dist(p, (s.x as f32 + 0.5, s.y as f32 + 0.5)) < SITE_GAP) {
+            continue;
+        }
+        sites.push(Site { x, y, era: (((from - SITE_FROM_BASE) / 20.0) as u8).min(5) });
+    }
+    for s in &sites {
+        keep_clear.push((s.x as f32 + 0.5, s.y as f32 + 0.5, 6.0));
+    }
+    for (si, s) in sites.iter().enumerate() {
+        let mut kinds: Vec<(Feat, f32)> = vec![(Feat::Tree, 3.4), (Feat::Stone, 1.5), (Feat::Fertile, 2.4), (Feat::Game, 2.4), (Feat::Fertile, 2.2), (Feat::Game, 2.2), (Feat::Stone, 1.5)];
+        if s.era >= 1 {
+            kinds.extend([(Feat::Iron, 1.5), (Feat::Clay, 1.6), (Feat::Hills, 1.6), (Feat::Horses, 1.6), (Feat::Clay, 1.5)]);
+        }
+        if s.era >= 2 {
+            kinds.extend([(Feat::Nitrate, 1.3), (Feat::Iron, 1.6)]);
+        }
+        if s.era >= 3 {
+            kinds.extend([(Feat::Coal, 1.6), (Feat::Iron, 1.6), (Feat::Clay, 1.6)]);
+        }
+        if s.era >= 4 {
+            kinds.extend([(Feat::Oil, 1.4), (Feat::Bauxite, 1.4), (Feat::Coal, 1.6)]);
+        }
+        let n0 = kinds.len();
+        for (j, &(f, r)) in kinds.iter().enumerate() {
+            let a0 = (j as f32 / n0 as f32 + hash(si as i32, 65, seed)) * std::f32::consts::TAU;
+            for t in 0..56 {
+                let a = a0 + t as f32 * 0.7;
+                let d = 9.0 + 2.0 * ((j + t) % 6) as f32 + if t >= 40 { 7.0 } else if t >= 24 { 4.0 } else { 0.0 };
+                if place(&mut terrain, &mut feat, &keep_clear, s.x + (a.cos() * d) as i32, s.y + (a.sin() * d) as i32, f, r, 3) {
+                    break;
+                }
+                if t == 55 {
+                    place(&mut terrain, &mut feat, &keep_clear, s.x, s.y, f, r, 18);
+                }
+            }
+        }
+    }
+
+    // The rest of the world's deposits, scattered over the land away from
+    // the towns: more of everything, and the later eras' (oil, bauxite,
+    // uranium) only out here.
+    let world: [(Feat, f32, usize); 12] = [
+        (Feat::Stone, 1.5, 8), (Feat::Fertile, 2.2, 8), (Feat::Game, 2.2, 8), (Feat::Horses, 1.6, 5), (Feat::Hills, 1.6, 5), (Feat::Iron, 1.5, 8),
+        (Feat::Clay, 1.6, 8), (Feat::Nitrate, 1.4, 7), (Feat::Coal, 1.5, 9), (Feat::Oil, 1.3, 9), (Feat::Bauxite, 1.4, 8), (Feat::Uranium, 1.3, 6),
+    ];
+    let mut t = 0;
+    for &(f, r, count) in &world {
+        let mut put = 0;
+        for _ in 0..300 {
+            if put >= count {
+                break;
+            }
+            t += 1;
+            let (x, y) = ((hash(t, 75, seed) * w as f32) as i32, (hash(t, 77, seed) * h as f32) as i32);
+            let p = (x as f32 + 0.5, y as f32 + 0.5);
+            if dist(p, centre) > LAT_RADIUS - 10.0 || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || near_base(p) < 34.0 {
+                continue;
+            }
+            put += place(&mut terrain, &mut feat, &keep_clear, x, y, f, r, 4) as usize;
+        }
+    }
+
+    // Clear the town and camp sites themselves.
+    let clear_round = |terrain: &mut Vec<u8>, feat: &mut Vec<Feat>, x: i32, y: i32, r: i32| {
+        for yy in y - r..=y + r {
+            for xx in x - r..=x + r {
+                let i = (yy * w + xx) as usize;
+                feat[i] = Feat::None;
+                terrain[i] = GRASS;
+            }
+        }
+    };
+    for &(x, y) in &bases {
+        clear_round(&mut terrain, &mut feat, x, y, 4);
+    }
+    for s in &sites {
+        clear_round(&mut terrain, &mut feat, s.x, s.y, 4);
+    }
+
+    // Tidy the shores (as in `map::generate`).
+    for _ in 0..2 {
+        let before = terrain.clone();
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let i = (y * w + x) as usize;
+                if feat[i] != Feat::None || before[i] == EDGE || all_bases.iter().any(|&b| dist((x as f32, y as f32), b) < 6.0) {
+                    continue;
+                }
+                let wet = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().filter(|&&(dx, dy)| matches!(before[((y + dy) * w + x + dx) as usize], WATER | EDGE)).count();
+                if before[i] != WATER && wet >= 6 {
+                    terrain[i] = WATER;
+                    shade[i] = shade[i].min(80);
+                } else if before[i] == WATER && wet <= 2 {
+                    terrain[i] = SAND;
+                    shade[i] = shade[i].max(92);
+                }
+            }
+        }
+    }
+
+    // The sea is the water the Arctic (the middle) reaches; anything else
+    // is a lake: shallow, for people to wade and boats to sail.
+    let mut sea = vec![false; n];
+    let start = (centre.1 as i32 * w + centre.0 as i32) as usize;
+    let mut stack = vec![(centre.0 as i32, centre.1 as i32)];
+    sea[start] = terrain[start] == WATER;
+    while let Some((x, y)) = stack.pop() {
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx >= 0 && ny >= 0 && nx < w && ny < h && !sea[(ny * w + nx) as usize] && terrain[(ny * w + nx) as usize] == WATER {
+                sea[(ny * w + nx) as usize] = true;
+                stack.push((nx, ny));
+            }
+        }
+    }
+    for i in 0..n {
+        if terrain[i] == WATER && !sea[i] {
+            terrain[i] = SHALLOW;
+            shade[i] = shade[i].max(88);
+        }
+    }
+
+    // Fishing spots: the sea nearest each town, and shoals over the oceans.
+    let open = |terrain: &[u8], x: i32, y: i32| (-1..=1).all(|dy| (-1..=1).all(|dx| terrain[((y + dy).clamp(0, h - 1) * w + (x + dx).clamp(0, w - 1)) as usize] == WATER));
+    let mut spots: Vec<(i32, i32)> = Vec::new();
+    for &(bx, by) in &bases {
+        let mut near: Vec<(i32, i32, i32)> = Vec::new();
+        for y in (by - 60).max(1)..(by + 60).min(h - 1) {
+            for x in (bx - 60).max(1)..(bx + 60).min(w - 1) {
+                if sea[(y * w + x) as usize] {
+                    near.push(((x - bx).pow(2) + (y - by).pow(2), x, y));
+                }
+            }
+        }
+        near.sort();
+        let mut mine = 0;
+        for (_, x, y) in near {
+            if mine >= FISH_NEAR_BASE {
+                break;
+            }
+            if open(&terrain, x, y) && spots.iter().all(|&(sx, sy)| (sx - x).abs().max((sy - y).abs()) >= 4) {
+                spots.push((x, y));
+                mine += 1;
+            }
+        }
+    }
+    let mut shoals = 0;
+    for t in 0..4000 {
+        if shoals >= 60 {
+            break;
+        }
+        let (x, y) = ((hash(t, 71, seed) * w as f32) as i32, (hash(t, 73, seed) * h as f32) as i32);
+        if x < 2 || y < 2 || x >= w - 2 || y >= h - 2 || !sea[(y * w + x) as usize] || !open(&terrain, x, y) {
+            continue;
+        }
+        if spots.iter().all(|&(sx, sy)| (sx - x).abs().max((sy - y).abs()) >= 12) {
+            spots.push((x, y));
+            shoals += 1;
+        }
+    }
+    for (x, y) in spots {
+        feat[(y * w + x) as usize] = Feat::Fish;
+    }
+
+    let mut deps = Vec::new();
+    let mut blocked = vec![false; n];
+    let mut dep_at = vec![-1; n];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            if matches!(terrain[i], WATER | EDGE) {
+                blocked[i] = true;
+                if feat[i] == Feat::Fish {
+                    dep_at[i] = deps.len() as i32;
+                    deps.push(Deposit { kind: Dep::Fish, tx: x, ty: y });
+                }
+                continue;
+            }
+            let kind = match feat[i] {
+                Feat::None | Feat::Fish => continue,
+                Feat::Tree => Dep::Forest,
+                Feat::Fertile => Dep::Fertile,
+                Feat::Stone => Dep::Stone,
+                Feat::Horses => Dep::Horses,
+                Feat::Game => Dep::Game,
+                Feat::Iron => Dep::Iron,
+                Feat::Clay => Dep::Clay,
+                Feat::Hills => Dep::Hills,
+                Feat::Nitrate => Dep::Nitrate,
+                Feat::Coal => Dep::Coal,
+                Feat::Oil => Dep::Oil,
+                Feat::Bauxite => Dep::Bauxite,
+                Feat::Uranium => Dep::Uranium,
+            };
+            dep_at[i] = deps.len() as i32;
+            blocked[i] = true;
+            deps.push(Deposit { kind, tx: x, ty: y });
+        }
+    }
+    // Beaches one tile wide, only by the water (as in `map::generate`).
+    let floor = (SHADE_BEACH * 255.0).ceil() as u8;
+    let wet = |x: i32, y: i32| x >= 0 && y >= 0 && x < w && y < h && terrain[(y * w + x) as usize] == WATER;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            if !matches!(terrain[i], WATER | EDGE) && !(-1..=1).any(|dy| (-1..=1).any(|dx| wet(x + dx, y + dy))) {
+                shade[i] = shade[i].max(floor);
+            }
+        }
+    }
+    let map = Map::new(w, h, terrain, shade, blocked, dep_at, vec![-1; n]);
+    (map, deps, bases, sites)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every town stands on land with what a start needs near it, the towns
+    /// are apart, nothing lies past the rim, and there are barbarian sites.
+    #[test]
+    fn every_start_has_its_deposits() {
+        for players in [2usize, 4] {
+            for seed in 0..5u32 {
+                let (m, deps, bases, sites) = generate_world(seed, players);
+                assert_eq!(bases.len(), players);
+                assert!(sites.len() >= 8, "seed {seed}: only {} sites", sites.len());
+                for (i, &(bx, by)) in bases.iter().enumerate() {
+                    assert_eq!(m.terrain[m.idx(bx, by)], GRASS, "seed {seed}: town {i} not on land");
+                    for o in &bases[i + 1..] {
+                        assert!(dist((bx as f32, by as f32), (o.0 as f32, o.1 as f32)) >= HOME_GAP * 0.75, "seed {seed}: towns too close");
+                    }
+                    for k in [Dep::Forest, Dep::Stone, Dep::Fertile, Dep::Game, Dep::Iron, Dep::Clay, Dep::Fish] {
+                        let far = if k == Dep::Fish { 70.0 } else { 45.0 };
+                        assert!(deps.iter().any(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32)) < far), "{players}p seed {seed}: town {i} has no {k:?} near");
+                    }
+                }
+                assert!(deps.iter().all(|d| m.terrain[m.idx(d.tx, d.ty)] != EDGE));
+            }
+        }
+    }
+
+    /// A picture (PPM) for a look: `VC_OUT=/tmp cargo test --release
+    /// world_picture -- --ignored --nocapture`, seeds 1 to 4.
+    #[test]
+    #[ignore]
+    fn world_picture() {
+        let out = std::env::var("VC_OUT").unwrap_or("/tmp".into());
+        for seed in 1..=4u32 {
+            let players = 2 + (seed as usize % 3);
+            let (m, deps, bases, sites) = generate_world(seed, players);
+            let mut px = vec![0u8; (m.w * m.h * 3) as usize];
+            let mut put = |x: i32, y: i32, c: [u8; 3]| {
+                let i = m.idx(x, y);
+                px[i * 3..i * 3 + 3].copy_from_slice(&c);
+            };
+            for y in 0..m.h {
+                for x in 0..m.w {
+                    put(x, y, match m.terrain[m.idx(x, y)] { EDGE => [12, 14, 30], WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], _ => [90, 170, 70] });
+                }
+            }
+            let mut count = [0u32; 16];
+            for d in &deps {
+                count[d.kind as usize] += 1;
+                put(d.tx, d.ty, match d.kind {
+                    Dep::Forest => [30, 100, 40], Dep::Stone => [150, 150, 150], Dep::Clay => [200, 110, 60], Dep::Iron => [150, 40, 40], Dep::Coal => [20, 20, 20],
+                    Dep::Fertile => [240, 220, 60], Dep::Game => [240, 150, 200], Dep::Horses => [130, 80, 30], Dep::Hills => [255, 255, 255], Dep::Nitrate => [200, 240, 240],
+                    Dep::Oil => [90, 0, 120], Dep::Bauxite => [255, 120, 0], Dep::Uranium => [0, 255, 0], _ => [200, 230, 255],
+                });
+            }
+            for &(bx, by) in &bases { for dy in -2..=2 { for dx in -2..=2 { put(bx + dx, by + dy, [230, 30, 30]); } } }
+            for s in &sites { for dy in -1..=1 { for dx in -1..=1 { put(s.x + dx, s.y + dy, [40 + s.era * 40, 0, 0]); } } }
+            println!("seed {seed} {players}p: {} sites (eras {:?}), deposits {:?}", sites.len(), sites.iter().map(|s| s.era).collect::<Vec<_>>(), &count[..14]);
+            let mut f = format!("P6 {} {} 255\n", m.w, m.h).into_bytes();
+            f.extend_from_slice(&px);
+            std::fs::write(format!("{out}/world-{seed}.ppm"), f).unwrap();
+        }
+    }
+}
