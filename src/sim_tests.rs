@@ -692,7 +692,7 @@ fn converters_hold_their_inputs_and_the_newest_stops_first() {
 #[test]
 fn counters_go_by_class_across_eras() {
     use Kind::*;
-    for (a, t, m) in [(Spearman, Horseman, 2.5), (Swordsman, Knight, 2.5), (Spearman, Knight, 2.5), (Knight, Crossbowman, 2.0), (Crossbowman, Swordsman, 1.5), (Trebuchet, Barracks, 3.0), (Trebuchet, Spearman, 0.3), (Archer, Barracks, 0.2), (Tower, Knight, 1.3), (Worker, Worker, 1.0)] {
+    for (a, t, m) in [(Spearman, Horseman, 2.5), (Swordsman, Knight, 2.5), (Spearman, Knight, 2.5), (Knight, Crossbowman, 2.0), (Crossbowman, Swordsman, 1.5), (Trebuchet, Barracks, 3.0), (Trebuchet, Spearman, 0.3), (Cannon, Musketeer, 0.75), (Archer, Barracks, 0.2), (Tower, Knight, 1.3), (Worker, Worker, 1.0)] {
         assert_eq!(damage_mult(a, t), m, "{a:?} against {t:?}");
     }
 }

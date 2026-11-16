@@ -28,6 +28,7 @@ await pg.waitForFunction(id => { readWorld(); const i = byId.get(id); return !(E
 check(await pg.evaluate(() => stat(K.LumberCamp, 7)) === 1, "a lumber camp takes one worker");
 await pg.waitForFunction(id => { readWorld(); return E(byId.get(id), F.residents) === 1; }, camp, { timeout: 20000 });
 check(true, "its builder stays on as its worker");
+check(await pg.evaluate(() => { for (let i = 0; i < entCount; i++) if (E(i, F.kind) === K.Worker && E(i, F.order) === 7 && E(i, F.residents) === K.LumberCamp) return jobOf(K.LumberCamp, 7) === "axe" && !!jobTool("axe"); return false; }), "that worker is known as a lumberjack (an axe in hand)");
 // The Capitol: the next newcomer and the cap.
 const cap = await pg.evaluate(() => { readWorld(); const i = findOwn(K.Capitol); setSelection([E(i, F.id)]); renderSelection(true); return $("sel").textContent; });
 check(/People \d+ of \d+ beds/.test(cap) && (/Next newcomer/.test(cap) || /Every bed is taken/.test(cap)), "the Capitol shows people, the cap, and the next newcomer");

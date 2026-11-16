@@ -1076,6 +1076,167 @@ const entMats = () => [entMat, hitMat, entMatSkin, hitMatSkin];
 const depthMat = () => new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
 let depthSkin = null;
 const modelCache = new Map();
+// What a worker carries shows their job: the tool for the building they
+// work at (render buffer: `residents` holds its kind), a hammer for a
+// builder, the hoe the model comes with for the fields and for free hands.
+// Each is a mesh in the hand's frame, like the model's own tool: the grip
+// at the origin, the shaft up +y, the working end towards +x.
+let JOB_OF = null;
+const jobTools = new Map();
+function jobOf(place, order) {
+  if (order === 6) return "hammer";
+  JOB_OF ??= (() => {
+    const m = {};
+    const set = (job, ...ks) => { for (const k of ks) m[k] = job; };
+    set("bow", K.HuntingLodge);
+    set("axe", K.LumberCamp, K.Sawmill, K.Carpenter);
+    set("pick", K.Quarry, K.Stoneworks, K.IronMine, K.CoalMine, K.BauxiteMine, K.UraniumMine, K.SaltpeterWorks);
+    set("shovel", K.Brickworks, K.Kiln, K.CoalYard, K.PowerPlant);
+    set("fork", K.Pasture, K.SheepFarm, K.Circus);
+    set("basket", K.Orchard, K.Bakery, K.Brewery, K.Weaver, K.Cannery);
+    set("hammer", K.SteelMill, K.Factory, K.TankWorks, K.SiegeWorkshop, K.OilWell);
+    set("spanner", K.PowderMill, K.ExplosivesWorks, K.HaberBosch, K.RadioFactory, K.CarPlant, K.TvPlant, K.Reactor);
+    set("paper", K.Printer, K.Press);
+    return m;
+  })();
+  return JOB_OF[place] || "";
+}
+function jobTool(job) {
+  if (jobTools.has(job)) return jobTools.get(job);
+  const t = new Model();
+  const shaft = (len, col = WOOD) => t.add(cyl(0.014, 0.014, len, 6), col, 0, len / 2 - 0.13, 0);
+  if (job === "axe") {
+    shaft(0.5);
+    t.add(box(0.1, 0.1, 0.03), IRON, 0.055, 0.31, 0);
+    t.add(box(0.03, 0.13, 0.03), "#c5cad0", 0.11, 0.31, 0); // the edge
+  } else if (job === "pick") {
+    shaft(0.5);
+    for (const sx of [-1, 1]) { const g = box(0.15, 0.03, 0.03); g.rotateZ(-sx * 0.3); t.add(g, IRON, sx * 0.07, 0.345, 0); }
+  } else if (job === "hammer") {
+    shaft(0.4);
+    t.add(box(0.13, 0.07, 0.07), IRON, 0, 0.27, 0);
+  } else if (job === "shovel") {
+    shaft(0.46);
+    t.add(box(0.025, 0.13, 0.1), IRON, 0, 0.39, 0);
+  } else if (job === "fork") {
+    shaft(0.48);
+    t.add(box(0.02, 0.02, 0.11), IRON, 0, 0.35, 0);
+    for (const z of [-0.045, 0, 0.045]) t.add(box(0.015, 0.11, 0.015), IRON, 0, 0.41, z);
+  } else if (job === "bow") {
+    // An arc of short staves and its string, held upright.
+    for (let i = 0; i < 9; i++) {
+      const a = -1.25 + i * (2.5 / 8), g = box(0.026, 0.075, 0.026); g.rotateZ(a);
+      t.add(g, "#6b4a2a", Math.cos(a) * 0.19 - 0.12, Math.sin(a) * 0.23 + 0.02, 0);
+    }
+    t.add(cyl(0.005, 0.005, 0.43, 3), "#e8dcc0", -0.06, 0.02, 0);
+  } else if (job === "basket") {
+    t.add(cyl(0.075, 0.055, 0.09, 8), "#b08a4a", 0.02, -0.1, 0);
+    t.add(cyl(0.06, 0.06, 0.02, 8), "#c0392b", 0.02, -0.05, 0); // what's in it
+  } else if (job === "spanner") {
+    t.add(box(0.025, 0.3, 0.015), IRON, 0, 0.04, 0);
+    t.add(box(0.07, 0.05, 0.015), IRON, 0, 0.2, 0);
+  } else if (job === "paper") {
+    t.add(box(0.012, 0.16, 0.12), "#efe9d8", 0.03, 0.0, 0);
+  } else { jobTools.set(job, null); return null; }
+  const g = t.build();
+  jobTools.set(job, g);
+  return g;
+}
+
+// The same job shows from far off in the hat and shirt: the worker's body
+// with those two recoloured (the team's band and scarf stay). [hat, shirt].
+const JOB_DRESS = {
+  axe: ["#7a4a2a", "#a23b2c"], pick: ["#73777d", "#5f6168"], hammer: [null, "#c0702a"], shovel: ["#8f5f3c", "#a35a34"],
+  fork: [null, "#718f4c"], bow: ["#3f5a2c", "#566f3a"], basket: [null, "#e6dcc6"], spanner: ["#3c3f46", "#50545c"], paper: ["#2c2c2e", "#d8d2c0"],
+};
+// And the hat itself: each job its own shape, with the team's colour on it.
+// Built in the model's own space (the head's top is near y = 0.6, the face
+// looks along +x) and hung on the head bone; the body then loses its straw
+// hat (`jobBody`). Jobs not here keep the straw hat.
+const jobHats = new Map();
+function jobHat(job, owner) {
+  const key = job + owner;
+  if (jobHats.has(key)) return jobHats.get(key);
+  const t = new Model(), team = PCOL[owner], Y = 0.585;
+  const dome = (r, col, y = Y, sy = 1) => { const g = new THREE.SphereGeometry(r, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2); g.scale(1, sy, 1); t.add(g, col, 0, y, 0); };
+  const band = (r, y = Y + 0.012, h = 0.028) => t.add(cyl(r, r, h, 12), team, 0, y, 0);
+  if (job === "axe") {
+    // A knitted cap with a bobble.
+    dome(0.118, "#a23b2c", Y - 0.01, 1.05); band(0.121);
+    t.add(ball(0.035, 1), "#efe6d2", 0, Y + 0.125, 0);
+  } else if (job === "pick") {
+    // A miner's helmet with a lamp.
+    dome(0.125, "#8a8f96", Y - 0.01, 0.95); band(0.128);
+    t.add(cyl(0.15, 0.15, 0.015, 12), "#73777d", 0.02, Y, 0);
+    t.add(box(0.03, 0.045, 0.045), "#f2d24b", 0.115, Y + 0.05, 0);
+  } else if (job === "hammer") {
+    // A flat cap with a peak.
+    t.add(cyl(0.125, 0.13, 0.05, 12), "#c0702a", 0, Y + 0.03, 0); band(0.132, Y + 0.008, 0.02);
+    t.add(box(0.1, 0.014, 0.16), "#8f5220", 0.14, Y + 0.012, 0);
+  } else if (job === "shovel") {
+    // A floppy wide hat, low in the crown.
+    const brim = cone(0.2, 0.05, 12); t.add(brim, "#8f5f3c", 0, Y + 0.02, 0);
+    t.add(cyl(0.095, 0.11, 0.07, 10), "#7d5233", 0, Y + 0.055, 0); band(0.113, Y + 0.03, 0.022);
+  } else if (job === "fork") {
+    // A herder's wide pointed straw hat.
+    t.add(cone(0.23, 0.15, 14), "#d9b85c", 0, Y + 0.07, 0); band(0.085, Y + 0.085, 0.02);
+  } else if (job === "bow") {
+    // A hunter's pointed cap, tipped back, with a feather.
+    const cap = cone(0.125, 0.2, 10); cap.rotateZ(0.5); t.add(cap, "#3f5a2c", -0.04, Y + 0.075, 0);
+    band(0.124, Y + 0.008, 0.024);
+    const feather = box(0.012, 0.16, 0.035); feather.rotateZ(0.7); t.add(feather, "#d8452e", -0.06, Y + 0.12, 0.09);
+  } else if (job === "basket") {
+    // A white kerchief tied at the back.
+    dome(0.119, "#efe9dc", Y - 0.015, 1.0); band(0.122, Y + 0.005, 0.02);
+    t.add(box(0.06, 0.05, 0.07), "#efe9dc", -0.125, Y - 0.005, 0);
+  } else if (job === "spanner") {
+    // A hard hat.
+    dome(0.127, "#e8b02a", Y - 0.01, 0.9); band(0.13);
+    t.add(cyl(0.145, 0.145, 0.014, 12), "#c9961f", 0.015, Y, 0);
+    t.add(box(0.2, 0.02, 0.03), "#c9961f", 0, Y + 0.105, 0);
+  } else if (job === "paper") {
+    // A printer's tall black hat.
+    t.add(cyl(0.16, 0.16, 0.014, 12), "#232326", 0, Y + 0.005, 0);
+    t.add(cyl(0.095, 0.1, 0.15, 12), "#2c2c2e", 0, Y + 0.085, 0); band(0.103, Y + 0.03, 0.03);
+  } else { jobHats.set(key, null); return null; }
+  // Sit it on the crown of the head, above the brows.
+  const g = t.build();
+  g.translate(0, -Y, 0); g.scale(0.86, 0.86, 0.86); g.translate(0, 0.612, 0);
+  jobHats.set(key, g);
+  return g;
+}
+const jobBodies = new Map();
+function jobBody(job, owner) {
+  const dress = JOB_DRESS[job], m = glbModels && glbModels[glbName(K.Worker)];
+  if (!dress || !m || !m.bone) return null;
+  const key = job + owner;
+  if (jobBodies.has(key)) return jobBodies.get(key);
+  const geo = cachedModel(K.Worker, owner).body.clone();
+  const col = geo.attributes.color.array;
+  const BODY = RIG_BONES.indexOf("body"), HEAD = RIG_BONES.indexOf("head");
+  // Straw is yellower than skin, the tunic lighter than the belt. Each
+  // vertex keeps its own shade (the baked shadowing) under the new colour.
+  const straw = new THREE.Color("#e0c46a"), tunic = new THREE.Color("#c9ad78");
+  const hat = dress[0] && new THREE.Color(dress[0]), shirt = dress[1] && new THREE.Color(dress[1]);
+  // A job with a hat of its own: the straw hat and its band fold away into
+  // the head (`jobHat` goes on instead).
+  const ownHat = !!jobHat(job, owner), pos = geo.attributes.position.array, hp = m.pivots.head;
+  for (let k = 0; k < m.bone.length; k++) {
+    const r = col[k * 3], g = col[k * 3 + 1], b = col[k * 3 + 2], bone = Math.round(m.bone[k]);
+    const isStraw = bone === HEAD && !m.team[k] && r > 0.2 && b / r < 0.27 && g / r > 0.4;
+    if (ownHat && bone === HEAD && (isStraw || m.team[k])) { pos[k * 3] = hp[0]; pos[k * 3 + 1] = hp[1] + 0.05; pos[k * 3 + 2] = hp[2]; continue; }
+    if (m.team[k]) continue;
+    let to = null, from = null;
+    if (isStraw && hat) { to = hat; from = straw; }
+    else if (bone === BODY && shirt && g / r > 0.6) { to = shirt; from = tunic; }
+    if (!to) continue;
+    const f = r / from.r;
+    col[k * 3] = to.r * f; col[k * 3 + 1] = to.g * f; col[k * 3 + 2] = to.b * f;
+  }
+  jobBodies.set(key, geo);
+  return geo;
+}
+
 function cachedModel(kind, owner) {
   const key = kind * 64 + owner;
   if (!modelCache.has(key)) modelCache.set(key, glbModel(kind, owner) || (isBld(kind) ? { body: buildingModel(kind, owner) } : unitModel(kind, owner)));
@@ -2174,7 +2335,18 @@ function animateRig(o, kind, anim, t, dt, hit) {
     R.head.z = -o.rs.lean * 0.4;
     const tb = R[o.toolBone];
     let toolWorld = null; // the tool's angle in the unit's frame, or null to follow the arm
-    if (anim === 2 || (anim === 3 && kind === K.Worker)) {
+    if (anim === 2 && (o.job === "bow" || o.job === "basket" || o.job === "paper")) {
+      if (o.job === "bow") {
+        // A hunter: the bow held out, drawn and loosed now and then.
+        const c = (T * 0.45) % 1, draw = c < 0.7 ? smooth(c / 0.5) : 0;
+        R.armR.z = 1.4; R.armL.z = 1.1 + (1 - draw) * 0.3; R.armL.x = -0.5 * draw;
+        toolWorld = 0;
+      } else {
+        // Carrying: the arm bent, the load swaying a little.
+        R.armR.z = 0.5 + Math.sin(T * 2.5) * 0.08;
+        toolWorld = 0;
+      }
+    } else if (anim === 2 || (anim === 3 && kind === K.Worker)) {
       // A big overhead chop: wind up, strike, recover.
       const c = (T * 1.5) % 1;
       const a = c < 0.55 ? 0.3 + (c / 0.55) * 2.4 : c < 0.68 ? 2.7 - ((c - 0.55) / 0.13) * 2.6 : 0.1 + ((c - 0.68) / 0.32) * 0.2;
@@ -2212,7 +2384,11 @@ function animateRig(o, kind, anim, t, dt, hit) {
       toolWorld = 0;
     } else {
       toolWorld = kind === K.Spearman || kind === K.Swordsman ? -0.25 : kind === K.Musketeer || kind === K.Rifleman ? 1.25 : kind === K.MachineGunner || kind === K.Infantry ? 0 : kind === K.Archer || kind === K.Crossbowman ? 0 : null;
-      if (kind === K.Worker) o.toolMesh.rotation.z = -0.4;
+      if (kind === K.Worker) {
+        if (o.job === "bow" || o.job === "paper") { R.armR.z = 0.9; toolWorld = 0; }   // held up in front
+        else if (o.job === "basket") toolWorld = 0;
+        else o.toolMesh.rotation.z = -0.4;
+      }
     }
     if (toolWorld != null) o.toolMesh.rotation.z = toolWorld - tb.z - (o.toolBone === "armR" || o.toolBone === "armL" ? R.body.z : 0);
   }
@@ -2286,6 +2462,26 @@ function render3d(alpha, now, dt) {
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
     o.residents = E(i, F.residents);
+    if (kind === K.Worker && o.toolMesh) {
+      const job = jobOf(o.residents, E(i, F.order));
+      if (o.job !== job) {
+        o.job = job;
+        o.ownTool ??= o.toolMesh.geometry;
+        o.toolMesh.geometry = jobTool(job) || o.ownTool;
+        if (o.bones) {
+          o.ownBody ??= o.body.geometry; o.body.geometry = jobBody(job, o.owner) || o.ownBody;
+          const hat = JOB_DRESS[job] && o.body.geometry !== o.ownBody ? jobHat(job, o.owner) : null;
+          if (hat && !o.hat) {
+            const hp = cachedModel(K.Worker, o.owner).rig.pivots.head;
+            o.hat = new THREE.Mesh(hat, entMat);
+            o.hat.castShadow = o.hat.receiveShadow = true;
+            o.hat.position.set(-hp[0], -hp[1], -hp[2]);
+            o.bones.head.add(o.hat);
+          }
+          if (o.hat) { o.hat.visible = !!hat; if (hat) o.hat.geometry = hat; }
+        }
+      }
+    }
     // Every finished Capitol has its town square (people.rs: newcomers come
     // to the one nearest their house, and free workers wait at the nearest).
     if (o.campfire) o.campfire.visible = !(E(i, F.flags) & 2);
@@ -2387,6 +2583,7 @@ function render3d(alpha, now, dt) {
     const mat = (flags & 8) ? hitMat : entMat;
     o.body.material = o.body.isSkinnedMesh ? ((flags & 8) ? hitMatSkin : entMatSkin) : mat;
     if (o.toolMesh) o.toolMesh.material = mat;
+    if (o.hat) o.hat.material = mat;
     setRing(o, !!(flags & 1), W.kind_radius(kind) * 1.45 * (isNaval(kind) ? BOAT_SCALE : 1));
   }
 

@@ -325,56 +325,61 @@ const fn converter(hp: f32, cost: Slots, takes: Slots, makes: Slots, workers: u8
 
 use Res::*;
 
-// Units. Every number here is a first guess, to be tuned in play. Every
-// unit is a worker who went to train (see `Game::queue_unit`).
+// Units. Every unit is a worker who went to train (see `Game::queue_unit`).
+// A worker fights badly and falls quickly: people are no army.
+// Each era's soldiers are a clear step up from the last: about a third more
+// health and 40% more damage a second in the same role, so one beats its
+// forerunner with half its health left, and two of the old still beat one of
+// the new (`diag_fights` prints these fights). Riders and ships see far
+// (scouts); guns see about as far as they shoot.
 //                                    hp   atk  range  cd   speed sight cost          time
-static WORKER: Stats = unit(45.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
+static WORKER: Stats = unit(25.0, 3.0, 0.4, 1.5, 2.3, 6.0, &[], 10.0);
 static SPEARMAN: Stats = unit(95.0, 8.0, 0.4, 1.5, 2.1, 6.0, &[(Wood, 1)], 15.0);
 static ARCHER: Stats = unit(55.0, 6.0, 5.5, 1.8, 2.1, 8.0, &[(Wood, 1)], 16.0);
-static HORSEMAN: Stats = unit(120.0, 9.0, 0.4, 1.6, 3.6, 7.0, &[(Horses, 1)], 20.0);
+static HORSEMAN: Stats = unit(120.0, 9.0, 0.4, 1.6, 3.6, 9.0, &[(Horses, 1)], 20.0);
 // Medieval: better numbers in the same classes, costing iron.
-static SWORDSMAN: Stats = unit(140.0, 11.0, 0.4, 1.4, 2.0, 6.0, &[(Iron, 1)], 18.0);
-static CROSSBOWMAN: Stats = unit(70.0, 9.0, 6.0, 2.2, 2.0, 8.0, &[(Wood, 1), (Iron, 1)], 18.0);
-static KNIGHT: Stats = unit(190.0, 14.0, 0.4, 1.6, 3.3, 7.0, &[(Horses, 1), (Iron, 1)], 24.0);
+static SWORDSMAN: Stats = unit(140.0, 12.0, 0.4, 1.4, 2.0, 6.0, &[(Iron, 1)], 18.0);
+static CROSSBOWMAN: Stats = unit(80.0, 11.0, 6.0, 2.2, 2.0, 8.0, &[(Wood, 1), (Iron, 1)], 18.0);
+static KNIGHT: Stats = unit(190.0, 14.0, 0.4, 1.6, 3.3, 9.0, &[(Horses, 1), (Iron, 1)], 24.0);
 // Slow, long reach, poor against people, crushing against walls.
 static TREBUCHET: Stats = unit(150.0, 40.0, 9.0, 5.0, 1.0, 9.0, &[(Wood, 3)], 30.0);
 // Gunpowder: firearms. Musketeers are line infantry that shoot (bayonets
 // keep riders off); dragoons ride and shoot; cannon outrange trebuchets.
-static MUSKETEER: Stats = unit(130.0, 16.0, 4.5, 2.8, 2.0, 7.0, &[(Iron, 1), (Gunpowder, 1)], 20.0);
-static DRAGOON: Stats = unit(170.0, 13.0, 3.0, 2.2, 3.4, 8.0, &[(Horses, 1), (Gunpowder, 1)], 24.0);
-static CANNON: Stats = unit(180.0, 55.0, 10.0, 6.0, 1.1, 9.0, &[(Iron, 2), (Gunpowder, 1)], 32.0);
+static MUSKETEER: Stats = unit(180.0, 24.0, 4.5, 2.6, 2.0, 7.0, &[(Iron, 1), (Gunpowder, 1)], 20.0);
+static DRAGOON: Stats = unit(240.0, 24.0, 3.0, 2.2, 3.4, 10.0, &[(Horses, 1), (Gunpowder, 1)], 24.0);
+static CANNON: Stats = unit(240.0, 70.0, 10.0, 6.0, 1.1, 10.0, &[(Iron, 2), (Gunpowder, 1)], 32.0);
 // Industrial: rifles and machine guns in steel; field guns fire shells
 // (explosives) and are drawn by horses.
-static RIFLEMAN: Stats = unit(150.0, 20.0, 6.0, 2.2, 2.1, 8.0, &[(Steel, 1), (Gunpowder, 1)], 22.0);
-static MACHINE_GUNNER: Stats = unit(120.0, 9.0, 6.5, 0.5, 1.8, 8.0, &[(Steel, 1), (Gunpowder, 2)], 26.0);
-static FIELD_GUN: Stats = unit(220.0, 80.0, 12.0, 5.0, 1.6, 10.0, &[(Steel, 2), (Explosives, 1), (Horses, 1)], 34.0);
+static RIFLEMAN: Stats = unit(240.0, 30.0, 6.0, 2.0, 2.1, 8.0, &[(Steel, 1), (Gunpowder, 1)], 22.0);
+static MACHINE_GUNNER: Stats = unit(150.0, 9.0, 7.0, 0.5, 1.8, 9.0, &[(Steel, 1), (Gunpowder, 2)], 26.0);
+static FIELD_GUN: Stats = unit(320.0, 110.0, 12.0, 5.0, 1.6, 11.0, &[(Steel, 2), (Explosives, 1), (Horses, 1)], 34.0);
 // Modern: infantry with automatic weapons (they can shoot at aircraft),
 // tanks, and aircraft. Fighters fight in the air and strafe; bombers fly
 // over buildings and drop their bombs (range 1: right over the target).
-static INFANTRY: Stats = unit(170.0, 14.0, 6.0, 1.0, 2.2, 8.0, &[(Steel, 1), (Explosives, 1)], 22.0);
-static TANK: Stats = unit(520.0, 45.0, 7.0, 2.5, 2.6, 8.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
-static FIGHTER: Stats = unit(160.0, 18.0, 4.0, 0.8, 6.0, 11.0, &[(Aluminum, 1), (Oil, 1)], 28.0);
-static BOMBER: Stats = unit(260.0, 140.0, 1.0, 4.0, 4.0, 9.0, &[(Aluminum, 2), (Oil, 1), (Explosives, 2)], 40.0);
+static INFANTRY: Stats = unit(320.0, 20.0, 6.5, 1.0, 2.2, 9.0, &[(Steel, 1), (Explosives, 1)], 22.0);
+static TANK: Stats = unit(800.0, 60.0, 7.0, 2.0, 2.6, 9.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
+static FIGHTER: Stats = unit(240.0, 26.0, 4.0, 0.8, 6.0, 11.0, &[(Aluminum, 1), (Oil, 1)], 28.0);
+static BOMBER: Stats = unit(380.0, 200.0, 1.0, 4.0, 4.0, 10.0, &[(Aluminum, 2), (Oil, 1), (Explosives, 2)], 40.0);
 // Atomic: rocket artillery outranges everything; jets are faster, tougher fighters.
-static ROCKET_ARTILLERY: Stats = unit(200.0, 70.0, 13.0, 4.0, 2.2, 10.0, &[(Steel, 2), (Oil, 1), (Explosives, 2)], 36.0);
-static JET: Stats = unit(220.0, 26.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
+static ROCKET_ARTILLERY: Stats = unit(420.0, 100.0, 13.0, 3.5, 2.2, 12.0, &[(Steel, 2), (Oil, 1), (Explosives, 2)], 36.0);
+static JET: Stats = unit(340.0, 36.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil, 2)], 32.0);
 // Boats. A fishing boat makes fish while it lies still on a fish shoal
 // (it's crewed then, see `Game::resolve`); a transport carries `TRANSPORT_CAPACITY` land
 // units. Warships shoot from the water, so they hold the coasts: galleys
 // (archers on deck), cogs, galleons and ironclads (guns, shells), destroyers
 // (fast, and they shoot at aircraft).
 //                                       hp   atk  range  cd   speed sight cost          time
-static FISHING_BOAT: Stats = Stats { produces: &[(Fish, 3)], ..unit(70.0, 0.0, 0.0, 1.0, 2.4, 6.0, &[(Wood, 1)], 14.0) };
-static TRANSPORT: Stats = unit(200.0, 0.0, 0.0, 1.0, 2.8, 7.0, &[(Wood, 2)], 18.0);
-static GALLEY: Stats = unit(200.0, 7.0, 5.0, 1.8, 2.6, 8.0, &[(Wood, 2)], 20.0);
-static COG: Stats = unit(300.0, 10.0, 6.0, 1.9, 2.5, 8.0, &[(Wood, 2), (Iron, 1)], 24.0);
-static GALLEON: Stats = unit(420.0, 40.0, 8.0, 4.0, 2.4, 9.0, &[(Wood, 3), (Iron, 1), (Gunpowder, 1)], 32.0);
-static IRONCLAD: Stats = unit(700.0, 60.0, 10.0, 4.0, 2.6, 10.0, &[(Steel, 2), (Coal, 1), (Explosives, 1)], 36.0);
-static SUBMARINE: Stats = unit(420.0, 120.0, 5.0, 5.0, 2.8, 8.0, &[(Steel, 2), (Explosives, 1)], 34.0);
-static NUCLEAR_SUB: Stats = unit(650.0, 90.0, 5.0, 5.0, 3.0, 9.0, &[(Steel, 3), (Uranium, 1)], 45.0);
+static FISHING_BOAT: Stats = Stats { produces: &[(Fish, 3)], ..unit(70.0, 0.0, 0.0, 1.0, 2.4, 8.0, &[(Wood, 1)], 14.0) };
+static TRANSPORT: Stats = unit(220.0, 0.0, 0.0, 1.0, 2.8, 10.0, &[(Wood, 2)], 18.0);
+static GALLEY: Stats = unit(220.0, 7.0, 5.0, 1.8, 2.6, 11.0, &[(Wood, 2)], 20.0);
+static COG: Stats = unit(320.0, 11.0, 6.0, 1.9, 2.5, 11.0, &[(Wood, 2), (Iron, 1)], 24.0);
+static GALLEON: Stats = unit(480.0, 44.0, 8.0, 4.0, 2.4, 12.0, &[(Wood, 3), (Iron, 1), (Gunpowder, 1)], 32.0);
+static IRONCLAD: Stats = unit(760.0, 66.0, 10.0, 4.0, 2.6, 13.0, &[(Steel, 2), (Coal, 1), (Explosives, 1)], 36.0);
+static SUBMARINE: Stats = unit(500.0, 130.0, 5.0, 5.0, 2.8, 8.0, &[(Steel, 2), (Explosives, 1)], 34.0);
+static NUCLEAR_SUB: Stats = unit(750.0, 100.0, 5.0, 5.0, 3.0, 9.0, &[(Steel, 3), (Uranium, 1)], 45.0);
 // No guns of its own: it fights only through its aircraft.
-static CARRIER: Stats = unit(1600.0, 0.0, 0.0, 0.0, 2.2, 11.0, &[(Steel, 4), (Oil, 2), (Aluminum, 1)], 50.0);
-static DESTROYER: Stats = unit(800.0, 30.0, 9.0, 1.4, 3.6, 11.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
+static CARRIER: Stats = unit(2000.0, 0.0, 0.0, 0.0, 2.2, 15.0, &[(Steel, 4), (Oil, 2), (Aluminum, 1)], 50.0);
+static DESTROYER: Stats = unit(1000.0, 34.0, 9.0, 1.4, 3.6, 14.0, &[(Steel, 2), (Oil, 1), (Explosives, 1)], 36.0);
 
 // The Capitol makes a little of the basics by itself, with no workers, and
 // has `CAPITOL_BEDS` beds, so a game can start with nobody and no houses:
@@ -397,7 +402,7 @@ static TOWER_BLOCK: Stats = building(1600.0, 4.0, &[(Stone, 2), (Brick, 2), (Ste
 static BARRACKS: Stats = building(800.0, 6.0, &[(Wood, 3)], 30.0, 3);
 static RANGE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 1)], 30.0, 3);
 static STABLE: Stats = building(800.0, 6.0, &[(Wood, 3), (Stone, 2)], 35.0, 3);
-static TOWER: Stats = Stats { attack: 7.0, range: 7.0, cooldown: 1.5, ..building(700.0, 9.0, &[(Wood, 1), (Stone, 3)], 30.0, 2) };
+static TOWER: Stats = Stats { attack: 7.0, range: 7.0, cooldown: 1.5, ..building(700.0, 11.0, &[(Wood, 1), (Stone, 3)], 30.0, 2) };
 
 // Extractors. A lumber camp is free, so a player who has every wood slot in
 // use can always make more: there is no way to get stuck.
@@ -436,44 +441,46 @@ static PRINTER: Stats = converter(400.0, &[(Stone, 1), (Brick, 2)], &[(Wood, 2)]
 static CIRCUS: Stats = Stats { produces: &[(Circus, 8)], consumes: &[(Horses, 2)], workers: 3, ..building(900.0, 5.0, &[(Wood, 4), (Stone, 3), (Brick, 3)], 40.0, 3) };
 
 // Industrial.
-static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 16)], 2, Some(Dep::Coal), 20.0, 2);
-static STEEL_MILL: Stats = Stats { produces: &[(Steel, 12)], consumes: &[(Iron, 2), (Coal, 2)], workers: 3, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
-static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 8)], 2, 25.0);
-static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 10)], 2, 22.0);
-static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 10)], 1, 16.0);
-static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 10)], 2, 22.0);
+static COAL_MINE: Stats = extractor(600.0, &[(Wood, 2), (Brick, 1)], &[(Coal, 16)], 3, Some(Dep::Coal), 20.0, 2);
+static STEEL_MILL: Stats = Stats { produces: &[(Steel, 30)], consumes: &[(Iron, 4), (Coal, 4)], workers: 4, ..building(1000.0, 4.0, &[(Stone, 2), (Brick, 3)], 35.0, 3) };
+static EXPLOSIVES_WORKS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Nitrate, 2), (Coal, 1)], &[(Explosives, 8)], 3, 25.0);
+static CANNERY: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Fish, 1), (Meat, 1)], &[(CannedFood, 10)], 3, 22.0);
+static COAL_YARD: Stats = converter(450.0, &[(Wood, 1), (Brick, 1)], &[(Coal, 2)], &[(Heating, 10)], 2, 16.0);
+static PRESS: Stats = converter(600.0, &[(Brick, 2), (Steel, 1)], &[(Wood, 2)], &[(Newspapers, 10)], 3, 22.0);
 static FACTORY: Stats = building(1100.0, 6.0, &[(Brick, 4), (Steel, 2)], 40.0, 3);
 
 // Modern. Power plants burn coal; the Haber–Bosch plant makes nitrate
 // from coal and electricity, for players with no saltpeter.
-static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 12)], 2, Some(Dep::Oil), 25.0, 2);
-static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 12)], 2, Some(Dep::Bauxite), 25.0, 2);
-static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 16)], consumes: &[(Coal, 2)], workers: 2, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
-static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 12)], 2, 30.0);
-static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 10)], 2, 25.0);
+static OIL_WELL: Stats = extractor(600.0, &[(Steel, 1), (Brick, 1)], &[(Oil, 12)], 4, Some(Dep::Oil), 25.0, 2);
+static BAUXITE_MINE: Stats = extractor(600.0, &[(Wood, 1), (Steel, 1)], &[(Aluminum, 12)], 4, Some(Dep::Bauxite), 25.0, 2);
+static POWER_PLANT: Stats = Stats { produces: &[(Electricity, 16)], consumes: &[(Coal, 2)], workers: 4, ..building(1000.0, 4.0, &[(Brick, 3), (Steel, 2)], 35.0, 3) };
+static HABER_BOSCH: Stats = converter(800.0, &[(Brick, 2), (Steel, 2)], &[(Coal, 1), (Electricity, 2)], &[(Nitrate, 12)], 4, 30.0);
+static RADIO_FACTORY: Stats = converter(700.0, &[(Brick, 2), (Steel, 1)], &[(Steel, 1), (Electricity, 1)], &[(Radios, 10)], 4, 25.0);
 static TANK_WORKS: Stats = building(1300.0, 6.0, &[(Brick, 3), (Steel, 3)], 40.0, 3);
 // A big job: three builders.
 static AIRFIELD: Stats = Stats { builders: 3, ..building(1200.0, 8.0, &[(Brick, 2), (Steel, 2), (Aluminum, 1)], 45.0, 4) };
 
 // Atomic. The reactor makes far more electricity than a coal plant.
-static URANIUM_MINE: Stats = extractor(700.0, &[(Steel, 2), (Brick, 1)], &[(Uranium, 8)], 2, Some(Dep::Uranium), 30.0, 2);
-static REACTOR: Stats = Stats { produces: &[(Electricity, 32)], consumes: &[(Uranium, 1)], workers: 3, builders: 2, ..building(1500.0, 4.0, &[(Steel, 4), (Brick, 3)], 50.0, 3) };
-static CAR_PLANT: Stats = converter(900.0, &[(Steel, 2), (Brick, 2)], &[(Steel, 1), (Oil, 1)], &[(Cars, 10)], 3, 30.0);
-static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum, 1), (Electricity, 1)], &[(Tvs, 10)], 2, 28.0);
+static URANIUM_MINE: Stats = extractor(700.0, &[(Steel, 2), (Brick, 1)], &[(Uranium, 8)], 5, Some(Dep::Uranium), 30.0, 2);
+static REACTOR: Stats = Stats { produces: &[(Electricity, 32)], consumes: &[(Uranium, 1)], workers: 6, builders: 2, ..building(1500.0, 4.0, &[(Steel, 4), (Brick, 3)], 50.0, 3) };
+static CAR_PLANT: Stats = converter(900.0, &[(Steel, 2), (Brick, 2)], &[(Steel, 1), (Oil, 1)], &[(Cars, 10)], 6, 30.0);
+static TV_PLANT: Stats = converter(800.0, &[(Steel, 1), (Brick, 2)], &[(Aluminum, 1), (Electricity, 1)], &[(Tvs, 10)], 5, 28.0);
 // The basics in bulk. A sawmill stands by a forest like a lumber camp, a
 // stone works by stone like a quarry, a kiln by clay like a brickworks, and
 // each makes as much as several of them with fewer hands.
 static SAWMILL: Stats = extractor(900.0, &[(Stone, 2), (Brick, 1)], &[(Wood, 16)], 2, Some(Dep::Forest), 30.0, 3);
-static STONEWORKS: Stats = extractor(1000.0, &[(Wood, 2), (Brick, 2)], &[(Stone, 14)], 2, Some(Dep::Stone), 30.0, 3);
+// Wood only: stone must never wait for brick, since brick (a Kiln) waits
+// for stone. Towns stood still with neither to spare.
+static STONEWORKS: Stats = extractor(1000.0, &[(Wood, 3)], &[(Stone, 14)], 2, Some(Dep::Stone), 30.0, 3);
 static KILN: Stats = extractor(900.0, &[(Stone, 4)], &[(Brick, 20)], 2, Some(Dep::Clay), 30.0, 3);
 // Modern: a surface-to-air missile battery, and the only defense against a
 // nuke: one falling within `AIR_DEFENSE_COVER` of it is shot down
 // (`Game::update_nukes`). Its missiles are slow to reload but bring down
-// any aircraft in one hit (a bomber has 260 health).
-static AIR_DEFENSE: Stats = Stats { attack: 320.0, range: AIR_DEFENSE_COVER, cooldown: 5.0, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
+// any aircraft in one hit (a bomber has 380 health).
+static AIR_DEFENSE: Stats = Stats { attack: 450.0, range: AIR_DEFENSE_COVER, cooldown: 5.0, ..building(1000.0, 12.0, &[(Steel, 2), (Brick, 1), (Explosives, 1)], 35.0, 2) };
 static MISSILE_SILO: Stats = Stats { builders: 2, ..building(1500.0, 6.0, &[(Steel, 4), (Brick, 2)], 60.0, 3) };
 // Next to water. Its boats come out on that water.
-static DOCK: Stats = Stats { needs_deposit: Some(Dep::Water), ..building(700.0, 7.0, &[(Wood, 2)], 25.0, 2) };
+static DOCK: Stats = Stats { needs_deposit: Some(Dep::Water), ..building(700.0, 10.0, &[(Wood, 2)], 25.0, 2) };
 
 /// A submarine is hidden from a player unless one of their units or
 /// buildings is within this many tiles of it, or one of their destroyers
@@ -919,7 +926,13 @@ pub fn damage_mult(attacker: Kind, target: Kind) -> f32 {
         (Ranged, Building) => 0.2,
         (Mounted, Building) => 0.5,
         (Siege, Building) => 3.0,
-        (Siege, _) => 0.3,
+        // Stones are for walls. Shells, rockets and bombs burst among
+        // people too (with `splash_radius`): guns are worth bringing to a fight.
+        (Siege, _) => match attacker {
+            Kind::Trebuchet => 0.3,
+            Kind::Bomber => 0.5,
+            _ => 0.75,
+        },
         (Building, Mounted) => 1.3,
         // Fighters own the air; on the ground they only strafe.
         (Air, _) if target.is_air() => 2.0,
@@ -931,6 +944,71 @@ pub fn damage_mult(attacker: Kind, target: Kind) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fight on paper: `n` of `a` against `m` of `b`, starting 14 tiles
+    /// apart, everyone walking into range and firing at the foremost enemy;
+    /// a shell also hurts two neighbours at half strength. It leaves out
+    /// paths and crowding, so it's a guide for tuning, not the game. Returns
+    /// the share of health the winner has left (+ for `a`, - for `b`).
+    fn fight(a: Kind, n: usize, b: Kind, m: usize) -> f32 {
+        let dt = 0.05;
+        let mk = |k: Kind, n: usize, x: f32| (0..n).map(|_| (k.stats().hp, x, 0.0f32)).collect::<Vec<_>>();
+        let mut sides = [mk(a, n, 0.0), mk(b, m, 14.0)];
+        let kinds = [a, b];
+        for _ in 0..(600.0 / dt) as u32 {
+            let front: Vec<Option<(usize, f32)>> = (0..2).map(|s| sides[s].iter().enumerate().find(|u| u.1.0 > 0.0).map(|(i, u)| (i, u.1))).collect();
+            let (Some(_), Some(_)) = (front[0], front[1]) else { break };
+            let mut hits: Vec<(usize, usize, f32)> = Vec::new();
+            for s in 0..2 {
+                let (k, foe, (ti, tx)) = (kinds[s], kinds[1 - s], front[1 - s].unwrap());
+                let st = k.stats();
+                for u in sides[s].iter_mut().filter(|u| u.0 > 0.0) {
+                    u.2 -= dt;
+                    if (u.1 - tx).abs() > st.range.max(0.6) {
+                        u.1 += (tx - u.1).signum() * st.speed * dt;
+                    } else if u.2 <= 0.0 && st.attack > 0.0 {
+                        u.2 = st.cooldown;
+                        let d = st.attack * damage_mult(k, foe);
+                        hits.push((1 - s, ti, d));
+                        if splash_radius(k) > 0.0 {
+                            hits.extend((1..=2).map(|j| (1 - s, ti + j, d * SPLASH_SHARE * 0.5)));
+                        }
+                    }
+                }
+            }
+            for (s, i, d) in hits {
+                if let Some(u) = sides[s].get_mut(i) {
+                    u.0 -= d;
+                }
+            }
+        }
+        let left = |s: usize| sides[s].iter().map(|u| u.0.max(0.0)).sum::<f32>() / (kinds[s].stats().hp * sides[s].len() as f32);
+        if left(0) > 0.0 { left(0) } else { -left(1) }
+    }
+
+    /// `cargo test --release diag_fights -- --ignored --nocapture`: how each
+    /// era's units do against the era before, and guns against infantry.
+    #[test]
+    #[ignore]
+    fn diag_fights() {
+        use Kind::*;
+        let show = |a: Kind, n: usize, b: Kind, m: usize| {
+            let r = fight(a, n, b, m);
+            println!("{n} {a:?} v {m} {b:?}: {} wins with {:.0}% left", if r > 0.0 { format!("{a:?}") } else { format!("{b:?}") }, r.abs() * 100.0);
+        };
+        for line in [&[Spearman, Swordsman, Musketeer, Rifleman, Infantry][..], &[Archer, Crossbowman, MachineGunner], &[Horseman, Knight, Dragoon, Tank], &[Galley, Cog, Galleon, Ironclad, Destroyer]] {
+            for w in line.windows(2) {
+                show(w[1], 1, w[0], 1);
+                show(w[1], 1, w[0], 2);
+                show(w[1], 1, w[0], 3);
+            }
+        }
+        for (gun, foot) in [(Trebuchet, Swordsman), (Cannon, Musketeer), (FieldGun, Rifleman), (RocketArtillery, Infantry)] {
+            show(gun, 1, foot, 1);
+            show(gun, 2, foot, 4);
+        }
+        show(Spearman, 1, Worker, 6);
+    }
 
     #[test]
     fn tables_line_up() {
