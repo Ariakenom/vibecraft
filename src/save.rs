@@ -41,7 +41,12 @@ const MAGIC: &[u8; 4] = b"VCSV";
 /// 19: Frontier games: barbarian sites and camps, owners past the seats.
 /// 20: players' supply and use of slots (19 still loads, recounted).
 /// 21: computer players remember where there was no room (`Ai::no_room`).
-const VERSION: u32 = 21;
+/// 22: the kind of game (`Game::mode`), after the local player. Older saves
+///     still load: their kind is told from the map (`mode_of_old_save`).
+const VERSION: u32 = 22;
+/// The widest or tallest map a save may hold (a guard against damaged
+/// saves asking for gigabytes; every map today is well inside it).
+const MAX_SIDE: i32 = 1024;
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -221,6 +226,7 @@ impl Game {
         w.u32(self.seed);
         w.u8(self.n_players);
         w.u8(self.local);
+        w.u8(self.mode);
 
         // The map. Terrain never changes, but storing it is simpler and
         // safer than regenerating it (a generator tweak would break saves).
@@ -400,9 +406,16 @@ impl Game {
         if !(2..=MAX_PLAYERS as u8).contains(&n_players) || !(1..=n_players).contains(&local) {
             return None;
         }
+        let mode = if version >= 22 { Some(r.u8()?).filter(|&m| m < crate::map_frontier::MODE_COUNT) } else { None };
+        if version >= 22 && mode.is_none() {
+            return None;
+        }
 
+        // (Up to the biggest map there may ever be: a limit of 512 once refused
+        // every save of the Globe, 640 wide, and with them spectators and
+        // replays, which start from one. `every_kind_of_game_saves`.)
         let (mw, mh) = (r.i32()?, r.i32()?);
-        if !(8..=512).contains(&mw) || !(8..=512).contains(&mh) {
+        if !(8..=MAX_SIDE).contains(&mw) || !(8..=MAX_SIDE).contains(&mh) {
             return None;
         }
         let n = (mw * mh) as usize;
@@ -639,7 +652,26 @@ impl Game {
         if let Some(f) = frontier {
             g.set_frontier(f);
         }
+        g.mode = mode.unwrap_or_else(|| mode_of_old_save(&g));
         Some(g)
+    }
+}
+
+/// The kind of game a save from before version 22 was, told from its map:
+/// round and going round is the Globe, round with a rim the World, and a
+/// Frontier map is Small or Large by its size.
+fn mode_of_old_save(g: &Game) -> u8 {
+    use crate::map_frontier::{Size, SMALL_2, SMALL_4};
+    if g.frontier.is_none() {
+        0
+    } else if g.map.wrap {
+        Size::Globe.mode()
+    } else if g.map.terrain.first() == Some(&crate::map::EDGE) {
+        Size::World.mode()
+    } else if [SMALL_2, SMALL_4].iter().any(|&l| g.map.w == l + 2 * crate::map::OPEN_SEA) {
+        Size::Small.mode()
+    } else {
+        Size::Large.mode()
     }
 }
 
@@ -706,6 +738,31 @@ mod tests {
             }
             assert_eq!(a.save(), b.save(), "drifted apart after loading");
             assert!(a.ents.len() > 20, "the test game should have grown");
+        }
+    }
+
+    /// Every kind of game saves and loads, and knows what it is after (the
+    /// Globe once didn't load at all: its map is wider than the old limit,
+    /// so nobody could watch it). Goes through every kind there is, so a
+    /// new one is tested without anyone remembering to add it.
+    #[test]
+    fn every_kind_of_game_saves() {
+        for mode in 0..crate::map_frontier::MODE_COUNT {
+            let mut a = Game::of_mode(5, 1, 2, mode as u32);
+            assert_eq!(a.mode, mode);
+            assert_eq!(mode_of_old_save(&a), mode, "an old save of kind {mode} would be told as another");
+            for _ in 0..20 * 5 {
+                a.tick();
+            }
+            let bytes = a.save();
+            let mut b = Game::load(&bytes).unwrap_or_else(|| panic!("kind {mode} doesn't load"));
+            assert_eq!((b.mode, b.map.wrap), (a.mode, a.map.wrap));
+            assert_eq!(b.save(), bytes, "save → load → save changed it");
+            for _ in 0..20 * 5 {
+                a.tick();
+                b.tick();
+            }
+            assert_eq!(a.checksum(), b.checksum(), "drifted after loading");
         }
     }
 

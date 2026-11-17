@@ -156,3 +156,18 @@ not straight away (see `CLAUDE.md`).
   doubled parts of the water and ground shaders, and compiling them pushed
   Frontier's first frame past the browser test's 30 s in the software
   renderer.
+- **One way to start a game** (18 Nov 2026, after online World and Globe
+  games came out as Skirmish and nobody could watch the Globe): single
+  player, the host, every friend and Restart all start from one setup
+  (`{ seed, mode, players, difficulty, hostSlot, ai, diffs, names }`)
+  through `startGame` in main.js, checked by `cleanSetup` (the mode against
+  `W.mode_count()`; the page keeps no list of its own). The start message
+  carries the setup as is. In Rust, `Size::of_mode`/`Size::mode`
+  (map_frontier.rs) are the only place a mode becomes a map, used by
+  `Game::of_mode` (the one export, `init_game`) and the lobby preview. The
+  game knows its own kind (`Game::mode`, saved from format 22; older saves
+  get it from their map), so spectators, replays and loaded saves know it
+  too. Saves take maps up to 1024 a side (512 refused the Globe).
+  `every_kind_of_game_saves` goes through every mode; `world-online.mjs`
+  plays an online Globe game with a friend and a spectator.
+

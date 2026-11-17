@@ -25,7 +25,7 @@ check(s.game && s.game.tick && s.game.tick.n > 0 && s.game.units && s.page && s.
 // the network tests); here, timing a game changes nothing: same checksum
 // with timing on or off.
 const same = await pg.evaluate(() => {
-  const go = on => { W.prof_enable(on); W.init(9, 1, 2); W.set_ai(1, 1); W.set_ai(2, 1); for (let i = 0; i < 2400; i++) { W.tick(); if (i % 20 === 0) W.take_events(); } return W.checksum(); };
+  const go = on => { W.prof_enable(on); W.init_game(9, 1, 2, 0); W.set_ai(1, 1); W.set_ai(2, 1); for (let i = 0; i < 2400; i++) { W.tick(); if (i % 20 === 0) W.take_events(); } return W.checksum(); };
   const a = go(0), b = go(1); W.prof_enable(1); return a === b;
 });
 check(same, "timing a game doesn't change it");

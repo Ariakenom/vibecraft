@@ -174,7 +174,7 @@ const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()]
 // The mode chosen on the start screen (kept in the browser): 0 Skirmish,
 // 1 Frontier on a small map, 2 Frontier on a large one.
 const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large", "world", "globe"];
-let gameMode = 0, lastMode = 0;
+let gameMode = 0;
 try { gameMode = Math.max(0, MODES.indexOf(localStorage.getItem(MODE_KEY))); } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
 // game's: slot -> name, for the seats people play. A seat without one (the
@@ -2290,19 +2290,76 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 
 // Start a game. Single player: `players` is you plus the computer players.
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
-function newGame(seedArg, local = 0, players = 2, mode = 0) {
-  seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  lastMode = mode >= 1 && mode <= 4 ? mode : 0;
-  if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
-  else W.init(seed, difficulty, players);
-  if (local) W.setup_multiplayer(local);
-  else {
-    // Single player in another seat than the first: I play that one, the computer the rest.
-    const me = Math.max(1, Math.min(players, hostSlot));
-    if (me !== 1) { W.setup_multiplayer(me); for (let p = 1; p <= players; p++) if (p !== me) W.set_ai(p, 1); }
-    for (const [p, d] of Object.entries(slotDiffs)) if (+p <= players) W.set_difficulty(+p, d);
+// --- Starting a game --------------------------------------------------------
+// Every game anyone plays starts from a setup, and through `startGame`:
+// single player, the host and every friend online, and Restart. (They used
+// to start in three ways, and a new kind of game reached only some of them:
+// online, the World and Globe came out as Skirmish.) A setup is
+//   { seed, mode, players, difficulty, hostSlot, ai: [slots], diffs: {slot: 0-2}, names: {slot: name} }
+// `mode` is a kind of game as the wasm side numbers them (0 Skirmish, then
+// the Frontier maps; `W.mode_count()`): the page never turns it into a map
+// itself. The lobby makes a setup (`setupFromLobby`), the host sends it in
+// the start message, a friend checks it (`cleanSetup`), and a game that
+// started some other way (a save) is described by one (`setupOfGame`).
+// Spectators and replays start from a copy of the game instead, which
+// carries its kind with it (`W.game_mode()`).
+let lastSetup = null;
+
+// A setup with everything checked: from the lobby, from a start message, or
+// from the console. Null if it isn't one (a mode this page doesn't know).
+function cleanSetup(d) {
+  if (!d || typeof d !== "object") return null;
+  const n = Math.max(2, Math.min(4, d.players | 0));
+  const mode = d.mode ?? 0;
+  if (!Number.isInteger(mode) || mode < 0 || mode >= W.mode_count()) return null;
+  const slot = p => Number.isInteger(p) && p >= 1 && p <= n;
+  const hostSlot = slot(d.hostSlot) ? d.hostSlot : 1;
+  const ai = (Array.isArray(d.ai) ? d.ai : []).filter(slot);
+  const diffs = {};
+  for (const p of ai) diffs[p] = [0, 1, 2].includes(d.diffs && d.diffs[p]) ? d.diffs[p] : 1;
+  return {
+    seed: (d.seed ?? (Math.random() * 1e9)) >>> 0, mode, players: n,
+    difficulty: [0, 1, 2].includes(d.difficulty) ? d.difficulty : 1, hostSlot, ai, diffs,
+    names: d.names && typeof d.names === "object" ? d.names : null,
+  };
+}
+
+// The game the wasm side holds now, as a setup (after loading a save, or
+// taking a seat as a spectator): what Restart starts again.
+function setupOfGame() {
+  const n = W.n_players(), ai = [], diffs = {};
+  for (let p = 1; p <= n; p++) if (p !== W.local_player() && W.is_ai(p)) { ai.push(p); diffs[p] = W.player_difficulty(p); }
+  return cleanSetup({ seed: W.game_seed(), mode: W.game_mode(), players: n, difficulty: W.game_difficulty(), hostSlot: W.local_player(), ai, diffs });
+}
+
+// Start the game a setup describes. `me`: my seat in an online game, or 0
+// for single player (I take the setup's `hostSlot`, the computer the rest).
+function startGame(setup, me = 0) {
+  const s = cleanSetup(setup);
+  if (!s) { toast("That game is of a kind this page doesn't know: reload the page.", "bad"); return false; }
+  seed = s.seed; difficulty = s.difficulty; hostSlot = s.hostSlot;
+  W.init_game(s.seed, s.difficulty, s.players, s.mode);
+  const mine = me || s.hostSlot;
+  // Online, or single player in another seat than the first: the seats
+  // start with nobody, then the computer takes its own.
+  if (me || mine !== 1) {
+    W.setup_multiplayer(mine);
+    for (const p of s.ai) W.set_ai(p, 1);
   }
-  enterWorld(local);
+  for (const p of s.ai) W.set_difficulty(p, s.diffs[p]);
+  lastSetup = s;
+  enterWorld(me);
+  if (s.names) setNames(s.names); // (after: entering a world resets the names)
+  return true;
+}
+
+// A quick start, for the page's first game, tests and the console: `players`
+// players on a map of kind `mode`, me in the first seat (or seat `local`
+// online), the computer the rest.
+function newGame(seedArg, local = 0, players = 2, mode = 0) {
+  const ai = [];
+  for (let p = 1; p <= players; p++) if (p !== (local || 1)) ai.push(p);
+  return startGame({ seed: seedArg, mode, players, difficulty, hostSlot: 1, ai, diffs: Object.fromEntries(ai.map(p => [p, difficulty])) }, local);
 }
 
 // Set the page up for whatever game the wasm side now holds: a new one, or
@@ -2454,7 +2511,6 @@ let seats = ["host", "ai", "open", "open"];
 // Each computer seat's skill (0 Easy, 1 Normal, 2 Hard), by seat.
 let seatDiff = [1, 1, 1, 1];
 // The last game's, by player slot: for Restart.
-let slotDiffs = {};
 const SKILL = ["Easy", "Normal", "Hard"];
 let room = null;        // the lobby's room (and then the game's)
 let roomCode = null;    // my own lobby's code, kept for the whole visit so my link keeps working
@@ -2462,7 +2518,7 @@ let guestOf = null;     // as a guest: { code, host (the host's presence, or nul
 let pageRoom = null;    // claude.ai only: the page-wide room where lobbies are listed
 let lobbyGen = 0;       // bumped on every lobby switch, so late answers from an old one are ignored
 let netOk = false;      // can this page go online at all?
-let lastPlayers = 2, lastWasMultiplayer = false, startTimer = 0;
+let lastWasMultiplayer = false, startTimer = 0;
 // The player the host plays (their seat's colour): 1 unless they moved
 // their own seat in the lobby. Single player keeps it for Restart.
 let hostSlot = 1;
@@ -2908,9 +2964,9 @@ function lobbyTick() {
 
 // A guest: the host started the game.
 function onStart(d, from) {
-  if (mp || !guestOf || guestOf.hostPeer == null || from !== guestOf.hostPeer || !d || d.v !== NET.PROTOCOL || typeof d.seed !== "number" || !d.slots || typeof d.id !== "string" || played.has(d.id)) return;
+  if (mp || !guestOf || guestOf.hostPeer == null || from !== guestOf.hostPeer || !d || d.v !== NET.PROTOCOL || !cleanSetup(d.setup) || !d.slots || typeof d.id !== "string" || played.has(d.id)) return;
   const slot = d.slots[myToken];
-  if (typeof slot !== "number") return;
+  if (!Number.isInteger(slot) || slot < 1 || slot > cleanSetup(d.setup).players) return;
   played.add(d.id);
   const client = new Client(slot, room, myToken, mpHooks, endMultiplayer);
   client.hostToken = d.host; client.hostPeer = from;
@@ -2918,27 +2974,37 @@ function onStart(d, from) {
   startMultiplayer(slot, d, client);
 }
 
+// The game the lobby describes: its seats in player order (open ones left
+// out), each computer's skill, our names, the map and kind chosen.
+function setupFromLobby() {
+  const active = seats.filter(s => s !== "open"), ai = [], diffs = {}, names = { [slotOf(seats.indexOf("host"), seats) || 1]: myName };
+  seats.forEach((s, i) => {
+    const p = slotOf(i, seats);
+    if (s === "ai") { ai.push(p); diffs[p] = seatDiff[i]; }
+    else if (isFriend(s)) names[p] = peerNames.get(s.slice(2)) || "";
+  });
+  return cleanSetup({ seed: chosenSeed(), mode: gameMode, players: active.length, difficulty, hostSlot: slotOf(seats.indexOf("host"), seats) || 1, ai, diffs, names });
+}
+
 // The host pressed Begin.
 function beginGame() {
   if (guestOf || mp) return;
   const active = seats.filter(s => s !== "open");
   if (active.length < 2) return;
-  // Each computer's skill, by the player slot its seat gets.
-  slotDiffs = {};
-  seats.forEach((s, i) => { if (s === "ai") slotDiffs[slotOf(i, seats)] = seatDiff[i]; });
-  hostSlot = slotOf(seats.indexOf("host"), seats) || 1;
+  const setup = setupFromLobby();
+  hostSlot = setup.hostSlot; // (the host's own seat, for the server below)
   if (!room || !active.some(isFriend)) {
-    lastWasMultiplayer = false; lastPlayers = active.length;
+    lastWasMultiplayer = false;
     $("startScreen").hidden = true;
-    newGame(chosenSeed(), 0, active.length, gameMode);
+    startGame(setup);
     running = true; Rec.real = true;
     publishLobby(); // friends who arrive now wait for the next game
     return;
   }
-  const slots = {}, ai = [];
-  const names = { [hostSlot]: myName };
-  active.forEach((s, k) => { if (isFriend(s)) { slots[s.slice(2)] = k + 1; names[k + 1] = peerNames.get(s.slice(2)) || ""; } else if (s === "ai") ai.push(k + 1); });
-  const settings = { v: NET.PROTOCOL, names, id: randomCode() + Date.now(), seed: chosenSeed(), mode: gameMode, n: active.length, slots, ai, diffs: slotDiffs, host: myToken, hostSlot };
+  // Who's who online: friends by their token, the setup for the game.
+  const slots = {};
+  active.forEach((s, k) => { if (isFriend(s)) slots[s.slice(2)] = k + 1; });
+  const settings = { v: NET.PROTOCOL, id: randomCode() + Date.now(), slots, host: myToken, setup };
   // Keep telling the guests until all of them have answered.
   const send = () => room && room.emit("start", settings);
   send();
@@ -2955,16 +3021,13 @@ function beginGame() {
 }
 
 function startMultiplayer(me, d, seq) {
-  const n = Math.max(2, Math.min(4, d.n | 0));
-  hostSlot = Number.isInteger(d.hostSlot) && d.hostSlot >= 1 && d.hostSlot <= n ? d.hostSlot : 1;
+  // (The same start as single player: `startGame` with the host's setup.)
   $("startScreen").hidden = true;
-  newGame(d.seed >>> 0, me, n, [1, 2].includes(d.mode) ? d.mode : 0);
-  const ai = (Array.isArray(d.ai) ? d.ai : []).filter(s => Number.isInteger(s) && s >= 1 && s <= n);
-  for (const s of ai) { W.set_ai(s, 1); W.set_difficulty(s, [0, 1, 2].includes(d.diffs && d.diffs[s]) ? d.diffs[s] : 1); }
+  if (!startGame(d.setup, me)) return; // (it said why)
+  const n = W.n_players();
   // Record from here: the start everyone shares, then the confirmed bundles.
   const who = {};
-  for (let p = 1; p <= n; p++) who[p] = ai.includes(p) ? "computer" : "human";
-  setNames(d.names);
+  for (let p = 1; p <= n; p++) who[p] = lastSetup.ai.includes(p) ? "computer" : "human";
   Rec.begin({ who, mp: true, names: pnames });
   Rec.real = true;
   W.mp_save(); // the confirmed copy starts out identical
@@ -3092,7 +3155,7 @@ function takeSeat(w) {
   Trace.start({ role: "guest", me: slot, players: W.n_players(), transport: room.kind === "socket" ? "relay" : "claude.ai room", from: "spectator", at: T });
   $("netBtn").hidden = false;
   mp.lastHeard = performance.now();
-  lastWasMultiplayer = true; lastPlayers = W.n_players();
+  lastWasMultiplayer = true; lastSetup = setupOfGame();
   outShown = false; surrendered = false;
   groups = {}; placing = null; amode = false; updateCursor();
   knownUnlocked = new Set(BUILD_MENU.map(([k]) => k).filter(k => W.unlocked(k)));
@@ -3435,7 +3498,7 @@ async function loadSave(save) {
   if (save.groups) groups = save.groups;
   for (const id of ["loadScreen", "menuScreen", "startScreen", "endScreen"]) $(id).hidden = true;
   running = true; Rec.real = true;
-  lastPlayers = W.n_players(); // for Restart and Play again
+  lastSetup = setupOfGame(); // for Restart: this kind of game again
   hostSlot = W.local_player();
   publishLobby(); // friends who open our link now wait for the next game
   toast(`Loaded: ${fmtTime(W.game_time())} into the game.`);
@@ -3631,7 +3694,7 @@ $("loadFile").onchange = async e => {
   } catch { toast("That file isn't a VibeCraft save or replay.", "bad"); }
 };
 $("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused && !mp) togglePause(); };
-$("restartBtn").onclick = () => { $("menuScreen").hidden = true; newGame(undefined, 0, lastPlayers, lastMode); Rec.real = true; };
+$("restartBtn").onclick = () => { $("menuScreen").hidden = true; startGame({ ...lastSetup, seed: undefined }); Rec.real = true; };
 $("quitBtn").onclick = toMenu;
 // Copy the invite link. Some app views refuse the clipboard: then select it
 // so it can be copied by hand.

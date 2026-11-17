@@ -68,7 +68,7 @@ if (process.env.SHOT) {
 const r = await pg.evaluate(async () => {
   W.set_ai(ME, 0);
   const sum = W.checksum(), save = await makeSave();
-  W.init(1, 1, 2); // something else meanwhile
+  W.init_game(1, 1, 2, 0); // something else meanwhile
   await loadSave(save);
   return { sum, after: W.checksum(), mode: W.game_mode(), col: PCOL[3], kb: Math.round(save.data.length * 0.75 / 1024) };
 });

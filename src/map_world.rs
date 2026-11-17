@@ -151,7 +151,7 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     };
     // Open sea where the world ends: south of the disc's last latitude.
     // (The Globe has no end east or west.)
-    let no_land = |lat: f32, lon: f32| !globe && lat < SOUTH + 1.0;
+    let no_land = |lat: f32, _lon: f32| !globe && lat < SOUTH + 1.0;
     // Noise that joins up at the Globe's seam: the last `JOIN` tiles fade
     // into what the first ones have, so the coast doesn't jump there.
     const JOIN: f32 = 24.0;

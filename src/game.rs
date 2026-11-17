@@ -542,6 +542,10 @@ pub struct Game {
     idle_cursor: u32,
     /// Frontier games only: the barbarian sites and camps (`barbarians.rs`).
     pub frontier: Option<crate::barbarians::Frontier>,
+    /// What kind of game this is (`map_frontier::MODE_COUNT`): 0 Skirmish.
+    /// Saved, so whatever starts from a copy of the game (spectators,
+    /// replays, a loaded save, Restart after one) knows it too.
+    pub mode: u8,
 }
 
 /// A computer player's supply, in percent, at each difficulty: Hard gets a
@@ -551,6 +555,15 @@ pub fn handicap(difficulty: u32) -> u16 {
 }
 
 impl Game {
+    /// A new game of any kind (`map_frontier::MODE_COUNT`): the one way the
+    /// page starts a game, whoever plays it.
+    pub fn of_mode(seed: u32, difficulty: u32, n_players: u8, mode: u32) -> Game {
+        match crate::map_frontier::Size::of_mode(mode) {
+            Some(size) => Game::new_frontier(seed, difficulty, n_players, size),
+            None => Game::new(seed, difficulty, n_players),
+        }
+    }
+
     /// A new game: player 1 is the human, the rest are computer players.
     pub fn new(seed: u32, difficulty: u32, n_players: u8) -> Game {
         let n_players = n_players.clamp(2, MAX_PLAYERS as u8);
@@ -618,6 +631,7 @@ impl Game {
             alert_cooldown: 0.0,
             idle_cursor: 0,
             frontier: None,
+            mode: 0,
         };
         g.sea = g.open_sea();
         // Slots aren't saved: they follow from what exists. Only counted
