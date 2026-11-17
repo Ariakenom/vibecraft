@@ -1,6 +1,6 @@
 //! A* pathfinding on the tile grid.
 
-use crate::map::Map;
+use crate::map::{wx, Map};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -22,7 +22,10 @@ impl Goal {
     pub fn rect(tx: i32, ty: i32, size: i32, reach: f32) -> Goal {
         Goal { x0: tx as f32, y0: ty as f32, x1: (tx + size) as f32, y1: (ty + size) as f32, reach }
     }
+    /// (Round the world the short way: x is taken to the copy of itself
+    /// nearest the rectangle.)
     pub fn dist(&self, x: f32, y: f32) -> f32 {
+        let x = self.near_x(x);
         let dx = (self.x0 - x).max(0.0).max(x - self.x1);
         let dy = (self.y0 - y).max(0.0).max(y - self.y1);
         (dx * dx + dy * dy).sqrt()
@@ -31,7 +34,12 @@ impl Goal {
         self.dist(x, y) <= self.reach
     }
     pub fn nearest_point(&self, x: f32, y: f32) -> (f32, f32) {
-        (x.clamp(self.x0, self.x1), y.clamp(self.y0, self.y1))
+        (self.near_x(x).clamp(self.x0, self.x1), y.clamp(self.y0, self.y1))
+    }
+    /// x, or the copy of it round the world that's nearest the rectangle.
+    fn near_x(&self, x: f32) -> f32 {
+        let c = (self.x0 + self.x1) * 0.5;
+        c + wx(x - c)
     }
 }
 
@@ -123,7 +131,7 @@ impl Pathfinder {
         let stamp = self.generation;
         self.heap.clear();
         let w = map.w;
-        let sx = (sx.floor() as i32).clamp(0, w - 1);
+        let sx = if map.wrap { map.tile_x(sx.floor() as i32) } else { (sx.floor() as i32).clamp(0, w - 1) };
         let sy = (sy.floor() as i32).clamp(0, map.h - 1);
         let start = map.idx(sx, sy) as u32;
         let center = |x: i32, y: i32| (x as f32 + 0.5, y as f32 + 0.5);

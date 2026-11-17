@@ -124,3 +124,35 @@ not straight away (see `CLAUDE.md`).
   early there (all wood held before the Sawmill, the same wall as on other
   maps but met more often); a real globe would need the simulation to wrap
   round, which it doesn't.
+- **The Globe** (Nov 2026, "the actually round one"): mode 4, "World
+  (globe)". The game on it is flat like any other: `map_world.rs` lays the
+  same Earth out as a Mercator map (`Shape::Globe`, 640 x 308 tiles, 72° N
+  to 56° S, the seam in the mid-Pacific kept as open sea). The page wraps
+  what it draws round a ball: every built-in material's `project_vertex`
+  moves each vertex onto the ball as its last step (`GLOBE`, `globeBend`
+  in render3d.js), turned so the camera's spot is on top exactly where it
+  is in the flat world. Fog of war, shadows, waves and heights stay flat.
+  Picking turns the camera's ray into the flat world's (`globeRay`,
+  `pickRay`); `worldToScreen` bends first; three.js's culling tests where
+  things are drawn and hides the far side; the camera wraps east-west and
+  zooms out to the whole ball. Limits: the poles are ice caps drawn on a ball under
+  the map, the sky is still the ordinary sky, and from far off a whole
+  hemisphere is drawn (2 to 3.5 million triangles; grass and herds are
+  hidden there). `test/browser/globe.mjs` checks picking, the far side,
+  the wrap and that the next game is flat again.
+  Going round (17 Nov): the game wraps east-west on this map. `Map::wrap`
+  (told by the Globe's size); `Map::idx`/`inside` wrap tiles; every
+  distance runs its x difference through `map::wx` (a thread-local width,
+  set by `Map::new`, each tick and each command); positions come back onto
+  the map at the end of each tick. The generator joins the coast noise and
+  the ocean across 180°. `the_globe_goes_round` walks, sails and shoots
+  across; `the_globe_seam_is_one_ocean` checks the join. Costs about 10-15%
+  per tick on the Globe. Patterns drawn from the flat world's position
+  (the sea's looks and waves, the sand line and grain, cloud shadows, the
+  painted ground colours) fade over the last 24 tiles into what the west
+  edge has, so they join at the seam (`globeSeam`, `globeWest`). That code
+  is compiled in only on the Globe (`GLOBE_SEAMS`, part of withFow's
+  shader key; materials recompile when a Globe game starts or ends): it
+  doubled parts of the water and ground shaders, and compiling them pushed
+  Frontier's first frame past the browser test's 30 s in the software
+  renderer.

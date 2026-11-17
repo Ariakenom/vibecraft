@@ -173,7 +173,7 @@ function setOwnerColors() {
 const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()];
 // The mode chosen on the start screen (kept in the browser): 0 Skirmish,
 // 1 Frontier on a small map, 2 Frontier on a large one.
-const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large", "world"];
+const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large", "world", "globe"];
 let gameMode = 0, lastMode = 0;
 try { gameMode = Math.max(0, MODES.indexOf(localStorage.getItem(MODE_KEY))); } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
@@ -405,9 +405,11 @@ function resizeView() {
 window.addEventListener("resize", resizeView);
 
 function clampCam() {
-  cam.x = Math.max(0, Math.min(MW, cam.x));
+  // (The Globe goes all the way round, and can be seen whole.)
+  const globe = typeof GLOBE !== "undefined" && GLOBE.on;
+  cam.x = globe ? ((cam.x % MW) + MW) % MW : Math.max(0, Math.min(MW, cam.x));
   cam.y = Math.max(0, Math.min(MH, cam.y));
-  cam.dist = Math.max(9, Math.min(48, cam.dist));
+  cam.dist = Math.max(9, Math.min(globe ? 420 : 48, cam.dist));
   cam.pitch = Math.max(0.6, Math.min(1.35, cam.pitch));
 }
 function centerOn(tx, ty) { cam.x = tx; cam.y = ty; clampCam(); }
@@ -477,6 +479,7 @@ function bakeTerrain() {
   MW = W.map_w(); MH = W.map_h();
   computeHeights();
   const ter = u8(W.terrain_ptr(), MW * MH).slice();
+  const globe = !!(W.map_globe && W.map_globe());
   // Colour at any map position. Grass blends lush, dark and sun-dried greens
   // in big soft patches; slopes turn to earth and rock; shores to sand.
   // A clean, almost flat green, like Totally Accurate Battle Simulator's fields:
@@ -487,7 +490,11 @@ function bakeTerrain() {
   // the ground shader (render3d.js), so only the minimap wants it.
   const colourAt = (x, y, beach = true) => {
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
-    const n1 = vnoise(x / 9, y / 9, 3), n2 = vnoise(x / 3.5, y / 3.5, 11), n3 = vnoise(x * 1.3, y * 1.3, 29);
+    // (On the Globe the patches join up where the east and west edges
+    // meet: the last tiles fade into what the first ones have.)
+    const seam = globe ? Math.max(0, Math.min(1, (x - (MW - 24)) / 24)) : 0;
+    const nz = (f, sd) => { const v = vnoise(x * f, y * f, sd); return seam > 0 ? v + (vnoise((x - MW) * f, y * f, sd) - v) * seam : v; };
+    const n1 = nz(1 / 9, 3), n2 = nz(1 / 3.5, 11), n3 = nz(1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
     c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
     const sl = slopeAt(x, y), ht = hAt(x, y);
@@ -1456,7 +1463,7 @@ const mpHooks = {
       if (isBld(E(i, F.kind))) continue;
       const id = E(i, F.id), o = R3.objs.get(id);
       if (!o || o.x === undefined) continue;
-      const dx = o.x - (E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha);
+      const dx = o.x - lerpX(E(i, F.px), E(i, F.x), alpha);
       const dy = o.y - (E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha);
       if (Math.abs(dx) + Math.abs(dy) > 0.01 && Math.abs(dx) + Math.abs(dy) < 4) R3.nudges.set(id, { dx, dy, t });
     }
@@ -2285,7 +2292,7 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
 function newGame(seedArg, local = 0, players = 2, mode = 0) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  lastMode = mode >= 1 && mode <= 3 ? mode : 0;
+  lastMode = mode >= 1 && mode <= 4 ? mode : 0;
   if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
   else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);

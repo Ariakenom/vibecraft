@@ -2,6 +2,51 @@
 //! Also the procedural map generator.
 
 use crate::defs::Dep;
+use std::cell::Cell;
+
+// ---------------------------------------------------------------------------
+// Going round the world. On the Globe's map (map_world.rs, `Shape::Globe`)
+// the east and west edges are one: walk off the right and you're at the
+// left. Tiles do it in `Map::idx` and `Map::inside`; distances in `wx`,
+// which everything that measures how far apart two things are runs its
+// east-west difference through. Positions are brought back onto the map
+// at the end of every tick (`Game::tick`), so they stay in 0..w.
+
+thread_local! {
+    /// The width the world wraps at, or 0 (every other map). Set from the
+    /// map whenever one is made (`Map::new`) and at the start of every tick
+    /// and command, so it always belongs to the game being run.
+    static WRAP: Cell<f32> = const { Cell::new(0.0) };
+}
+
+/// Make `m`'s wrapping the one `wx` and `wrap_x` use.
+pub fn use_wrap(m: &Map) {
+    WRAP.with(|w| w.set(if m.wrap { m.w as f32 } else { 0.0 }));
+}
+
+/// The shortest way east (+) or west (-) from one x to another, given their
+/// plain difference: on a wrapping map, the other way round may be shorter.
+#[inline]
+pub fn wx(dx: f32) -> f32 {
+    let w = WRAP.with(|w| w.get());
+    if w > 0.0 && dx.abs() > w * 0.5 {
+        dx - w * (dx / w).round()
+    } else {
+        dx
+    }
+}
+
+/// An x brought back onto the map (0..w) on a wrapping map.
+#[inline]
+pub fn wrap_x(x: f32) -> f32 {
+    let w = WRAP.with(|w| w.get());
+    if w > 0.0 && !(0.0..w).contains(&x) {
+        let r = x.rem_euclid(w);
+        if r >= w { 0.0 } else { r }
+    } else {
+        x
+    }
+}
 
 pub const MAP_W: i32 = 120;
 pub const MAP_H: i32 = 120;
@@ -78,11 +123,16 @@ pub struct Map {
     /// craters): people can't walk from one piece to another. Worked out
     /// from the terrain (`with_land`), not saved.
     pub land: Vec<u32>,
+    /// The east and west edges meet (the Globe): see `wx`. Told by the
+    /// map's size, which no other map has, so saves need nothing new.
+    pub wrap: bool,
 }
 
 impl Map {
     pub fn new(w: i32, h: i32, terrain: Vec<u8>, shade: Vec<u8>, blocked: Vec<bool>, dep_at: Vec<i32>, bld_at: Vec<i32>) -> Map {
-        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new() };
+        let wrap = (w, h) == (crate::map_world::GLOBE_W, crate::map_world::GLOBE_H);
+        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new(), wrap };
+        use_wrap(&m);
         m.relabel_land();
         m
     }
@@ -138,11 +188,24 @@ impl Map {
         la == 0 || lb == 0 || la == lb
     }
 
+    #[inline]
     pub fn idx(&self, x: i32, y: i32) -> usize {
+        // (Round the world: at most one width off either way, in practice;
+        // a division on every lookup made the Globe's ticks half as fast.)
+        let x = if self.wrap && !(0..self.w).contains(&x) {
+            if x < 0 && x >= -self.w { x + self.w } else if x >= self.w && x < 2 * self.w { x - self.w } else { x.rem_euclid(self.w) }
+        } else {
+            x
+        };
         (y * self.w + x) as usize
     }
+    /// (Any x is on a wrapping map: it's somewhere round the world.)
     pub fn inside(&self, x: i32, y: i32) -> bool {
-        x >= 0 && y >= 0 && x < self.w && y < self.h
+        (self.wrap || (x >= 0 && x < self.w)) && y >= 0 && y < self.h
+    }
+    /// A tile's x brought back onto the map (0..w) on a wrapping map.
+    pub fn tile_x(&self, x: i32) -> i32 {
+        if self.wrap { x.rem_euclid(self.w) } else { x }
     }
     pub fn passable(&self, x: i32, y: i32) -> bool {
         self.inside(x, y) && !self.blocked[self.idx(x, y)]
@@ -167,7 +230,7 @@ impl Map {
     /// straight line from a to b? Used to straighten the zig-zag tile paths
     /// that A* returns.
     pub fn line_clear(&self, naval: bool, a: (f32, f32), b: (f32, f32)) -> bool {
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let (dx, dy) = (wx(b.0 - a.0), b.1 - a.1);
         let len = (dx * dx + dy * dy).sqrt();
         let steps = (len / 0.2).ceil().max(1.0) as i32;
         const R: f32 = 0.24;

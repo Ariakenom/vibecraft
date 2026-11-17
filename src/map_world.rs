@@ -9,6 +9,15 @@
 //! town; the rest of the world's deposits and its barbarian sites are
 //! scattered, so some starts are better placed than others. It plays as a
 //! Frontier game (barbarians, the big map's rules).
+//!
+//! The Globe (`Shape::Globe`) is the same world laid out for a sphere: a
+//! Mercator map, 180° west at the left edge to 180° east at the right, 72°
+//! north to 56° south. The game on it is as flat as any other; the page
+//! wraps what it draws round a ball (render3d.js, `GLOBE`), where the left
+//! and right edges meet at 180°, between Siberia and Alaska; the game goes
+//! on across that line (`Map::wrap`, `map::wx`). Mercator, because
+//! it keeps shapes: a house is a house at any latitude, only smaller toward
+//! the poles.
 
 use crate::defs::Dep;
 use crate::map::{dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
@@ -19,6 +28,21 @@ pub const RADIUS: i32 = 212;
 const LAT_RADIUS: f32 = 200.0;
 /// Latitudes the disc covers: the pole in the middle to this far south.
 const SOUTH: f32 = -58.0;
+/// The Globe's map in tiles: once round the equator, and from 72° north to
+/// 56° south in Mercator's spacing (`GLOBE_TOP` is Mercator's y at the top
+/// edge, ln tan(45° + 72°/2); the page has the same numbers).
+pub const GLOBE_W: i32 = 640;
+pub const GLOBE_H: i32 = 308;
+pub const GLOBE_TOP: f32 = 1.8427;
+
+/// How the world is laid out.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Shape {
+    /// Round and flat, the North Pole in the middle.
+    Disc,
+    /// A Mercator map the page wraps round a ball.
+    Globe,
+}
 
 /// The Earth, coarsely: one row per 5° of latitude from 80° north to 55°
 /// south, one column per 5° of longitude from 180° west. Drawn by hand from
@@ -90,21 +114,51 @@ const GAP: f32 = 4.0;
 
 /// Build the World map for `players` (2 to 4). Returns the map, its
 /// deposits, one base centre per player, and the barbarian sites.
-pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)>, Vec<Site>) {
+pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Deposit>, Vec<(i32, i32)>, Vec<Site>) {
     let players = players.clamp(2, 4);
-    let (w, h) = (RADIUS * 2 + 2, RADIUS * 2 + 2);
+    let globe = shape == Shape::Globe;
+    let (w, h) = if globe { (GLOBE_W, GLOBE_H) } else { (RADIUS * 2 + 2, RADIUS * 2 + 2) };
     let n = (w * h) as usize;
     let centre = (w as f32 / 2.0, h as f32 / 2.0);
     let syms: &[Sym] = &[Sym::Id];
     let pick = |k: i32, lo: f32, hi: f32| lo + (hi - lo) * hash(k, 919, seed);
     // A tile for a place on the globe, and back.
+    // (On the Globe: Mercator, `ball` tiles to a radian.)
+    let ball = w as f32 / std::f32::consts::TAU;
     let tile_of = |lat: f32, lon: f32| {
+        if globe {
+            let m = (std::f32::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln();
+            return (((lon / 360.0 + 0.5) * w as f32) as i32, ((GLOBE_TOP - m) * ball) as i32);
+        }
         let (d, a) = ((90.0 - lat) / (90.0 - SOUTH) * LAT_RADIUS, lon.to_radians());
         ((centre.0 + d * a.sin()) as i32, (centre.1 + d * a.cos()) as i32)
     };
     let globe_of = |p: (f32, f32)| {
+        if globe {
+            let m = GLOBE_TOP - p.1 / ball;
+            return ((2.0 * m.exp().atan() - std::f32::consts::FRAC_PI_2).to_degrees(), (p.0 / w as f32 - 0.5) * 360.0);
+        }
         let (dx, dy) = (p.0 - centre.0, p.1 - centre.1);
         (90.0 - dist(p, centre) / LAT_RADIUS * (90.0 - SOUTH), dx.atan2(dy).to_degrees())
+    };
+    // Is p in the world, `margin` tiles or more from its end?
+    let in_world = |p: (f32, f32), margin: f32| {
+        if globe {
+            p.0 >= margin && p.1 >= margin && p.0 <= w as f32 - margin && p.1 <= h as f32 - margin
+        } else {
+            dist(p, centre) <= LAT_RADIUS - margin
+        }
+    };
+    // Open sea where the world ends: south of the disc's last latitude.
+    // (The Globe has no end east or west.)
+    let no_land = |lat: f32, lon: f32| !globe && lat < SOUTH + 1.0;
+    // Noise that joins up at the Globe's seam: the last `JOIN` tiles fade
+    // into what the first ones have, so the coast doesn't jump there.
+    const JOIN: f32 = 24.0;
+    let fbm_round = |x: f32, y: f32, scale: f32, off: f32, seed: u32| {
+        let f = |x: f32| fbm(x / scale + off, y / scale + off, seed);
+        let t = if globe { ((x - (w as f32 - JOIN)) / JOIN).clamp(0.0, 1.0) } else { 0.0 };
+        if t > 0.0 { f(x) * (1.0 - t) + f(x - w as f32) * t } else { f(x) }
     };
 
     // The towns: homelands in an order the seed picks, far enough apart.
@@ -118,7 +172,7 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
     // fish, and a town far inland ran out of wood feeding itself without.
     let land_at = |x: f32, y: f32| {
         let (lat, lon) = globe_of((x, y));
-        if lat < SOUTH + 1.0 { 0.0 } else { land(lat, lon) }
+        if no_land(lat, lon) { 0.0 } else { land(lat, lon) }
     };
     let by_the_sea = |home: (i32, i32)| -> (i32, i32) {
         let dirs: Vec<(f32, f32)> = (0..16).map(|k| (k as f32 / 16.0 * std::f32::consts::TAU).sin_cos()).collect();
@@ -160,20 +214,20 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
             let i = (y * w + x) as usize;
             let p = (x as f32 + 0.5, y as f32 + 0.5);
             let d = dist(p, centre);
-            if d > RADIUS as f32 {
+            if !globe && d > RADIUS as f32 {
                 terrain[i] = EDGE;
                 shade[i] = 10;
                 continue;
             }
             let (lat, lon) = globe_of(p);
-            let noise = fbm(x as f32 / coast_scale, y as f32 / coast_scale, seed);
+            let noise = fbm_round(x as f32, y as f32, coast_scale, 0.0, seed);
             // The atlas says where the land is; noise makes the coast.
-            let mut ht = if lat < SOUTH + 1.0 { 0.1 } else { 0.08 + land(lat, lon) * 0.5 + noise * 0.24 };
+            let mut ht = if no_land(lat, lon) { 0.1 } else { 0.08 + land(lat, lon) * 0.5 + noise * 0.24 };
             let near = near_base(p);
             if near < 9.0 {
                 ht = ht.max(0.53 + (9.0 - near) / 9.0 * 0.1);
             }
-            let hills = fbm(x as f32 / 9.0 + 70.0, y as f32 / 9.0 + 70.0, seed ^ 0x411);
+            let hills = fbm_round(x as f32, y as f32, 9.0, 70.0, seed ^ 0x411);
             terrain[i] = if ht < water_at {
                 WATER
             } else if ht < water_at + 0.03 {
@@ -187,7 +241,7 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
             shade[i] = ((drawn - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
             // Forests, thinner in the desert belts and the far north.
             let dry_belt = (lat.abs() > 15.0 && lat.abs() < 32.0) || lat > 68.0;
-            let f = fbm(x as f32 / wood_scale + 40.0, y as f32 / wood_scale + 40.0, seed ^ 0xBEEF);
+            let f = fbm_round(x as f32, y as f32, wood_scale, 40.0, seed ^ 0xBEEF);
             if matches!(terrain[i], GRASS | HILL) && f > wood_at + if dry_belt { 0.1 } else { 0.0 } && hash(x, y, seed ^ 7) < 0.82 && near > 11.0 {
                 feat[i] = Feat::Tree;
             }
@@ -199,7 +253,7 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
     let place = |terrain: &mut Vec<u8>, feat: &mut Vec<Feat>, keep: &[(f32, f32, f32)], cx: i32, cy: i32, f: Feat, r: f32, ring_max: i32| -> bool {
         let far = reach(f, r);
         let fits = |terrain: &[u8], feat: &[Feat], x: i32, y: i32| {
-            if dist((x as f32, y as f32), centre) > LAT_RADIUS - far - 3.0 {
+            if !in_world((x as f32, y as f32), far + 3.0) {
                 return false;
             }
             let tiles = shape_tiles(terrain, w, h, f, x, y, r, seed);
@@ -275,14 +329,14 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
         tries += 1;
         let (x, y) = ((hash(tries, 61, seed) * w as f32) as i32, (hash(tries, 63, seed) * h as f32) as i32);
         let p = (x as f32 + 0.5, y as f32 + 0.5);
-        if dist(p, centre) > LAT_RADIUS - 12.0 || !dry(&terrain, x, y, 7) {
+        if !in_world(p, 12.0) || !dry(&terrain, x, y, 7) {
             continue;
         }
         let from = near_base(p);
         if from < SITE_FROM_BASE || sites.iter().any(|s| dist(p, (s.x as f32 + 0.5, s.y as f32 + 0.5)) < SITE_GAP) {
             continue;
         }
-        sites.push(Site { x, y, era: (((from - SITE_FROM_BASE) / 20.0) as u8).min(5) });
+        sites.push(Site { x, y, era: (((from - SITE_FROM_BASE) / if globe { 45.0 } else { 20.0 }) as u8).min(5) });
     }
     for s in &sites {
         keep_clear.push((s.x as f32 + 0.5, s.y as f32 + 0.5, 6.0));
@@ -334,7 +388,7 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
             t += 1;
             let (x, y) = ((hash(t, 75, seed) * w as f32) as i32, (hash(t, 77, seed) * h as f32) as i32);
             let p = (x as f32 + 0.5, y as f32 + 0.5);
-            if dist(p, centre) > LAT_RADIUS - 10.0 || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || near_base(p) < 34.0 {
+            if !in_world(p, 10.0) || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || near_base(p) < 34.0 {
                 continue;
             }
             put += place(&mut terrain, &mut feat, &keep_clear, x, y, f, r, 4) as usize;
@@ -382,12 +436,15 @@ pub fn generate_world(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32
     // The sea is the water the Arctic (the middle) reaches; anything else
     // is a lake: shallow, for people to wade and boats to sail.
     let mut sea = vec![false; n];
-    let start = (centre.1 as i32 * w + centre.0 as i32) as usize;
-    let mut stack = vec![(centre.0 as i32, centre.1 as i32)];
+    // (On the Globe: the Pacific, at the left edge.)
+    let from = if globe { (1, h / 2) } else { (centre.0 as i32, centre.1 as i32) };
+    let start = (from.1 * w + from.0) as usize;
+    let mut stack = vec![from];
     sea[start] = terrain[start] == WATER;
     while let Some((x, y)) = stack.pop() {
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let (nx, ny) = (x + dx, y + dy);
+            // (On the Globe the ocean goes on across the seam.)
+            let (nx, ny) = (if globe { (x + dx).rem_euclid(w) } else { x + dx }, y + dy);
             if nx >= 0 && ny >= 0 && nx < w && ny < h && !sea[(ny * w + nx) as usize] && terrain[(ny * w + nx) as usize] == WATER {
                 sea[(ny * w + nx) as usize] = true;
                 stack.push((nx, ny));
@@ -501,9 +558,9 @@ mod tests {
     /// are apart, nothing lies past the rim, and there are barbarian sites.
     #[test]
     fn every_start_has_its_deposits() {
-        for players in [2usize, 4] {
+        for (players, shape) in [(2usize, Shape::Disc), (4, Shape::Disc), (2, Shape::Globe), (4, Shape::Globe)] {
             for seed in 0..5u32 {
-                let (m, deps, bases, sites) = generate_world(seed, players);
+                let (m, deps, bases, sites) = generate_world(seed, players, shape);
                 assert_eq!(bases.len(), players);
                 assert!(sites.len() >= 8, "seed {seed}: only {} sites", sites.len());
                 for (i, &(bx, by)) in bases.iter().enumerate() {
@@ -521,6 +578,19 @@ mod tests {
         }
     }
 
+    /// On the Globe the ocean is one: no shallow (walkable) water where the
+    /// map's edges meet, and the tiles on either side of the line match.
+    #[test]
+    fn the_globe_seam_is_one_ocean() {
+        for seed in 0..4u32 {
+            let (m, ..) = generate_world(seed, 2, Shape::Globe);
+            let shallow_at_seam = (0..m.h).filter(|&y| [0, 1, m.w - 2, m.w - 1].iter().any(|&x| m.terrain[m.idx(x, y)] == SHALLOW)).count();
+            assert_eq!(shallow_at_seam, 0, "seed {seed}: shallows at the seam");
+            let differ = (0..m.h).filter(|&y| (m.terrain[m.idx(m.w - 1, y)] == WATER) != (m.terrain[m.idx(0, y)] == WATER)).count();
+            assert!(differ * 10 < m.h as usize, "seed {seed}: {differ} rows change from land to sea at the seam");
+        }
+    }
+
     /// A picture (PPM) for a look: `VC_OUT=/tmp cargo test --release
     /// world_picture -- --ignored --nocapture`, seeds 1 to 4.
     #[test]
@@ -529,7 +599,8 @@ mod tests {
         let out = std::env::var("VC_OUT").unwrap_or("/tmp".into());
         for seed in 1..=4u32 {
             let players = 2 + (seed as usize % 3);
-            let (m, deps, bases, sites) = generate_world(seed, players);
+            let shape = if std::env::var("VC_GLOBE").is_ok() { Shape::Globe } else { Shape::Disc };
+            let (m, deps, bases, sites) = generate_world(seed, players, shape);
             let mut px = vec![0u8; (m.w * m.h * 3) as usize];
             let mut put = |x: i32, y: i32, c: [u8; 3]| {
                 let i = m.idx(x, y);
