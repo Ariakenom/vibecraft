@@ -1458,7 +1458,7 @@ const mpHooks = {
       if (isBld(E(i, F.kind))) continue;
       const id = E(i, F.id), o = R3.objs.get(id);
       if (!o || o.x === undefined) continue;
-      const dx = o.x - (E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha);
+      const dx = o.x - lerpX(E(i, F.px), E(i, F.x), alpha);
       const dy = o.y - (E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha);
       if (Math.abs(dx) + Math.abs(dy) > 0.01 && Math.abs(dx) + Math.abs(dy) < 4) R3.nudges.set(id, { dx, dy, t });
     }

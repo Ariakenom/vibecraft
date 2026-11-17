@@ -23,6 +23,7 @@
 
 use crate::defs::*;
 use crate::game::*;
+use crate::map::wx;
 
 /// Half the side of the town square round a Capitol's statue (tiles): it
 /// covers the 5x5 tiles centred on the Capitol, and nothing else may be
@@ -36,7 +37,7 @@ pub const AT_WORK: f32 = 1.0;
 
 /// Is (x, y) within `r` of (cx, cy) along both x and y?
 pub fn within_square(x: f32, y: f32, cx: f32, cy: f32, r: f32) -> bool {
-    (x - cx).abs() <= r && (y - cy).abs() <= r
+    wx(x - cx).abs() <= r && (y - cy).abs() <= r
 }
 
 /// Who's waiting for people at a building, worked out for `recruit`.
@@ -77,7 +78,7 @@ impl Game {
     /// `owner`'s finished Capitol nearest (x, y); ties go to the older.
     pub fn nearest_capitol(&self, owner: u8, x: f32, y: f32) -> Option<usize> {
         self.capitols(owner).min_by(|&a, &b| {
-            let d = |c: usize| (self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
+            let d = |c: usize| wx(self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
             d(a).total_cmp(&d(b)).then(a.cmp(&b))
         })
     }
@@ -131,7 +132,7 @@ impl Game {
     pub(crate) fn go_home(&mut self, i: usize) {
         let (owner, id, x, y) = (self.ents[i].owner, self.ents[i].id, self.ents[i].x, self.ents[i].y);
         let walk = self.capitols(owner).filter(|&c| self.map.same_land((x, y), (self.ents[c].x, self.ents[c].y))).min_by(|&a, &b| {
-            let d = |c: usize| (self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
+            let d = |c: usize| wx(self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
             d(a).total_cmp(&d(b)).then(a.cmp(&b))
         });
         match walk.or_else(|| self.nearest_capitol(owner, x, y)) {
@@ -508,7 +509,7 @@ impl Game {
     /// `houses_by_distance`.
     fn by_distance(&self, houses: &[usize], caps: &[usize]) -> Vec<usize> {
         let caps: Vec<(i32, i32)> = caps.iter().map(|&c| (self.ents[c].tx, self.ents[c].ty)).collect();
-        let near = |e: &Entity| caps.iter().map(|&(cx, cy)| (e.tx - cx).pow(2) + (e.ty - cy).pow(2)).min().unwrap_or(0);
+        let near = |e: &Entity| caps.iter().map(|&(cx, cy)| (wx((e.tx - cx) as f32) as i32).pow(2) + (e.ty - cy).pow(2)).min().unwrap_or(0);
         let mut hs: Vec<(i32, usize)> = houses.iter().map(|&i| (near(&self.ents[i]), i)).collect();
         hs.sort();
         hs.into_iter().map(|(_, i)| i).collect()
@@ -841,7 +842,7 @@ impl Game {
             Travel::Arrived => {
                 let e = &mut self.ents[i];
                 e.anim = Anim::Work;
-                e.facing = (by - e.y).atan2(bx - e.x);
+                e.facing = (by - e.y).atan2(wx(bx - e.x));
             }
         }
     }
@@ -872,7 +873,7 @@ impl Game {
             Travel::Arrived => {
                 let e = &mut self.ents[i];
                 e.anim = Anim::Work;
-                e.facing = (by - e.y).atan2(bx - e.x);
+                e.facing = (by - e.y).atan2(wx(bx - e.x));
             }
         }
     }

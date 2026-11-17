@@ -2274,3 +2274,55 @@ fn the_whole_town_square_is_walkable() {
         }
     }
 }
+
+/// The Globe goes round: walking, sailing and shooting all go across the
+/// line where the map's east and west edges meet, the short way, and
+/// nothing jumps when it does.
+#[test]
+fn the_globe_goes_round() {
+    use crate::map::{wx, GRASS, WATER};
+    let mut g = Game::new_frontier(3, 1, 2, crate::map_frontier::Size::Globe);
+    assert!(g.map.wrap);
+    let w = g.map.w;
+    // A row of land across the line, and one of open sea (any seed: the
+    // Bering Strait's two shores and the Pacific).
+    let across = |g: &Game, t: u8| (2..g.map.h - 2).find(|&y| (-6..6).all(|x| g.map.terrain[g.map.idx(x, y)] == t && g.map.bld_at[g.map.idx(x, y)] < 0 && g.map.dep_at[g.map.idx(x, y)] < 0));
+    let land = across(&g, GRASS).expect("no land across the line");
+    let sea = across(&g, WATER).expect("no sea across the line");
+    for p in g.seat_ids() {
+        g.set_ai(p, false);
+    }
+    let wf = w as f32;
+
+    // A worker walks from just west of the line to just east of it.
+    let walker = g.spawn_unit(Kind::Worker, 1, wf - 4.5, land as f32 + 0.5);
+    g.order_move(walker, 3.5, land as f32 + 0.5);
+    // A galley sails the other way.
+    let boat = g.spawn_unit(Kind::Galley, 1, 4.5, sea as f32 + 0.5);
+    g.order_move(boat, wf - 3.5, sea as f32 + 0.5);
+    let mut last = [(g.ents[walker as usize].x, 0.0f32), (g.ents[boat as usize].x, 0.0)];
+    for _ in 0..(8.0 * 20.0) as u32 {
+        g.tick();
+        g.events.clear();
+        for (k, id) in [walker, boat].into_iter().enumerate() {
+            let x = g.ents[id as usize].x;
+            assert!((0.0..wf).contains(&x), "x {x} off the map");
+            assert!(wx(x - last[k].0).abs() < 0.3, "a jump from {} to {x}", last[k].0);
+            last[k] = (x, last[k].1 + wx(x - last[k].0));
+        }
+    }
+    let (e, b) = (&g.ents[walker as usize], &g.ents[boat as usize]);
+    assert!(wx(e.x - 3.5).abs() < 0.6, "the walker is at {} (east {:.1})", e.x, last[0].1);
+    assert!(last[0].1 > 7.0 && last[0].1 < 9.0, "the walker went {:.1} east, not 8 the short way", last[0].1);
+    assert!(wx(b.x - (wf - 3.5)).abs() < 0.6, "the boat is at {} (east {:.1})", b.x, last[1].1);
+    assert!(last[1].1 < -7.0 && last[1].1 > -9.0, "the boat went {:.1} east, not 8 west the short way", last[1].1);
+
+    // An archer shoots a spearman across the line, four tiles off.
+    let archer = g.spawn_unit(Kind::Archer, 1, wf - 1.5, land as f32 + 0.5);
+    let foe = g.spawn_unit(Kind::Spearman, 2, 2.5, land as f32 + 0.5);
+    let hp = g.ents[foe as usize].hp;
+    g.ents[foe as usize].order = crate::game::Order::Idle;
+    run(&mut g, 4.0);
+    assert!(g.ents[foe as usize].hp < hp || !g.ents[foe as usize].alive, "no shot across the line");
+    assert!(g.ents[archer as usize].alive);
+}

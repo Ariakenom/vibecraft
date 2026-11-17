@@ -56,9 +56,9 @@ const GLOBE_GLSL = `
   uniform vec4 uGlobe; uniform vec3 uGlobeAt; uniform mat3 uGlobeRot;
   vec3 globeBend(vec3 p) {
     float R = uGlobe.x;
-    // (Past the map's edges there's no world: the shore and sea drawn out
-    // there fold onto the edge.)
-    float lon = (clamp(p.x, 0.0, uGlobe.y) / uGlobe.y - 0.5) * 6.2831853;
+    // (Past the top and bottom edges there's no world: what's drawn out
+    // there folds onto the edge, under the ice caps.)
+    float lon = (p.x / uGlobe.y - 0.5) * 6.2831853;   // (round the world: past one edge is the other)
     float e = exp(uGlobe.w - clamp(p.z, 0.0, uGlobe.z) / R), e2 = e * e;
     float c = 2.0 * e / (e2 + 1.0), s = (e2 - 1.0) / (e2 + 1.0);   // cos and sin of the latitude
     vec3 d = vec3(c * sin(lon), s, c * cos(lon));
@@ -105,6 +105,14 @@ THREE.Material.prototype.onBeforeCompile = function (sh) {
     return this.intersectsSphere(ball);
   };
 }
+// Between a previous and a current x, `a` of the way: on the Globe the
+// short way round, so a unit crossing the seam steps over it instead of
+// sweeping back across the whole map.
+function lerpX(px, x, a) {
+  let d = x - px;
+  if (GLOBE.on && Math.abs(d) > MW / 2) d -= Math.sign(d) * MW;
+  return px + d * a;
+}
 // Cos and sin of the latitude of flat z, into GLOBE.cs.
 function globeLat(z) {
   const e = Math.exp(GLOBE.top - Math.max(0, Math.min(MH, z)) / GLOBE.R), e2 = e * e;
@@ -137,7 +145,7 @@ function globeSees(x, z, more = 0) {
 // A flat-world point moved onto the ball, as the shader does (into `out`).
 const _gb = new THREE.Vector3();
 function globeBendPoint(x, h, z, out) {
-  const G = GLOBE, lon = (Math.max(0, Math.min(MW, x)) / MW - 0.5) * 2 * Math.PI;
+  const G = GLOBE, lon = (x / MW - 0.5) * 2 * Math.PI;
   globeLat(z);
   const r = G.R + h * G.c;
   _gb.set(G.c * Math.sin(lon) * r, G.s * r, G.c * Math.cos(lon) * r);
@@ -207,8 +215,10 @@ function withFow(mat, extra) {
       // Past the map's edge there is nothing to explore: no fog there (the
       // sea runs on into the haze; see buildWater). Reading the fog texture
       // out there smeared its edge texels to the horizon in black bands.
-      float fowOut = uRound > 0.0 ? length(vFowW - uMapSize * 0.5) - uRound : max(max(-vFowW.x, vFowW.x - uMapSize.x), max(-vFowW.y, vFowW.y - uMapSize.y));
-      gl_FragColor.rgb *= mix(texture2D(uFow, vFowW / uMapSize).r, 1.0, smoothstep(0.0, 2.5, fowOut));`);
+      // (The Globe goes round: x has no outside, and wraps for the lookup.)
+      vec2 fowAt = uGlobe.x > 0.0 ? vec2(mod(vFowW.x, uMapSize.x), vFowW.y) : vFowW;
+      float fowOut = uRound > 0.0 ? length(vFowW - uMapSize * 0.5) - uRound : uGlobe.x > 0.0 ? max(-vFowW.y, vFowW.y - uMapSize.y) : max(max(-vFowW.x, vFowW.x - uMapSize.x), max(-vFowW.y, vFowW.y - uMapSize.y));
+      gl_FragColor.rgb *= mix(texture2D(uFow, fowAt / uMapSize).r, 1.0, smoothstep(0.0, 2.5, fowOut));`);
     if (fs.includes("#include <lights_fragment_begin>")) {
       fs = fs.replace("#include <lights_fragment_begin>", THREE.ShaderChunk.lights_fragment_begin.replace(
         "getDirectionalLightInfo( directionalLight, directLight );",
@@ -1534,6 +1544,10 @@ function elevOf(ht) {
 // Heights live on tile CORNERS: (MW+1) × (MH+1) of them. Called before the
 // terrain texture is painted, so the painter can colour slopes as rock.
 function computeHeights() {
+  // (The Globe's east and west edges are one: corners there take tiles from
+  // both sides, and the last column of corners is the first.)
+  const wrapX = !!(W.map_globe && W.map_globe());
+  const wrapT = x => wrapX ? (x + MW) % MW : x;
   const ter = u8(W.terrain_ptr(), MW * MH), shade = u8(W.shade_ptr(), MW * MH);
   const cw = MW + 1, ch = MH + 1;
   let h = new Float32Array(cw * ch);
@@ -1547,7 +1561,7 @@ function computeHeights() {
   for (let cy = 0; cy <= MH; cy++) for (let cx = 0; cx <= MW; cx++) {
     let sum = 0, n = 0, land = 0, shallow = 0;
     for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
-      const tx = cx + dx, ty = cy + dy;
+      const tx = wrapT(cx + dx), ty = cy + dy;
       if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
       sum += elevOf(shade[ty * MW + tx] / 255); n++;
       const t = ter[ty * MW + tx];
@@ -1569,13 +1583,14 @@ function computeHeights() {
       const me = kind(cy * cw + cx);
       let sum = 0, n = 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const x = cx + dx, y = cy + dy;
+        const x = wrapX ? (cx + dx + MW) % MW : cx + dx, y = cy + dy;
         if (x < 0 || y < 0 || x >= cw || y >= ch || (me !== 2 && kind(y * cw + x) !== me)) continue;
         const wgt = dx || dy ? 1 : 2;
         sum += h[y * cw + x] * wgt; n += wgt;
       }
       o[cy * cw + cx] = sum / n;
     }
+    if (wrapX) for (let cy = 0; cy < ch; cy++) o[cy * cw + MW] = o[cy * cw];
     h = o;
   }
   // Keep water below the surface and land above it. A corner on the shore
@@ -1877,6 +1892,10 @@ function buildWater() {
       }
     ` + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
+        // (On the Globe there's nothing past the map's edges: east and west
+        // the other side of the world is drawn there already, and at the
+        // top and bottom the ice caps are.)
+        if (uGlobe.x > 0.0 && (vWPos.x < 0.0 || vWPos.x > uGlobe.y || vWPos.y < 0.0 || vWPos.y > uGlobe.z)) discard;
         float ground = texture2D(uHeight, (vWPos + uHeightBox.xy) / uHeightBox.zw).r;
         float dRaw = ${WATER_Y.toFixed(3)} - ground;
         if (dRaw < -0.01) discard;
@@ -2747,7 +2766,7 @@ function render3d(alpha, now, dt) {
       setRing(o, !!(flags & 1), kind === K.Capitol ? 1.2 : stat(kind, 6) * 0.78);
       continue;
     }
-    let x = E(i, F.px) + (E(i, F.x) - E(i, F.px)) * alpha;
+    let x = lerpX(E(i, F.px), E(i, F.x), alpha);
     let y = E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha;
     // Multiplayer: a correction moved this unit; slide there instead of jumping.
     const nudge = R3.nudges.get(id);
@@ -3450,7 +3469,7 @@ function updateArrows(alpha) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
     const tx = projBuf[b + 8], ty = projBuf[b + 9];
-    const ix = px + (x - px) * alpha, iy = py + (y - py) * alpha;
+    const ix = lerpX(px, x, alpha), iy = py + (y - py) * alpha;
     // Which way it flies: towards the target.
     let dx = tx - ix, dy = ty - iy, d = Math.hypot(dx, dy);
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }

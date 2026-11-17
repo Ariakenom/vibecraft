@@ -6,7 +6,7 @@
 
 use crate::ai::Ai;
 use crate::defs::*;
-use crate::map::{self, Deposit, Map};
+use crate::map::{self, wrap_x, wx, Deposit, Map};
 use crate::path::{Goal, Pathfinder};
 use crate::people::*;
 
@@ -309,7 +309,7 @@ impl Entity {
         if self.is_building() {
             self.goal(0.0).dist(x, y)
         } else {
-            ((self.x - x).powi(2) + (self.y - y).powi(2)).sqrt() - self.kind.radius()
+            (wx(self.x - x).powi(2) + (self.y - y).powi(2)).sqrt() - self.kind.radius()
         }
     }
 
@@ -855,10 +855,10 @@ impl Game {
                         continue;
                     }
                     let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-                    let d = (cx - px).powi(2) + (cy - py).powi(2);
+                    let d = wx(cx - px).powi(2) + (cy - py).powi(2);
                     if d < bd {
                         bd = d;
-                        best = Some((cx, cy));
+                        best = Some((self.map.tile_x(x) as f32 + 0.5, cy));
                     }
                 }
             }
@@ -1011,12 +1011,19 @@ impl Game {
     fn units_near(&self, x: f32, y: f32, r: f32, mut f: impl FnMut(u32)) {
         let cw = self.map.w / CELL + 1;
         let ch = self.map.h / CELL + 1;
-        let c0x = (((x - r) as i32) / CELL).clamp(0, cw - 1);
-        let c1x = (((x + r) as i32) / CELL).clamp(0, cw - 1);
+        // (Round the world: the cells past an edge are those at the other.)
+        let wrap = self.map.wrap && self.map.w % CELL == 0;
+        let (c0x, c1x) = if wrap {
+            ((x - r).floor() as i32).div_euclid(CELL)..=((x + r).floor() as i32).div_euclid(CELL)
+        } else {
+            (((x - r) as i32) / CELL).clamp(0, cw - 1)..=(((x + r) as i32) / CELL).clamp(0, cw - 1)
+        }
+        .into_inner();
         let c0y = (((y - r) as i32) / CELL).clamp(0, ch - 1);
         let c1y = (((y + r) as i32) / CELL).clamp(0, ch - 1);
         for cy in c0y..=c1y {
-            for cx in c0x..=c1x {
+            for cx in c0x..=if wrap { c1x.min(c0x + cw - 2) } else { c1x } {
+                let cx = if wrap { cx.rem_euclid(cw - 1) } else { cx };
                 for &id in &self.grid[(cy * cw + cx) as usize] {
                     f(id);
                 }
@@ -1071,8 +1078,9 @@ impl Game {
         let r = reach.ceil() as i32 + 1;
         let (cx, cy) = (x.floor() as i32, y.floor() as i32);
         let mut near: Vec<u32> = Vec::new();
+        let (x0, x1) = if self.map.wrap { (cx - r, cx + r) } else { ((cx - r).max(0), (cx + r).min(self.map.w - 1)) };
         for ty in (cy - r).max(0)..=(cy + r).min(self.map.h - 1) {
-            for tx in (cx - r).max(0)..=(cx + r).min(self.map.w - 1) {
+            for tx in x0..=x1 {
                 let b = self.map.bld_at[self.map.idx(tx, ty)];
                 if b >= 0 && near.last() != Some(&(b as u32)) {
                     near.push(b as u32);
@@ -1108,6 +1116,7 @@ impl Game {
         }
         use crate::prof::{span, Part};
         let _tick = span(Part::Tick);
+        map::use_wrap(&self.map);
         self.time += DT;
         self.alert_cooldown -= DT;
         for e in self.ents.iter_mut().filter(|e| e.alive) {
@@ -1195,6 +1204,16 @@ impl Game {
             self.frontier_tick();
         }
         self.check_victory();
+        // Round the world: everything back onto the map (0..w), whichever
+        // way it went over the edge this tick.
+        if self.map.wrap {
+            for e in self.ents.iter_mut().filter(|e| e.alive) {
+                e.x = wrap_x(e.x);
+            }
+            for p in self.proj.iter_mut() {
+                p.x = wrap_x(p.x);
+            }
+        }
     }
 
     /// Lose your last Capitol and you're out: everything you own falls with
@@ -1422,8 +1441,9 @@ impl Game {
         // round the footprint can matter: looking there, not at every
         // entity, keeps the AI's searches cheap.)
         let pad = SQUARE_HALF.ceil() as i32 + Kind::Capitol.stats().size;
+        let (px0, px1) = if self.map.wrap { (tx - pad, tx + s + pad) } else { ((tx - pad).max(0), (tx + s + pad).min(self.map.w)) };
         for y in (ty - pad).max(0)..(ty + s + pad).min(self.map.h) {
-            for x in (tx - pad).max(0)..(tx + s + pad).min(self.map.w) {
+            for x in px0..px1 {
                 let b = self.map.bld_at[self.map.idx(x, y)];
                 if b < 0 {
                     continue;
@@ -1433,6 +1453,7 @@ impl Game {
                     continue;
                 }
                 let (cx, cy) = self.campfire_of(b as usize);
+                let cx = (x0 + x1) * 0.5 + wx(cx - (x0 + x1) * 0.5);
                 let (nx, ny) = (cx.clamp(x0, x1), cy.clamp(y0, y1));
                 if (nx - cx).abs() < SQUARE_HALF && (ny - cy).abs() < SQUARE_HALF {
                     return false;
@@ -1449,7 +1470,8 @@ impl Game {
         for e in self.own(owner) {
             if e.is_building() && e.id as i32 != except && !self.staked(e) {
                 let es = e.kind.stats().size;
-                if e.tx < tx + s + margin && tx - margin < e.tx + es && e.ty < ty + s + margin && ty - margin < e.ty + es {
+                let etx = tx + wx((e.tx - tx) as f32) as i32;
+                if etx < tx + s + margin && tx - margin < etx + es && e.ty < ty + s + margin && ty - margin < e.ty + es {
                     return false;
                 }
             }
@@ -1458,6 +1480,7 @@ impl Game {
     }
 
     pub fn place(&mut self, owner: u8, kind: Kind, tx: i32, ty: i32, builders: &[u32]) -> Result<u32, CmdError> {
+        let tx = self.map.tile_x(tx);
         if !kind.is_building() || !self.spot_free(kind, tx, ty, owner, 0) {
             return Err(CmdError::BadSpot);
         }
@@ -1553,7 +1576,7 @@ impl Game {
             if fog && e.owner != self.local && (!self.visible_to_player(e.x, e.y) || !(self.reveal || Self::spotted_by(e, self.local))) {
                 continue;
             }
-            let d = ((e.x - x).powi(2) + (e.y - y).powi(2)).sqrt();
+            let d = (wx(e.x - x).powi(2) + (e.y - y).powi(2)).sqrt();
             if d < e.kind.radius() + 0.3 && d < bd {
                 bd = d;
                 best = Some(e.id);
@@ -1724,6 +1747,7 @@ impl Game {
                 .collect(),
             _ => Vec::new(),
         };
+        map::use_wrap(&self.map);
         let result = self.apply_inner(owner, cmd, own);
         for (id, b) in was_at {
             if self.ents[id as usize].order != Order::Work(b) {
@@ -1922,7 +1946,7 @@ impl Game {
                     if d < 0 || taken[d as usize] || self.deps[d as usize].kind != Dep::Fish {
                         continue;
                     }
-                    let dist = (tx as f32 + 0.5 - e.x).hypot(ty as f32 + 0.5 - e.y);
+                    let dist = wx(tx as f32 + 0.5 - e.x).hypot(ty as f32 + 0.5 - e.y);
                     if dist <= SHOAL_REACH && best.is_none_or(|(b, j)| dist < b || (dist == b && (d as usize) < j)) {
                         best = Some((dist, d as usize));
                     }
@@ -1946,7 +1970,7 @@ impl Game {
                 self.map.inside(tx, ty)
                     && self.map.dep_at[self.map.idx(tx, ty)] >= 0
                     && self.deps[self.map.dep_at[self.map.idx(tx, ty)] as usize].kind == Dep::Fish
-                    && (tx as f32 + 0.5 - x).hypot(ty as f32 + 0.5 - y) <= SHOAL_REACH
+                    && wx(tx as f32 + 0.5 - x).hypot(ty as f32 + 0.5 - y) <= SHOAL_REACH
             })
         })
     }
@@ -2016,7 +2040,7 @@ impl Game {
             .iter()
             .filter(|b| b.alive && b.owner == owner && ((b.kind == Kind::Airfield && b.built >= 1.0) || b.kind == Kind::Carrier))
             .map(|b| (b.x, b.y))
-            .min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)))
+            .min_by(|a, b| wx(a.0 - x).hypot(a.1 - y).total_cmp(&wx(b.0 - x).hypot(b.1 - y)))
     }
 
     /// An aircraft out of ammunition or fuel heads back to the nearest
@@ -2120,7 +2144,7 @@ impl Game {
                     continue;
                 }
                 let (px, py) = (tx as f32 + 0.5, ty as f32 + 0.5);
-                let d = (px - x).hypot(py - y);
+                let d = wx(px - x).hypot(py - y);
                 if d <= r + 0.5 && best.is_none_or(|(b, _)| d < b) {
                     best = Some((d, (px, py)));
                 }
@@ -2136,7 +2160,7 @@ impl Game {
             return self.ents[i].set_order(Order::Idle);
         }
         let (bx, by) = (self.ents[i].x, self.ents[i].y);
-        let close = (bx - x).hypot(by - y) <= 2.5;
+        let close = wx(bx - x).hypot(by - y) <= 2.5;
         let travel = if close { Travel::Arrived } else { self.travel(i, Goal::point(x, y, 2.5), 1.0) };
         if travel == Travel::Moving {
             return;
@@ -2234,7 +2258,7 @@ impl Game {
             e.path.clear();
             e.goal = None;
             e.anim = Anim::Fight;
-            e.facing = (ty - y).atan2(tx - x);
+            e.facing = (ty - y).atan2(wx(tx - x));
             if e.cooldown <= 0.0 {
                 e.cooldown = st.cooldown;
                 self.fire(i, target);
@@ -2351,7 +2375,7 @@ impl Game {
                 continue;
             }
             let t = &self.ents[p.target as usize];
-            let (dx, dy) = (t.x - p.x, t.y - p.y);
+            let (dx, dy) = (wx(t.x - p.x), t.y - p.y);
             let d = (dx * dx + dy * dy).sqrt();
             let step = 12.0 * DT;
             let p = &mut self.proj[k];
@@ -2475,7 +2499,7 @@ impl Game {
             // from it for ever (map 10 of the benchmark: two builders stood
             // still for twenty minutes, each a step from the same corner).
             let near = if e.path.len() > 1 { 0.45 } else { 0.15 };
-            if (e.x - wx).abs() < near && (e.y - wy).abs() < near {
+            if map::wx(e.x - wx).abs() < near && (e.y - wy).abs() < near {
                 e.path.pop();
             }
         }
@@ -2529,12 +2553,12 @@ impl Game {
             return Travel::Arrived;
         }
         let (tx, ty) = goal.nearest_point(e.x, e.y);
-        let (dx, dy) = (tx - e.x, ty - e.y);
+        let (dx, dy) = (wx(tx - e.x), ty - e.y);
         let d = (dx * dx + dy * dy).sqrt().max(1e-4);
         // Out of fuel: slow, until it's back at an airfield or carrier.
         let slow = if e.fuel <= 0.0 { OUT_OF_FUEL_SPEED } else { 1.0 };
         let s = (e.kind.stats().speed * slow * DT).min(d);
-        e.x = (e.x + dx / d * s).clamp(0.5, self.map.w as f32 - 0.5);
+        e.x = if self.map.wrap { wrap_x(e.x + dx / d * s) } else { (e.x + dx / d * s).clamp(0.5, self.map.w as f32 - 0.5) };
         e.y = (e.y + dy / d * s).clamp(0.5, self.map.h as f32 - 0.5);
         e.facing = dy.atan2(dx);
         e.anim = Anim::Walk;
@@ -2544,7 +2568,7 @@ impl Game {
     /// Returns how far the unit actually moved. Slides along walls.
     fn step_toward(&mut self, i: usize, tx: f32, ty: f32, max: f32) -> f32 {
         let e = &self.ents[i];
-        let (dx, dy) = (tx - e.x, ty - e.y);
+        let (dx, dy) = (wx(tx - e.x), ty - e.y);
         let d = (dx * dx + dy * dy).sqrt();
         if d < 1e-4 {
             return 0.0;
@@ -2564,7 +2588,7 @@ impl Game {
         };
         let (ox, oy) = (e.x, e.y);
         let e = &mut self.ents[i];
-        e.x = fx;
+        e.x = wrap_x(fx);
         e.y = fy;
         e.facing = dy.atan2(dx);
         ((fx - ox).powi(2) + (fy - oy).powi(2)).sqrt()
@@ -2591,7 +2615,7 @@ impl Game {
                 if b.kind.is_air() || b.kind.is_naval() != a_naval {
                     return;
                 }
-                let (dx, dy) = (b.x - ax, b.y - ay);
+                let (dx, dy) = (wx(b.x - ax), b.y - ay);
                 let d2 = dx * dx + dy * dy;
                 let min = ar + b.kind.radius();
                 if d2 >= min * min {
@@ -2615,7 +2639,7 @@ impl Game {
             let (nx, ny) = (e.x + dx, e.y + dy);
             if self.map.passable_for_at(e.kind.is_naval(), nx, ny) {
                 let e = &mut self.ents[i];
-                e.x = nx;
+                e.x = wrap_x(nx);
                 e.y = ny;
             }
         }
@@ -2636,7 +2660,7 @@ impl Game {
             let bit = 1u8 << e.owner;
             for dy in -ri..=ri {
                 for dx in -ri..=ri {
-                    let (x, y) = (cx + dx, cy + dy);
+                    let (x, y) = (map.tile_x(cx + dx), cy + dy);
                     if x >= 0 && y >= 0 && x < w && y < h && ((dx * dx + dy * dy) as f32) <= r * r {
                         self.explored[(y * w + x) as usize] |= bit;
                     }
@@ -2650,7 +2674,7 @@ impl Game {
         // A barbarian knows the ground round its site, and nothing else.
         if self.is_barb(p) {
             let r = self.camp_range(p);
-            return self.map.inside(x, y) && self.barb_site(p).is_some_and(|s| ((x - s.x) as f32).hypot((y - s.y) as f32) <= r);
+            return self.map.inside(x, y) && self.barb_site(p).is_some_and(|s| wx((x - s.x) as f32).hypot((y - s.y) as f32) <= r);
         }
         self.map.inside(x, y) && p < 8 && self.explored[self.map.idx(x, y)] & (1 << p) != 0
     }
@@ -2682,7 +2706,7 @@ impl Game {
             let (cx, cy) = (e.x.floor() as i32, e.y.floor() as i32);
             for dy in -ri..=ri {
                 for dx in -ri..=ri {
-                    let (x, y) = (cx + dx, cy + dy);
+                    let (x, y) = (map.tile_x(cx + dx), cy + dy);
                     if x >= 0 && y >= 0 && x < w && y < self.map.h && ((dx * dx + dy * dy) as f32) <= r * r {
                         self.fog[(y * w + x) as usize] = 2;
                     }
@@ -2711,10 +2735,13 @@ impl Game {
         if !add {
             self.clear_selection();
         }
-        let (lx, hx, ly, hy) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+        // (Across the seam, round the world: the box is measured from its
+        // middle, the short way.)
+        let (half, mid) = (wx(x1 - x0).abs() * 0.5, x0 + wx(x1 - x0) * 0.5);
+        let (ly, hy) = (y0.min(y1), y0.max(y1));
         let inside = |e: &Entity| {
             let r = if e.is_building() { 0.0 } else { e.kind.radius() };
-            e.x + r >= lx && e.x - r <= hx && e.y + r >= ly && e.y - r <= hy
+            wx(e.x - mid).abs() <= half + r && e.y + r >= ly && e.y - r <= hy
         };
         let me = self.local;
         let ok = |e: &Entity| e.alive && e.owner == me && e.aboard == 0 && (filter < 0 || e.kind as i32 == filter);
@@ -2882,7 +2909,7 @@ impl Game {
         for ty in y as i32 - r..=y as i32 + r {
             for tx in x as i32 - r..=x as i32 + r {
                 let (cx, cy) = (tx as f32 + 0.5, ty as f32 + 0.5);
-                if !self.map.inside(tx, ty) || (cx - x).hypot(cy - y) > CRATER_RADIUS {
+                if !self.map.inside(tx, ty) || wx(cx - x).hypot(cy - y) > CRATER_RADIUS {
                     continue;
                 }
                 let i = self.map.idx(tx, ty);

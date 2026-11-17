@@ -135,9 +135,17 @@ not straight away (see `CLAUDE.md`).
   Picking turns the camera's ray into the flat world's (`globeRay`,
   `pickRay`); `worldToScreen` bends first; three.js's culling tests where
   things are drawn and hides the far side; the camera wraps east-west and
-  zooms out to the whole ball. Limits: nothing crosses the seam (the
-  simulation doesn't wrap), the poles are ice caps drawn on a ball under
+  zooms out to the whole ball. Limits: the poles are ice caps drawn on a ball under
   the map, the sky is still the ordinary sky, and from far off a whole
   hemisphere is drawn (2 to 3.5 million triangles; grass and herds are
   hidden there). `test/browser/globe.mjs` checks picking, the far side,
   the wrap and that the next game is flat again.
+  Going round (17 Nov): the game wraps east-west on this map. `Map::wrap`
+  (told by the Globe's size); `Map::idx`/`inside` wrap tiles; every
+  distance runs its x difference through `map::wx` (a thread-local width,
+  set by `Map::new`, each tick and each command); positions come back onto
+  the map at the end of each tick. The generator joins the coast noise and
+  the ocean across 180°. `the_globe_goes_round` walks, sails and shoots
+  across; `the_globe_seam_is_one_ocean` checks the join. Costs about 10-15%
+  per tick on the Globe. A faint line still shows in the sea's colour at
+  the seam (its noise isn't periodic).

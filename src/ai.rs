@@ -36,6 +36,7 @@ pub fn ai_log_take() -> Vec<String> {
     AI_LOG.with(|l| l.borrow_mut().take().unwrap_or_default())
 }
 use crate::game::*;
+use crate::map::wx;
 
 /// Seconds a computer player waits before looking again for room for a
 /// kind there was none for.
@@ -478,7 +479,7 @@ impl Game {
         let guards: Vec<(f32, f32)> = self.own(me).filter(|e| e.kind == Kind::AirDefense).map(|e| (e.x, e.y)).collect();
         self.own(me)
             .filter(|e| e.built >= 1.0 && matches!(e.kind, Kind::Capitol | Kind::MissileSilo))
-            .find(|e| !guards.iter().any(|&(x, y)| (x - e.x).hypot(y - e.y) <= AIR_DEFENSE_NEAR + 1.5))
+            .find(|e| !guards.iter().any(|&(x, y)| wx(x - e.x).hypot(y - e.y) <= AIR_DEFENSE_NEAR + 1.5))
             .map(|e| (e.x, e.y))
     }
 
@@ -642,7 +643,7 @@ impl Game {
         // One project at a time: wait while a foundation still needs
         // builders. Far-off ones don't hold the town up: their builders may
         // be cut down on the way, again and again.
-        let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| (self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 30.0).collect();
+        let near: Vec<u32> = c.unfinished.iter().copied().filter(|&b| wx(self.ents[b as usize].x - c.home.0).hypot(self.ents[b as usize].y - c.home.1) < 30.0).collect();
         // A few at once while there are hands for them (playtest: the
         // computer built one thing at a time with a crowd standing idle).
         let busy = near.len() >= PARALLEL || c.spare == 0;
@@ -833,7 +834,7 @@ impl Game {
     fn ai_fish(&mut self, c: &mut Census) -> Step {
         let me = c.me;
         let home = c.home;
-        let shoals = self.deps.iter().filter(|d| d.kind == Dep::Fish && (d.center().0 - home.0).hypot(d.center().1 - home.1) < 40.0).count();
+        let shoals = self.deps.iter().filter(|d| d.kind == Dep::Fish && wx(d.center().0 - home.0).hypot(d.center().1 - home.1) < 40.0).count();
         if shoals == 0 {
             return Step::Blocked;
         }
@@ -1072,7 +1073,7 @@ impl Game {
                     // and trying them all was most of a turn. Skirmish games
                     // are left exactly as they were.)
                     .filter(|(_, d)| d.kind == dep && self.explored_by(me, d.tx, d.ty) && (self.frontier.is_none() || touches(&self.map, &c.reach, d.tx, d.ty, 1)))
-                    .map(|(i, d)| ((d.center().0 - bx).powi(2) + (d.center().1 - by).powi(2), i))
+                    .map(|(i, d)| (wx(d.center().0 - bx).powi(2) + (d.center().1 - by).powi(2), i))
                     .collect();
                 // `total_cmp` orders floats totally, and the index breaks
                 // ties, so both multiplayer copies pick the same deposit.
@@ -1301,7 +1302,7 @@ impl Game {
                 continue;
             }
             let (x, y) = (e.x, e.y);
-            let best = shoals.iter().copied().filter(|p| !busy.iter().any(|b| (b.0 - p.0).hypot(b.1 - p.1) < 1.0)).min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y)));
+            let best = shoals.iter().copied().filter(|p| !busy.iter().any(|b| wx(b.0 - p.0).hypot(b.1 - p.1) < 1.0)).min_by(|a, b| wx(a.0 - x).hypot(a.1 - y).total_cmp(&wx(b.0 - x).hypot(b.1 - y)));
             if let Some(p) = best {
                 busy.push(p);
             }
@@ -1312,7 +1313,7 @@ impl Game {
         }
         // Enemy boats near home: the warships go for them.
         let home = c.home;
-        let foe = self.ents.iter().find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_naval() && Game::spotted_by(e, me) && (e.x - home.0).hypot(e.y - home.1) < 30.0).map(|e| (e.x, e.y));
+        let foe = self.ents.iter().find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_naval() && Game::spotted_by(e, me) && wx(e.x - home.0).hypot(e.y - home.1) < 30.0).map(|e| (e.x, e.y));
         if let Some((x, y)) = foe {
             for id in self.navy(me) {
                 if self.ents[id as usize].order == Order::Idle {
@@ -1333,7 +1334,7 @@ impl Game {
                 continue;
             }
             let (x, y) = (e.x, e.y);
-            if let Some(&(bx, by)) = bases.iter().min_by(|a, b| (a.0 - x).hypot(a.1 - y).total_cmp(&(b.0 - x).hypot(b.1 - y))) {
+            if let Some(&(bx, by)) = bases.iter().min_by(|a, b| wx(a.0 - x).hypot(a.1 - y).total_cmp(&wx(b.0 - x).hypot(b.1 - y))) {
                 if self.ents[i].order != (Order::Move { x: bx, y: by }) {
                     let id = self.ents[i].id;
                     self.order_move(id, bx, by);
@@ -1360,7 +1361,7 @@ impl Game {
         for (radius, n) in [(24.0f32, 10), (33.0, 14)] {
             for k in 0..n {
                 let a = k as f32 / n as f32 * std::f32::consts::TAU;
-                legs.push(((c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0), (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0)));
+                legs.push((if self.map.wrap { crate::map::wrap_x(c.home.0 + a.cos() * radius) } else { (c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0) }, (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0)));
             }
         }
         let ai = &self.ais[me as usize];
@@ -1390,11 +1391,11 @@ impl Game {
                     if g.explored_by(me, tx, ty) || !c.reach[m.idx(tx, ty)] {
                         continue;
                     }
-                    if towns.iter().any(|&(x, y)| (x - tx as f32).hypot(y - ty as f32) < SCOUT_KEEP_AWAY) {
+                    if towns.iter().any(|&(x, y)| wx(x - tx as f32).hypot(y - ty as f32) < SCOUT_KEEP_AWAY) {
                         continue;
                     }
                     let (x, y) = (tx as f32 + 0.5, ty as f32 + 0.5);
-                    let d = (x - c.home.0).hypot(y - c.home.1) + 0.5 * (x - from.0).hypot(y - from.1);
+                    let d = wx(x - c.home.0).hypot(y - c.home.1) + 0.5 * wx(x - from.0).hypot(y - from.1);
                     if best.is_none_or(|(b, _)| d < b) {
                         best = Some((d, (x, y)));
                     }
@@ -1424,7 +1425,7 @@ impl Game {
         // arriving. Another soldier looks instead.
         let e = &self.ents[id as usize];
         if let Order::Move { x, y } = e.order {
-            if e.path.is_empty() && (e.x - x).hypot(e.y - y) > 1.5 && e.repath <= 0.0 {
+            if e.path.is_empty() && wx(e.x - x).hypot(e.y - y) > 1.5 && e.repath <= 0.0 {
                 ailog!("scout #{id} can't get there: another one, somewhere else");
                 let ai = &mut self.ais[me as usize];
                 ai.scout = None;
@@ -1458,7 +1459,7 @@ impl Game {
         let diff = self.ais[me as usize].difficulty;
         // Defend: enemies near home or by any of our buildings, or anything
         // of ours being hit near home, pull the army back.
-        let threat = self.intruder(me, bx, by).or_else(|| self.ais[me as usize].alarm.take().filter(|&(x, y)| (x - bx).hypot(y - by) < 22.0));
+        let threat = self.intruder(me, bx, by).or_else(|| self.ais[me as usize].alarm.take().filter(|&(x, y)| wx(x - bx).hypot(y - by) < 22.0));
         if let Some((tx, ty)) = threat {
             self.ais[me as usize].gather = None;
             for &id in &c.army {
@@ -1470,7 +1471,7 @@ impl Game {
         }
         // A wave gathering: go once most of it is there, or it's been long enough.
         if let Some((gx, gy)) = self.ais[me as usize].gather {
-            let there = c.army.iter().filter(|&&id| (self.ents[id as usize].x - gx).hypot(self.ents[id as usize].y - gy) < 6.0).count();
+            let there = c.army.iter().filter(|&&id| wx(self.ents[id as usize].x - gx).hypot(self.ents[id as usize].y - gy) < 6.0).count();
             if there * 10 >= c.army.len() * 8 || self.time >= self.ais[me as usize].gather_until {
                 self.ais[me as usize].gather = None;
                 if let Some((tx, ty)) = self.wave_target(me, bx, by, &c.reach) {
@@ -1499,7 +1500,7 @@ impl Game {
                     self.order_attack_move(id, tx, ty);
                 }
                 // First gather a third of the way there, then go together.
-                let (gx, gy) = (bx + (tx - bx) * 0.3, by + (ty - by) * 0.3);
+                let (gx, gy) = (crate::map::wrap_x(bx + wx(tx - bx) * 0.3), by + (ty - by) * 0.3);
                 let spots = formation_around(c.army.len(), gx, gy);
                 for (&id, &(x, y)) in c.army.iter().zip(&spots) {
                     self.order_move(id, x, y);
@@ -1523,7 +1524,7 @@ impl Game {
         self.ents
             .iter()
             .filter(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.is_military() && !e.kind.is_air() && !e.kind.is_naval())
-            .find(|e| (e.x - bx).hypot(e.y - by) < 34.0 && ours.iter().any(|&(x, y)| (e.x - x).hypot(e.y - y) < 8.0))
+            .find(|e| wx(e.x - bx).hypot(e.y - by) < 34.0 && ours.iter().any(|&(x, y)| wx(e.x - x).hypot(e.y - y) < 8.0))
             .map(|e| (e.x, e.y))
     }
 
@@ -1531,7 +1532,7 @@ impl Game {
     fn enemy_unit_near(&self, me: u8, x: f32, y: f32, r: f32) -> Option<(f32, f32)> {
         self.ents
             .iter()
-            .find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.holds_bed() && !e.kind.is_naval() && (e.x - x).hypot(e.y - y) < r)
+            .find(|e| e.alive && e.owner != me && e.owner != 0 && e.kind.holds_bed() && !e.kind.is_naval() && wx(e.x - x).hypot(e.y - y) < r)
             .map(|e| (e.x, e.y))
     }
 
@@ -1551,14 +1552,14 @@ impl Game {
                 .ents
                 .iter()
                 .filter(|e| e.alive && e.kind == Kind::Capitol && e.owner != me && e.owner != 0 && touches(m, reach, e.tx, e.ty, e.kind.stats().size))
-                .min_by(|a, b| (a.x - bx).hypot(a.y - by).total_cmp(&(b.x - bx).hypot(b.y - by)))
+                .min_by(|a, b| wx(a.x - bx).hypot(a.y - by).total_cmp(&wx(b.x - bx).hypot(b.y - by)))
                 .map(|e| (e.x, e.y));
         }
         self.ents
             .iter()
-            .filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && (e.x - bx).hypot(e.y - by) < crate::barbarians::RAID_RANGE)
+            .filter(|e| e.alive && e.is_building() && e.owner != me && e.owner != 0 && wx(e.x - bx).hypot(e.y - by) < crate::barbarians::RAID_RANGE)
             .filter(|e| touches(m, reach, e.tx, e.ty, e.kind.stats().size))
-            .min_by(|a, b| (a.x - bx).hypot(a.y - by).total_cmp(&(b.x - bx).hypot(b.y - by)))
+            .min_by(|a, b| wx(a.x - bx).hypot(a.y - by).total_cmp(&wx(b.x - bx).hypot(b.y - by)))
             .map(|e| (e.x, e.y))
     }
 
@@ -1567,7 +1568,7 @@ impl Game {
         self.ents
             .iter()
             .filter(|e| e.alive && e.kind == Kind::Capitol && e.owner != me && e.owner != 0)
-            .min_by(|a, b| (a.x - bx).hypot(a.y - by).total_cmp(&(b.x - bx).hypot(b.y - by)))
+            .min_by(|a, b| wx(a.x - bx).hypot(a.y - by).total_cmp(&wx(b.x - bx).hypot(b.y - by)))
             .map(|e| (e.x, e.y))
     }
 }

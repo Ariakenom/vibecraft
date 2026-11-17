@@ -14,8 +14,8 @@
 //! Mercator map, 180° west at the left edge to 180° east at the right, 72°
 //! north to 56° south. The game on it is as flat as any other; the page
 //! wraps what it draws round a ball (render3d.js, `GLOBE`), where the left
-//! and right edges meet in the middle of the Pacific. Nothing crosses that
-//! line: the simulation doesn't know its world is round. Mercator, because
+//! and right edges meet at 180°, between Siberia and Alaska; the game goes
+//! on across that line (`Map::wrap`, `map::wx`). Mercator, because
 //! it keeps shapes: a house is a house at any latitude, only smaller toward
 //! the poles.
 
@@ -149,9 +149,17 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             dist(p, centre) <= LAT_RADIUS - margin
         }
     };
-    // Open sea where the world ends: south of the disc's last latitude, and
-    // along the Globe's seam in the Pacific (so both edges are water).
-    let no_land = |lat: f32, lon: f32| if globe { lon.abs() > 176.0 } else { lat < SOUTH + 1.0 };
+    // Open sea where the world ends: south of the disc's last latitude.
+    // (The Globe has no end east or west.)
+    let no_land = |lat: f32, lon: f32| !globe && lat < SOUTH + 1.0;
+    // Noise that joins up at the Globe's seam: the last `JOIN` tiles fade
+    // into what the first ones have, so the coast doesn't jump there.
+    const JOIN: f32 = 24.0;
+    let fbm_round = |x: f32, y: f32, scale: f32, off: f32, seed: u32| {
+        let f = |x: f32| fbm(x / scale + off, y / scale + off, seed);
+        let t = if globe { ((x - (w as f32 - JOIN)) / JOIN).clamp(0.0, 1.0) } else { 0.0 };
+        if t > 0.0 { f(x) * (1.0 - t) + f(x - w as f32) * t } else { f(x) }
+    };
 
     // The towns: homelands in an order the seed picks, far enough apart.
     let mut order: Vec<usize> = (0..HOMES.len()).collect();
@@ -212,14 +220,14 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
                 continue;
             }
             let (lat, lon) = globe_of(p);
-            let noise = fbm(x as f32 / coast_scale, y as f32 / coast_scale, seed);
+            let noise = fbm_round(x as f32, y as f32, coast_scale, 0.0, seed);
             // The atlas says where the land is; noise makes the coast.
             let mut ht = if no_land(lat, lon) { 0.1 } else { 0.08 + land(lat, lon) * 0.5 + noise * 0.24 };
             let near = near_base(p);
             if near < 9.0 {
                 ht = ht.max(0.53 + (9.0 - near) / 9.0 * 0.1);
             }
-            let hills = fbm(x as f32 / 9.0 + 70.0, y as f32 / 9.0 + 70.0, seed ^ 0x411);
+            let hills = fbm_round(x as f32, y as f32, 9.0, 70.0, seed ^ 0x411);
             terrain[i] = if ht < water_at {
                 WATER
             } else if ht < water_at + 0.03 {
@@ -233,7 +241,7 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             shade[i] = ((drawn - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
             // Forests, thinner in the desert belts and the far north.
             let dry_belt = (lat.abs() > 15.0 && lat.abs() < 32.0) || lat > 68.0;
-            let f = fbm(x as f32 / wood_scale + 40.0, y as f32 / wood_scale + 40.0, seed ^ 0xBEEF);
+            let f = fbm_round(x as f32, y as f32, wood_scale, 40.0, seed ^ 0xBEEF);
             if matches!(terrain[i], GRASS | HILL) && f > wood_at + if dry_belt { 0.1 } else { 0.0 } && hash(x, y, seed ^ 7) < 0.82 && near > 11.0 {
                 feat[i] = Feat::Tree;
             }
@@ -435,7 +443,8 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     sea[start] = terrain[start] == WATER;
     while let Some((x, y)) = stack.pop() {
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let (nx, ny) = (x + dx, y + dy);
+            // (On the Globe the ocean goes on across the seam.)
+            let (nx, ny) = (if globe { (x + dx).rem_euclid(w) } else { x + dx }, y + dy);
             if nx >= 0 && ny >= 0 && nx < w && ny < h && !sea[(ny * w + nx) as usize] && terrain[(ny * w + nx) as usize] == WATER {
                 sea[(ny * w + nx) as usize] = true;
                 stack.push((nx, ny));
@@ -566,6 +575,19 @@ mod tests {
                 }
                 assert!(deps.iter().all(|d| m.terrain[m.idx(d.tx, d.ty)] != EDGE));
             }
+        }
+    }
+
+    /// On the Globe the ocean is one: no shallow (walkable) water where the
+    /// map's edges meet, and the tiles on either side of the line match.
+    #[test]
+    fn the_globe_seam_is_one_ocean() {
+        for seed in 0..4u32 {
+            let (m, ..) = generate_world(seed, 2, Shape::Globe);
+            let shallow_at_seam = (0..m.h).filter(|&y| [0, 1, m.w - 2, m.w - 1].iter().any(|&x| m.terrain[m.idx(x, y)] == SHALLOW)).count();
+            assert_eq!(shallow_at_seam, 0, "seed {seed}: shallows at the seam");
+            let differ = (0..m.h).filter(|&y| (m.terrain[m.idx(m.w - 1, y)] == WATER) != (m.terrain[m.idx(0, y)] == WATER)).count();
+            assert!(differ * 10 < m.h as usize, "seed {seed}: {differ} rows change from land to sea at the seam");
         }
     }
 
