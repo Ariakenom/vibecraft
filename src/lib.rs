@@ -77,7 +77,7 @@ pub extern "C" fn init(seed: u32, difficulty: u32, players: u32) {
 
 #[unsafe(no_mangle)]
 /// `init`, for a Frontier game: the big map of continents, with barbarians.
-/// `size`: 0 Small, 1 Large, 2 the World map.
+/// `size`: 0 Small, 1 Large, 2 the World map, 3 the Globe.
 pub extern "C" fn init_frontier(seed: u32, difficulty: u32, players: u32, size: u32) {
     let world = World { game: Game::new_frontier(seed, difficulty, players.clamp(2, 4) as u8, map_frontier::Size::from_u32(size)), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
     WORLD.with(|w| *w.borrow_mut() = Some(world));
@@ -130,6 +130,13 @@ pub extern "C" fn game_mode() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn map_round() -> u32 {
     game(|g| (g.map.terrain.first() == Some(&map::EDGE)) as u32 * map_world::RADIUS as u32)
+}
+
+/// 1 if this map is the Globe's: the page wraps it round a ball
+/// (`map_world::Shape::Globe`; told by its size, which no other map has).
+#[unsafe(no_mangle)]
+pub extern "C" fn map_globe() -> u32 {
+    game(|g| (g.map.w == map_world::GLOBE_W && g.map.h == map_world::GLOBE_H) as u32)
 }
 
 /// Is `owner` a barbarian (Frontier)? 1 or 0.
@@ -1318,7 +1325,7 @@ thread_local! {
 /// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width; it's
 /// square. `preview_ptr` has the bytes.
 #[unsafe(no_mangle)]
-/// `mode`: 0 Skirmish, 1 Frontier Small, 2 Frontier Large, 3 the World map.
+/// `mode`: 0 Skirmish, 1 Frontier Small, 2 Frontier Large, 3 the World map, 4 the Globe.
 pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
     let players = players.clamp(2, 4) as usize;
     // (On a Frontier map, the barbarian sites are drawn in white too.)

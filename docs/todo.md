@@ -124,3 +124,20 @@ not straight away (see `CLAUDE.md`).
   early there (all wood held before the Sawmill, the same wall as on other
   maps but met more often); a real globe would need the simulation to wrap
   round, which it doesn't.
+- **The Globe** (Nov 2026, "the actually round one"): mode 4, "World
+  (globe)". The game on it is flat like any other: `map_world.rs` lays the
+  same Earth out as a Mercator map (`Shape::Globe`, 640 x 308 tiles, 72° N
+  to 56° S, the seam in the mid-Pacific kept as open sea). The page wraps
+  what it draws round a ball: every built-in material's `project_vertex`
+  moves each vertex onto the ball as its last step (`GLOBE`, `globeBend`
+  in render3d.js), turned so the camera's spot is on top exactly where it
+  is in the flat world. Fog of war, shadows, waves and heights stay flat.
+  Picking turns the camera's ray into the flat world's (`globeRay`,
+  `pickRay`); `worldToScreen` bends first; three.js's culling tests where
+  things are drawn and hides the far side; the camera wraps east-west and
+  zooms out to the whole ball. Limits: nothing crosses the seam (the
+  simulation doesn't wrap), the poles are ice caps drawn on a ball under
+  the map, the sky is still the ordinary sky, and from far off a whole
+  hemisphere is drawn (2 to 3.5 million triangles; grass and herds are
+  hidden there). `test/browser/globe.mjs` checks picking, the far side,
+  the wrap and that the next game is flat again.

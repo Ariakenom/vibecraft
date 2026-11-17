@@ -27,6 +27,8 @@ pub enum Size {
     Large,
     /// The World map: the Earth, round (`map_world.rs`).
     World,
+    /// The same world for a globe: the page wraps it round a ball.
+    Globe,
 }
 
 impl Size {
@@ -34,6 +36,7 @@ impl Size {
         match v {
             1 => Size::Large,
             2 => Size::World,
+            3 => Size::Globe,
             _ => Size::Small,
         }
     }
@@ -77,8 +80,9 @@ pub fn site_era(d: f32, far: f32) -> u8 {
 /// Build a Frontier map for `players` (2 to 4). Returns the map, its
 /// deposits, one base centre per player, and the barbarian sites.
 pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Deposit>, Vec<(i32, i32)>, Vec<Site>) {
-    if size == Size::World {
-        return crate::map_world::generate_world(seed, players);
+    if matches!(size, Size::World | Size::Globe) {
+        let shape = if size == Size::Globe { crate::map_world::Shape::Globe } else { crate::map_world::Shape::Disc };
+        return crate::map_world::generate_world(seed, players, shape);
     }
     let players = players.clamp(2, 4);
     let four = players > 2;
@@ -87,7 +91,7 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
         (Size::Large, true) => LAND_4,
         (Size::Small, false) => SMALL_2,
         (Size::Small, true) => SMALL_4,
-        (Size::World, _) => unreachable!(),
+        (Size::World | Size::Globe, _) => unreachable!(),
     };
     // Distances on the home continent and between sites shrink with the
     // map (1 on a Large map).

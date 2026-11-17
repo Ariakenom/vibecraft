@@ -33,6 +33,150 @@ const R3 = {
 // One texture, a texel per tile,, sampled in every material's fragment shader to darken
 // what you can't see. three.js lets us patch its built-in shaders with
 // `onBeforeCompile`, so we keep normal lighting and shadows for free.
+// --- The Globe -------------------------------------------------------------------
+// On the Globe map the game is as flat as on any other: a Mercator map of the
+// world (map_world.rs). Only the last step of drawing differs: every vertex,
+// once it has its place in the flat world, is moved onto a ball before the
+// camera sees it (`globeBend`, in the `project_vertex` chunk every built-in
+// material uses). The ball is turned so the spot the camera looks at sits on
+// top, exactly where it is in the flat world, with east, north and up as
+// there: close up the game looks as it always does, and the world curves
+// away from the middle of the screen. Everything else (fog of war, shadows,
+// waves, heights) is worked out in the flat world as before. Mercator keeps
+// shapes, so things only get smaller toward the poles, never squashed.
+//   uGlobe: the ball's radius (0: flat), the map's width and height, and
+//   Mercator's y at its top edge. uGlobeAt: the camera's spot on the flat
+//   ground. uGlobeRot: turns the ball so that spot is on top.
+const GLOBE = {
+  on: false, R: 0, top: 1.8427 /* map_world.rs GLOBE_TOP */, c0: 1, cosLimit: -1,
+  e0: new THREE.Vector3(1, 0, 0), u0: new THREE.Vector3(0, 1, 0), n0: new THREE.Vector3(0, 0, -1), seen: new THREE.Vector3(0, 1, 0),
+  u: { uGlobe: { value: new THREE.Vector4(0, 1, 1, 0) }, uGlobeAt: { value: new THREE.Vector3() }, uGlobeRot: { value: new THREE.Matrix3() } },
+};
+const GLOBE_GLSL = `
+  uniform vec4 uGlobe; uniform vec3 uGlobeAt; uniform mat3 uGlobeRot;
+  vec3 globeBend(vec3 p) {
+    float R = uGlobe.x;
+    // (Past the map's edges there's no world: the shore and sea drawn out
+    // there fold onto the edge.)
+    float lon = (clamp(p.x, 0.0, uGlobe.y) / uGlobe.y - 0.5) * 6.2831853;
+    float e = exp(uGlobe.w - clamp(p.z, 0.0, uGlobe.z) / R), e2 = e * e;
+    float c = 2.0 * e / (e2 + 1.0), s = (e2 - 1.0) / (e2 + 1.0);   // cos and sin of the latitude
+    vec3 d = vec3(c * sin(lon), s, c * cos(lon));
+    return uGlobeAt + uGlobeRot * (d * (R + p.y * c)) - vec3(0.0, R, 0.0);
+  }
+`;
+THREE.ShaderChunk.common = GLOBE_GLSL + THREE.ShaderChunk.common;
+{
+  const flat = "mvPosition = modelViewMatrix * mvPosition;";
+  if (!THREE.ShaderChunk.project_vertex.includes(flat)) console.error("three.js project_vertex changed: the Globe won't bend");
+  THREE.ShaderChunk.project_vertex = THREE.ShaderChunk.project_vertex.replace(flat,
+    "if (uGlobe.x > 0.0) { mvPosition = viewMatrix * vec4(globeBend((modelMatrix * mvPosition).xyz), 1.0); } else { mvPosition = modelViewMatrix * mvPosition; }");
+}
+// Every material gets the globe's uniforms, but the shadow pass's: shadows
+// are cast and looked up in the flat world (a material without the uniforms
+// has uGlobe = 0 and doesn't bend). `userData.flat` keeps one out too.
+THREE.Material.prototype.onBeforeCompile = function (sh) {
+  if (!this.isMeshDepthMaterial && !this.isMeshDistanceMaterial && !this.userData.flat) Object.assign(sh.uniforms, GLOBE.u);
+};
+// three.js skips what's outside the camera's view by where it is in the flat
+// world, which on the Globe isn't where it's drawn. There the test is made
+// where it is drawn: the ball round the thing, moved as its vertices are,
+// and nothing that's round the back. (The sun's shadow camera works in the
+// flat world, as ever: its frustum is marked `flat`.)
+{
+  const was = THREE.Frustum.prototype.intersectsObject, ball = new THREE.Sphere();
+  THREE.Frustum.prototype.intersectsObject = function (o) {
+    if (!GLOBE.on || this.flat || o.userData.noCull) return was.call(this, o);
+    if (o.boundingSphere !== undefined) {
+      if (o.boundingSphere === null) o.computeBoundingSphere();
+      ball.copy(o.boundingSphere).applyMatrix4(o.matrixWorld);
+    } else {
+      const g = o.geometry;
+      if (g.boundingSphere === null) g.computeBoundingSphere();
+      ball.copy(g.boundingSphere).applyMatrix4(o.matrixWorld);
+    }
+    if (ball.radius > 150) return true;
+    const x = ball.center.x, h = ball.center.y, z = ball.center.z;
+    globeLat(z);
+    // (Its size on the ball: Mercator's tiles shrink toward the poles.)
+    if (!globeSees(x, z, ball.radius * GLOBE.c / GLOBE.R + 0.03)) return false;
+    ball.radius *= Math.min(1, GLOBE.c + 0.1);
+    globeBendPoint(x, h, z, ball.center);
+    return this.intersectsSphere(ball);
+  };
+}
+// Cos and sin of the latitude of flat z, into GLOBE.cs.
+function globeLat(z) {
+  const e = Math.exp(GLOBE.top - Math.max(0, Math.min(MH, z)) / GLOBE.R), e2 = e * e;
+  GLOBE.c = 2 * e / (e2 + 1); GLOBE.s = (e2 - 1) / (e2 + 1);
+}
+// Start of a frame: turn the ball to the camera's spot.
+function globeFocus(x, z, camHeight, camOut, yaw) {
+  const G = GLOBE, lon = (x / MW - 0.5) * 2 * Math.PI;
+  globeLat(z);
+  const c = G.c, s = G.s, sl = Math.sin(lon), cl = Math.cos(lon);
+  G.c0 = c;
+  G.e0.set(cl, 0, -sl); G.u0.set(c * sl, s, c * cl); G.n0.set(-s * sl, c, -s * cl);
+  G.u.uGlobeRot.value.set(G.e0.x, G.e0.y, G.e0.z, G.u0.x, G.u0.y, G.u0.z, -G.n0.x, -G.n0.y, -G.n0.z);
+  G.u.uGlobeAt.value.set(x, 0, z);
+  // What the camera sees of the ball: as far round as its horizon, from
+  // the point it hangs over (`seen`, its direction from the ball's middle).
+  const ox = Math.sin(yaw) * camOut, oy = camHeight + G.R, oz = Math.cos(yaw) * camOut;
+  G.seen.set(G.e0.x * ox + G.u0.x * oy - G.n0.x * oz, G.e0.y * ox + G.u0.y * oy - G.n0.y * oz, G.e0.z * ox + G.u0.z * oy - G.n0.z * oz);
+  const far = G.seen.length();
+  G.seen.divideScalar(far);
+  G.cosLimit = Math.cos(Math.min(Math.PI, Math.acos(Math.min(1, G.R / far)) + 0.06));
+}
+// Is flat (x, z) on the side of the ball the camera sees? `more`: radians of slack.
+function globeSees(x, z, more = 0) {
+  const G = GLOBE, lon = (x / MW - 0.5) * 2 * Math.PI;
+  globeLat(z);
+  const d = G.c * Math.sin(lon) * G.seen.x + G.s * G.seen.y + G.c * Math.cos(lon) * G.seen.z;
+  return d >= (more ? Math.cos(Math.min(Math.PI, Math.acos(G.cosLimit) + more)) : G.cosLimit);
+}
+// A flat-world point moved onto the ball, as the shader does (into `out`).
+const _gb = new THREE.Vector3();
+function globeBendPoint(x, h, z, out) {
+  const G = GLOBE, lon = (Math.max(0, Math.min(MW, x)) / MW - 0.5) * 2 * Math.PI;
+  globeLat(z);
+  const r = G.R + h * G.c;
+  _gb.set(G.c * Math.sin(lon) * r, G.s * r, G.c * Math.cos(lon) * r);
+  return out.set(x0g() + _gb.dot(G.e0), _gb.dot(G.u0) - G.R, z0g() - _gb.dot(G.n0));
+}
+const x0g = () => GLOBE.u.uGlobeAt.value.x, z0g = () => GLOBE.u.uGlobeAt.value.z;
+// A ray from the camera (through a pixel) turned into the ray that meets
+// the same spot the same way in the flat world, so everything that picks
+// with rays goes on working. False if it misses the ball (or meets an ice cap).
+const _go = new THREE.Vector3(), _gd = new THREE.Vector3(), _gh = new THREE.Vector3();
+function globeRay(ray) {
+  const G = GLOBE, R = G.R;
+  // Into the ball's own frame (its middle at 0).
+  const ox = ray.origin.x - x0g(), oy = ray.origin.y + R, oz = ray.origin.z - z0g();
+  const toBall = v => v.set(G.e0.x * _gh.x + G.u0.x * _gh.y - G.n0.x * _gh.z, G.e0.y * _gh.x + G.u0.y * _gh.y - G.n0.y * _gh.z, G.e0.z * _gh.x + G.u0.z * _gh.y - G.n0.z * _gh.z);
+  _gh.set(ox, oy, oz); toBall(_go);
+  _gh.copy(ray.direction); toBall(_gd);
+  const b = _go.dot(_gd), cc = _go.lengthSq() - R * R, disc = b * b - cc;
+  const miss = () => { ray.origin.set(0, 1e5, 0); ray.direction.set(0, 1, 0); return false; };
+  if (disc < 0 || -b - Math.sqrt(disc) < 0) return miss();
+  const t = -b - Math.sqrt(disc);
+  const hx = _go.x + _gd.x * t, hy = _go.y + _gd.y * t, hz = _go.z + _gd.z * t;
+  const s = Math.max(-0.999999, Math.min(0.999999, hy / R)), c = Math.sqrt(1 - s * s), lon = Math.atan2(hx, hz);
+  const fz = (G.top - 0.5 * Math.log((1 + s) / (1 - s))) * R, fx = (lon / (2 * Math.PI) + 0.5) * MW;
+  if (fz < 0 || fz > MH) return miss();
+  // The way it comes in, by the east, up and north of the spot it meets.
+  const sl = Math.sin(lon), cl = Math.cos(lon);
+  const de = _gd.x * cl - _gd.z * sl, du = (_gd.x * hx + _gd.y * hy + _gd.z * hz) / R, dn = -_gd.x * s * sl + _gd.y * c - _gd.z * s * cl;
+  ray.direction.set(de, du, -dn).normalize();
+  ray.origin.set(fx - ray.direction.x * 80, -ray.direction.y * 80, fz - ray.direction.z * 80);
+  return true;
+}
+// The ray through a screen pixel, for picking (the flat world's, on the Globe).
+function pickRay(sx, sy) {
+  R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+  if (GLOBE.on) globeRay(R3.raycaster.ray);
+  return R3.raycaster.ray;
+}
+
 // (uRound: the radius of a round map, the World's, or 0 for a square one.)
 const fowUniforms = { uFow: { value: null }, uMapSize: { value: null }, uRound: { value: 0 } };
 // Time in seconds, shared by the water and the swaying grass, trees and flags.
@@ -48,6 +192,7 @@ function withFow(mat, extra) {
   mat.customProgramCacheKey = () => key;
   mat.onBeforeCompile = sh => {
     if (extra) extra(sh);
+    Object.assign(sh.uniforms, GLOBE.u);
     sh.uniforms.uFow = fowUniforms.uFow;
     sh.uniforms.uMapSize = fowUniforms.uMapSize;
     sh.uniforms.uRound = fowUniforms.uRound;
@@ -1522,6 +1667,27 @@ function buildWorld() {
   fowUniforms.uFow.value = R3.fowTex;
   fowUniforms.uMapSize.value = new THREE.Vector2(MW, MH);
   fowUniforms.uRound.value = W.map_round ? W.map_round() : 0;
+  // The Globe: its ball, and the camera's reach.
+  GLOBE.on = !!(W.map_globe && W.map_globe());
+  GLOBE.R = MW / (2 * Math.PI);
+  GLOBE.u.uGlobe.value.set(GLOBE.on ? GLOBE.R : 0, MW, MH, GLOBE.top);
+  R3.camera.far = GLOBE.on ? 1500 : 400; R3.camera.updateProjectionMatrix();
+  if (R3.globeBall) { disposeTree(R3.globeBall); R3.globeBall = null; }
+  if (GLOBE.on) {
+    const g = new THREE.SphereGeometry(GLOBE.R - 0.45, 96, 64), col = new Float32Array(g.attributes.position.count * 3);
+    const latTop = Math.sin(2 * Math.atan(Math.exp(GLOBE.top)) - Math.PI / 2), latBottom = Math.sin(2 * Math.atan(Math.exp(GLOBE.top - MH / GLOBE.R)) - Math.PI / 2);
+    for (let i = 0; i < g.attributes.position.count; i++) {
+      const sy = g.attributes.position.getY(i) / (GLOBE.R - 0.45), ice = sy > latTop - 0.01 || sy < latBottom + 0.01;
+      col.set(ice ? [0.86, 0.9, 0.93] : [0.02, 0.1, 0.22], i * 3);
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, fog: false });
+    mat.userData.flat = true;
+    R3.globeBall = new THREE.Mesh(g, mat);
+    R3.globeBall.matrixAutoUpdate = false; R3.globeBall.frustumCulled = false;
+    R3.sun.shadow._frustum.flat = true;
+    R3.scene.add(R3.globeBall);
+  }
 
   // Resources: one instanced mesh per kind and block (`BLOCK`), made when
   // the first of that kind in that block comes into view (`updateResources`).
@@ -2038,15 +2204,32 @@ const groundAt = (x, y) => Math.max(hAt(x, y), WATER_Y + 0.02);
 function placeCamera() {
   const c = R3.camera;
   const gy = Math.max(0, hAt(cam.x, cam.y));
-  const horiz = Math.cos(cam.pitch) * cam.dist, up = Math.sin(cam.pitch) * cam.dist;
-  c.position.set(cam.x + Math.sin(cam.yaw) * horiz, gy + up, cam.y + Math.cos(cam.yaw) * horiz);
-  c.lookAt(cam.x, gy, cam.y);
+  let horiz = Math.cos(cam.pitch) * cam.dist, up = Math.sin(cam.pitch) * cam.dist, lookY = gy;
+  if (GLOBE.on) {
+    // Things are smaller toward the poles (Mercator), so the camera comes
+    // as much closer: close up, the game looks the same size anywhere.
+    // From far off it keeps its distance instead, or the ball would swell
+    // and shrink as it turns north and south.
+    globeLat(cam.y);
+    const far = Math.max(0, Math.min(1, (cam.dist - 50) / 120)), k = GLOBE.c + (1 - GLOBE.c) * far * far * (3 - 2 * far);
+    horiz *= k; up *= k; lookY = gy * GLOBE.c;
+    globeFocus(cam.x, cam.y, lookY + up, horiz, cam.yaw);
+    if (R3.globeBall) {
+      // The ball under it all: sea in the seams, ice at the poles.
+      R3.globeBall.position.set(cam.x, -GLOBE.R, cam.y);
+      R3.globeBall.matrix.makeBasis(_gbx.set(GLOBE.e0.x, GLOBE.u0.x, -GLOBE.n0.x), _gby.set(GLOBE.e0.y, GLOBE.u0.y, -GLOBE.n0.y), _gbz.set(GLOBE.e0.z, GLOBE.u0.z, -GLOBE.n0.z)).setPosition(cam.x, -GLOBE.R, cam.y);
+      R3.globeBall.matrixWorld.copy(R3.globeBall.matrix);
+    }
+  }
+  c.position.set(cam.x + Math.sin(cam.yaw) * horiz, lookY + up, cam.y + Math.cos(cam.yaw) * horiz);
+  c.lookAt(cam.x, lookY, cam.y);
   c.updateMatrixWorld();
   // The sun's shadow camera follows the view so shadows stay sharp.
   const s = R3.sun, ext = cam.dist * 1.1 + 6;
   s.position.set(cam.x - 17, gy + 21, cam.y + 11);
   // Haze starts past what you're looking at, so it only softens the far distance.
   R3.scene.fog.near = cam.dist * 1.6; R3.scene.fog.far = cam.dist * 5 + 40;
+  if (GLOBE.on) { R3.scene.fog.near = 1e5; R3.scene.fog.far = 2e5; }   // (the ball's own horizon does this)
   if (R3.sky) R3.sky.position.copy(c.position);
   s.target.position.set(cam.x, gy, cam.y);
   s.target.updateMatrixWorld();
@@ -2054,6 +2237,7 @@ function placeCamera() {
   if (sc.right !== ext) { sc.left = -ext; sc.right = ext; sc.top = ext; sc.bottom = -ext; sc.near = 1; sc.far = 80; sc.updateProjectionMatrix(); }
 }
 
+const _gbx = new THREE.Vector3(), _gby = new THREE.Vector3(), _gbz = new THREE.Vector3();
 // Screen pixel -> the -1..1 coordinates three.js wants. One vector, reused:
 // raycasting runs often, and every new object is garbage to clean up later.
 const _ndc = new THREE.Vector2();
@@ -2098,7 +2282,7 @@ function groundChanged() { R3.hTop = null; }
 
 // Screen pixel -> map position on the ground (or null if off the map).
 function screenToGround(sx, sy) {
-  R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+  pickRay(sx, sy);
   const ray = R3.raycaster.ray, t = R3.terrain ? groundHit(ray) : -1;
   if (t >= 0) return { x: ray.origin.x + ray.direction.x * t, y: ray.origin.z + ray.direction.z * t };
   const p = new THREE.Vector3();
@@ -2109,6 +2293,12 @@ function screenToGround(sx, sy) {
 // Map position (+ height) -> screen pixels.
 const _v = new THREE.Vector3();
 function worldToScreen(x, y, h) {
+  // (On the Globe: where it's drawn, and "behind" if it's round the back.)
+  if (GLOBE.on) {
+    const back = !globeSees(x, y);
+    globeBendPoint(x, h, y, _v).project(R3.camera);
+    return { x: (_v.x + 1) / 2 * view._w, y: (1 - _v.y) / 2 * view._h, behind: back || _v.z > 1 };
+  }
   _v.set(x, h, y).project(R3.camera);
   return { x: (_v.x + 1) / 2 * view._w, y: (1 - _v.y) / 2 * view._h, behind: _v.z > 1 };
 }
@@ -2128,7 +2318,7 @@ function pickAt(sx, sy) {
     if (d < bd) { bd = d; best = { x: E(i, F.x), y: E(i, F.y), id: E(i, F.id), what: "unit" }; }
   }
   if (best) return best;
-  R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+  pickRay(sx, sy);
   const targets = _pickTargets;
   targets.length = 0;
   for (const o of R3.objs.values()) if (isBld(o.kind)) targets.push(o.body);
@@ -2158,7 +2348,7 @@ function viewQuad() {
   out.length = 0;
   for (let n = 0; n < 4; n++) {
     const sx = n === 1 || n === 2 ? view._w : 0, sy = n >= 2 ? view._h : 0;
-    R3.raycaster.setFromCamera(ndc(sx, sy), R3.camera);
+    pickRay(sx, sy);
     if (R3.raycaster.ray.intersectPlane(Q.plane, Q.p)) { const pt = Q.pts[out.length]; pt[0] = Q.p.x; pt[1] = Q.p.z; out.push(pt); }
   }
   return out;
@@ -2477,6 +2667,18 @@ function render3d(alpha, now, dt) {
   placeCamera();
   // What the camera sees, for skipping the walk cycles of units out of it.
   _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(R3.camera.projectionMatrix, R3.camera.matrixWorldInverse));
+  if (GLOBE.on) {
+    // Grass, flowers and pebbles: near the camera only (from far off
+    // they're smaller than a pixel, and there are a great many).
+    for (const g of [R3.tufts, R3.flowers, R3.pebbles]) {
+      if (!g) continue;
+      g.visible = cam.dist < 80;
+    }
+    // Animals too: from far off the herds are specks, and many triangles.
+    if (R3.res) for (const [key, m] of R3.res) { const k = RES_KINDS[Math.floor(key / 65536)]; if (k === "deer" || k === "horse" || k === "sheep" || k === "fish") m.visible = cam.dist < 130; }
+    // (The shore past the map's edge has no place on a ball.)
+    if (R3.shore) R3.shore.visible = false;
+  }
   const mark = ++R3.mark; // objects still in the world this frame get this mark
   const blobs = GFX.shadows === -1 && R3.blobs;
   blobN = 0;
@@ -2493,6 +2695,11 @@ function render3d(alpha, now, dt) {
       if (!isBld(kind) && GFX.effects && now > R3.popFrom && (changed || o.owner === ME)) o.pop = now;
     }
     o.mark = mark;
+    if (GLOBE.on) {
+      // (Drawn only on this side of the ball, and in the camera's view.)
+      o.root.visible = globeSees(E(i, F.x), E(i, F.y), 0.06);
+      if (o.root.visible) { globeBendPoint(E(i, F.x), 0, E(i, F.y), _sph.center); _sph.radius = 5; o.root.visible = _frustum.intersectsSphere(_sph); }
+    }
     const flags = E(i, F.flags);
     o.lastHp = E(i, F.hp) / E(i, F.maxhp);
     o.residents = E(i, F.residents);
@@ -2580,7 +2787,7 @@ function render3d(alpha, now, dt) {
       // Out of sight (with room for a shadow falling into it): no walk
       // cycle, which was the most garbage the page made after three.js.
       _sph.center.copy(o.root.position); _sph.radius = 3;
-      if (_frustum.intersectsSphere(_sph)) animateRig(o, kind, anim, t, dt, !!(flags & 8));
+      if (GLOBE.on ? o.root.visible && Math.hypot(Math.min(Math.abs(o.x - cam.x), MW - Math.abs(o.x - cam.x)), o.y - cam.y) < cam.dist * 1.8 + 15 : _frustum.intersectsSphere(_sph)) animateRig(o, kind, anim, t, dt, !!(flags & 8));
       else { o.rs.prevX = o.x; o.rs.prevY = o.y; }
     }
     else if (isNaval(kind)) {
@@ -3603,11 +3810,12 @@ function buildSmoke() {
   geo.setAttribute("aSeed", new THREE.BufferAttribute(seed, 1));
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uTime: timeUniform, uScale: { value: 300 }, uFow: fowUniforms.uFow, uMapSize: fowUniforms.uMapSize, fogColor: { value: new THREE.Color() }, fogNear: { value: 1 }, fogFar: { value: 1 } },
+    uniforms: { ...GLOBE.u, uTime: timeUniform, uScale: { value: 300 }, uFow: fowUniforms.uFow, uMapSize: fowUniforms.uMapSize, fogColor: { value: new THREE.Color() }, fogNear: { value: 1 }, fogFar: { value: 1 } },
     transparent: true, depthWrite: false, fog: true,
     vertexShader: `
       attribute float aKind; attribute float aSeed;
       uniform float uTime; uniform float uScale; uniform sampler2D uFow; uniform vec2 uMapSize;
+      ${GLOBE_GLSL}
       varying float vAlpha; varying vec3 vCol; varying float vFogDepth;
       void main() {
         float fire = step(1.5, aKind);
@@ -3616,7 +3824,7 @@ function buildSmoke() {
         p.y += life * (fire > 0.5 ? 2.2 : 1.7);
         p.xz += vec2(0.82, 0.57) * life * life * 1.1;
         p.x += sin(aSeed * 40.0 + uTime) * 0.08 * life;
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        vec4 mv = uGlobe.x > 0.0 ? viewMatrix * vec4(globeBend((modelMatrix * vec4(p, 1.0)).xyz), 1.0) : modelViewMatrix * vec4(p, 1.0);
         gl_Position = projectionMatrix * mv;
         float size = mix(0.16, fire > 0.5 ? 0.9 : 0.7, life);
         gl_PointSize = aKind < 0.5 ? 0.0 : size * uScale / -mv.z;

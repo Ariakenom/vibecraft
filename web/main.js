@@ -173,7 +173,7 @@ function setOwnerColors() {
 const SEAT_COLORS = [PCOL.slice(), PDARK.slice(), PLIGHT.slice(), PNAME.slice()];
 // The mode chosen on the start screen (kept in the browser): 0 Skirmish,
 // 1 Frontier on a small map, 2 Frontier on a large one.
-const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large", "world"];
+const MODE_KEY = "vibecraft.mode", MODES = ["skirmish", "frontier", "frontier-large", "world", "globe"];
 let gameMode = 0, lastMode = 0;
 try { gameMode = Math.max(0, MODES.indexOf(localStorage.getItem(MODE_KEY))); } catch { /* storage blocked */ }
 // The names people pick for themselves (kept in the browser), and this
@@ -405,9 +405,11 @@ function resizeView() {
 window.addEventListener("resize", resizeView);
 
 function clampCam() {
-  cam.x = Math.max(0, Math.min(MW, cam.x));
+  // (The Globe goes all the way round, and can be seen whole.)
+  const globe = typeof GLOBE !== "undefined" && GLOBE.on;
+  cam.x = globe ? ((cam.x % MW) + MW) % MW : Math.max(0, Math.min(MW, cam.x));
   cam.y = Math.max(0, Math.min(MH, cam.y));
-  cam.dist = Math.max(9, Math.min(48, cam.dist));
+  cam.dist = Math.max(9, Math.min(globe ? 420 : 48, cam.dist));
   cam.pitch = Math.max(0.6, Math.min(1.35, cam.pitch));
 }
 function centerOn(tx, ty) { cam.x = tx; cam.y = ty; clampCam(); }
@@ -2285,7 +2287,7 @@ document.addEventListener("visibilitychange", () => { if (mp) Trace.event(docume
 // Multiplayer: `local` is the slot this computer plays (1 is the host).
 function newGame(seedArg, local = 0, players = 2, mode = 0) {
   seed = seedArg ?? ((Math.random() * 1e9) >>> 0);
-  lastMode = mode >= 1 && mode <= 3 ? mode : 0;
+  lastMode = mode >= 1 && mode <= 4 ? mode : 0;
   if (lastMode) W.init_frontier(seed, difficulty, players, lastMode - 1);
   else W.init(seed, difficulty, players);
   if (local) W.setup_multiplayer(local);
