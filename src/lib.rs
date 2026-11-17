@@ -68,19 +68,21 @@ fn game<R: Default>(f: impl FnOnce(&mut Game) -> R) -> R {
 }
 
 #[unsafe(no_mangle)]
-/// Start a new game for `players` (2 to 4). Player 1 is this computer;
-/// the others are computer players until `setup_multiplayer` says otherwise.
-pub extern "C" fn init(seed: u32, difficulty: u32, players: u32) {
-    let world = World { game: Game::new(seed, difficulty, players.clamp(2, 4) as u8), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
+/// Start a new game of kind `mode` (`map_frontier::MODE_COUNT`: 0 Skirmish,
+/// 1 Frontier Small, 2 Large, 3 the World, 4 the Globe) for `players` (2 to
+/// 4). Player 1 is this computer; the others are computer players until
+/// `setup_multiplayer` says otherwise. The only way the page starts a game:
+/// single player, host, friends and Restart all come here.
+pub extern "C" fn init_game(seed: u32, difficulty: u32, players: u32, mode: u32) {
+    let world = World { game: Game::of_mode(seed, difficulty, players.clamp(2, 4) as u8, mode), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
     WORLD.with(|w| *w.borrow_mut() = Some(world));
 }
 
+/// How many kinds of game there are: the page checks a mode it's sent
+/// against this, so it never keeps a list of its own.
 #[unsafe(no_mangle)]
-/// `init`, for a Frontier game: the big map of continents, with barbarians.
-/// `size`: 0 Small, 1 Large, 2 the World map, 3 the Globe.
-pub extern "C" fn init_frontier(seed: u32, difficulty: u32, players: u32, size: u32) {
-    let world = World { game: Game::new_frontier(seed, difficulty, players.clamp(2, 4) as u8, map_frontier::Size::from_u32(size)), other: None, ents: Vec::new(), res: Vec::new(), proj: Vec::new(), events: Vec::new(), scratch: vec![0; 512], save: Vec::new() };
-    WORLD.with(|w| *w.borrow_mut() = Some(world));
+pub extern "C" fn mode_count() -> u32 {
+    map_frontier::MODE_COUNT as u32
 }
 
 /// Timing the parts of a tick, for the trace (`prof.rs`): on or off.
@@ -119,10 +121,11 @@ pub extern "C" fn prof_take() -> *const f64 {
 }
 thread_local! { static PROF_OUT: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) }; }
 
-/// The game being played: 0 Skirmish, 1 Frontier.
+/// The kind of game being played (`map_frontier::MODE_COUNT`): 0 Skirmish,
+/// 1 to 4 a Frontier game. However it started (new, loaded, watched).
 #[unsafe(no_mangle)]
 pub extern "C" fn game_mode() -> u32 {
-    game(|g| g.frontier.is_some() as u32)
+    game(|g| g.mode as u32)
 }
 
 /// The radius of a round map (the World map) in tiles, or 0 for a square
@@ -1129,14 +1132,14 @@ mod tests {
     /// The JS round trip: save_game/save_ptr out, load_buffer/load_game in.
     #[test]
     fn exported_save_and_load() {
-        init(99, 2, 3);
+        init_game(99, 2, 3, 0);
         for _ in 0..400 {
             tick();
         }
         let n = save_game();
         let bytes = unsafe { std::slice::from_raw_parts(save_ptr(), n as usize) }.to_vec();
         let sum = checksum();
-        init(5, 0, 2); // a different game in between
+        init_game(5, 0, 2, 0); // a different game in between
         assert_ne!(checksum(), sum);
         let dst = load_buffer(n);
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, n as usize) };
@@ -1150,7 +1153,7 @@ mod tests {
     /// play on (you can watch); with one left, it has won.
     #[test]
     fn surrender_puts_you_out() {
-        init(3, 1, 3);
+        init_game(3, 1, 3, 0);
         for _ in 0..100 {
             tick();
         }
@@ -1160,7 +1163,7 @@ mod tests {
         assert_eq!(debug_count(1, 0) + debug_count(1, 64), 0, "everything of theirs fell");
         assert_eq!(command(1, 8, 0, 0.0, 0.0, 0), 0, "surrendering twice is harmless");
 
-        init(3, 1, 2);
+        init_game(3, 1, 2, 0);
         command(1, 8, 0, 0.0, 0.0, 0);
         tick();
         assert_eq!((state_of(1), state_of(2), winner_player()), (2, 1, 2));
@@ -1172,7 +1175,7 @@ mod tests {
     fn a_shared_last_tick_has_one_winner_for_everyone() {
         let mut winners = Vec::new();
         for view in [1, 2] {
-            init(3, 1, 2);
+            init_game(3, 1, 2, 0);
             setup_multiplayer(view);
             for _ in 0..40 {
                 tick();
@@ -1188,7 +1191,7 @@ mod tests {
     /// The host hands a seat back and forth between the computer and a person.
     #[test]
     fn seats_change_hands() {
-        init(5, 2, 3);
+        init_game(5, 2, 3, 0);
         let on = |p: usize| with(|w| w.game.ais[p].on);
         assert!(on(2) && on(3));
         command(0, 13, 0, 0.0, 0.0, 2);
@@ -1202,7 +1205,7 @@ mod tests {
     /// computer) keeps that player's explored map, not just what they see now.
     #[test]
     fn a_seat_keeps_its_explored_map() {
-        init(7, 2, 2);
+        init_game(7, 2, 2, 0);
         set_ai(1, 1);
         set_ai(2, 1);
         for _ in 0..1200 * 4 {
@@ -1223,7 +1226,7 @@ mod tests {
     /// only what's shown: the game runs exactly the same.
     #[test]
     fn the_view_never_changes_the_game() {
-        init(11, 2, 4);
+        init_game(11, 2, 4, 0);
         set_ai(1, 1);
         for _ in 0..1200 {
             tick();
@@ -1329,8 +1332,8 @@ thread_local! {
 pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
     let players = players.clamp(2, 4) as usize;
     // (On a Frontier map, the barbarian sites are drawn in white too.)
-    let (m, deps, bases) = if mode >= 1 {
-        let (m, d, mut b, sites) = map_frontier::generate_frontier(seed, players, map_frontier::Size::from_u32(mode - 1));
+    let (m, deps, bases) = if let Some(size) = map_frontier::Size::of_mode(mode) {
+        let (m, d, mut b, sites) = map_frontier::generate_frontier(seed, players, size);
         b.extend(sites.iter().map(|s| (s.x, s.y)));
         (m, d, b)
     } else {

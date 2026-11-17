@@ -20,6 +20,14 @@ pub const LAND_4: i32 = 455;
 pub const SMALL_2: i32 = 270;
 pub const SMALL_4: i32 = 320;
 
+/// The kinds of game, by the number the lobby, the start message and the
+/// save use for them: 0 Skirmish, then each `Size` of Frontier game. This is
+/// the one place that number is turned into a map: the game (`Game::of_mode`),
+/// the lobby's preview (lib.rs) and the page's list (`mode_count`) all go
+/// through `Size::of_mode`, so a new kind of game can't be dropped by one of
+/// them (friends once got a Skirmish when the host chose the World).
+pub const MODE_COUNT: u8 = 5;
+
 /// How big a Frontier map is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Size {
@@ -32,12 +40,24 @@ pub enum Size {
 }
 
 impl Size {
-    pub fn from_u32(v: u32) -> Size {
-        match v {
-            1 => Size::Large,
-            2 => Size::World,
-            3 => Size::Globe,
-            _ => Size::Small,
+    /// The Frontier map of a game kind (`MODE_COUNT`), or None: Skirmish,
+    /// and any number that isn't a kind of game.
+    pub fn of_mode(mode: u32) -> Option<Size> {
+        match mode {
+            1 => Some(Size::Small),
+            2 => Some(Size::Large),
+            3 => Some(Size::World),
+            4 => Some(Size::Globe),
+            _ => None,
+        }
+    }
+    /// This size's game kind: the other way round from `of_mode`.
+    pub fn mode(self) -> u8 {
+        match self {
+            Size::Small => 1,
+            Size::Large => 2,
+            Size::World => 3,
+            Size::Globe => 4,
         }
     }
 }
@@ -597,7 +617,7 @@ mod tests {
     #[ignore]
     fn frontier_picture() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let (m, deps, bases, sites) = generate_frontier(env("VC_SEED", 7), env("VC_PLAYERS", 2) as usize, Size::from_u32(env("VC_LARGE", 0)));
+        let (m, deps, bases, sites) = generate_frontier(env("VC_SEED", 7), env("VC_PLAYERS", 2) as usize, Size::of_mode(env("VC_LARGE", 0) + 1).unwrap_or(Size::Small));
         let s = 4;
         for by in 0..m.h / s {
             let mut line = String::new();

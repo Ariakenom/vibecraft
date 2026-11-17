@@ -73,6 +73,7 @@ impl Game {
             g.players[p].defeated = true;
         }
         g.set_frontier(front);
+        g.mode = size.mode();
         for (i, &(bx, by)) in bases.iter().enumerate() {
             let cap = g.spawn_building(Kind::Capitol, i as u8 + 1, bx, by, 1.0);
             g.ents[cap as usize].starting = true;
@@ -201,7 +202,7 @@ mod tests {
     #[ignore]
     fn diag_frontier() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, env("VC_PLAYERS", 2) as u8, crate::map_frontier::Size::from_u32(env("VC_LARGE", 1)));
+        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, env("VC_PLAYERS", 2) as u8, crate::map_frontier::Size::of_mode(env("VC_LARGE", 1) + 1).unwrap_or(crate::map_frontier::Size::Small));
         for p in g.seat_ids() {
             g.set_ai(p, true);
         }
