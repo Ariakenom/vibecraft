@@ -479,6 +479,7 @@ function bakeTerrain() {
   MW = W.map_w(); MH = W.map_h();
   computeHeights();
   const ter = u8(W.terrain_ptr(), MW * MH).slice();
+  const globe = !!(W.map_globe && W.map_globe());
   // Colour at any map position. Grass blends lush, dark and sun-dried greens
   // in big soft patches; slopes turn to earth and rock; shores to sand.
   // A clean, almost flat green, like Totally Accurate Battle Simulator's fields:
@@ -489,7 +490,11 @@ function bakeTerrain() {
   // the ground shader (render3d.js), so only the minimap wants it.
   const colourAt = (x, y, beach = true) => {
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
-    const n1 = vnoise(x / 9, y / 9, 3), n2 = vnoise(x / 3.5, y / 3.5, 11), n3 = vnoise(x * 1.3, y * 1.3, 29);
+    // (On the Globe the patches join up where the east and west edges
+    // meet: the last tiles fade into what the first ones have.)
+    const seam = globe ? Math.max(0, Math.min(1, (x - (MW - 24)) / 24)) : 0;
+    const nz = (f, sd) => { const v = vnoise(x * f, y * f, sd); return seam > 0 ? v + (vnoise((x - MW) * f, y * f, sd) - v) * seam : v; };
+    const n1 = nz(1 / 9, 3), n2 = nz(1 / 3.5, 11), n3 = nz(1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
     c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
     const sl = slopeAt(x, y), ht = hAt(x, y);

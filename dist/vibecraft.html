@@ -1917,7 +1917,18 @@ const GLOBE = {
   u: { uGlobe: { value: new THREE.Vector4(0, 1, 1, 0) }, uGlobeAt: { value: new THREE.Vector3() }, uGlobeRot: { value: new THREE.Matrix3() } },
 };
 const GLOBE_GLSL = `
+  #ifndef GLOBE_GLSL_IN
+  #define GLOBE_GLSL_IN
   uniform vec4 uGlobe; uniform vec3 uGlobeAt; uniform mat3 uGlobeRot;
+  // Patterns drawn from the flat world's position (noise in the sea, the
+  // sand, cloud shadows) don't join up where the Globe's east and west
+  // edges meet. Over the last GLOBE_SEAM tiles before the east edge they
+  // fade into the same pattern taken from one width further west (what the
+  // west edge has), so at the edge itself they match: mix(f(p), f(p -
+  // (width, 0)), globeSeam(p.x)).
+  #define GLOBE_SEAM 24.0
+  float globeSeam(float x) { return uGlobe.x > 0.0 ? smoothstep(uGlobe.y - GLOBE_SEAM, uGlobe.y, x) : 0.0; }
+  vec2 globeWest(vec2 p) { return p - vec2(uGlobe.y, 0.0); }
   vec3 globeBend(vec3 p) {
     float R = uGlobe.x;
     // (Past the top and bottom edges there's no world: what's drawn out
@@ -1928,6 +1939,7 @@ const GLOBE_GLSL = `
     vec3 d = vec3(c * sin(lon), s, c * cos(lon));
     return uGlobeAt + uGlobeRot * (d * (R + p.y * c)) - vec3(0.0, R, 0.0);
   }
+  #endif
 `;
 THREE.ShaderChunk.common = GLOBE_GLSL + THREE.ShaderChunk.common;
 {
@@ -2055,13 +2067,19 @@ const fowUniforms = { uFow: { value: null }, uMapSize: { value: null }, uRound: 
 const timeUniform = { value: 0 };
 // How much things move in the wind (0 with the Wind setting off).
 const swayUniform = { value: 1 };
+// Every material made by withFow, to recompile them when a game on the Globe
+// starts or ends (GLOBE_SEAMS).
+const fowMats = [];
 function withFow(mat, extra) {
   // three.js reuses a compiled shader for any material whose onBeforeCompile
   // has the same source text. This wrapper's text is the same for every
   // material, so each patch needs its own key, or (say) the swaying trees
   // would silently get the plain shader of whichever material compiled first.
   const key = "fow:" + (extra ? extra.cacheKey || extra.toString() : "");
-  mat.customProgramCacheKey = () => key;
+  // (On the Globe a material compiles with GLOBE_SEAMS, the code that joins
+  // its patterns up at the seam: other maps never pay for it.)
+  mat.customProgramCacheKey = () => key + (GLOBE.on ? ":globe" : "");
+  fowMats.push(new WeakRef(mat));
   mat.onBeforeCompile = sh => {
     if (extra) extra(sh);
     Object.assign(sh.uniforms, GLOBE.u);
@@ -2088,7 +2106,9 @@ function withFow(mat, extra) {
         "getDirectionalLightInfo( directionalLight, directLight );",
         "getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cloudShade(vFowW);"));
     }
-    sh.fragmentShader = "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nuniform float uRound;\nvarying vec2 vFowW;\n" + NOISE_GLSL + CLOUD_GLSL + fs;
+    // (GLOBE_SEAMS first of all: everything after it, the cloud shadows too,
+    // reads it.)
+    sh.fragmentShader = (GLOBE.on ? "#define GLOBE_SEAMS\n" : "") + "uniform sampler2D uFow;\nuniform vec2 uMapSize;\nuniform float uRound;\nvarying vec2 vFowW;\n" + NOISE_GLSL + CLOUD_GLSL + fs;
   };
   return mat;
 }
@@ -2186,11 +2206,18 @@ const SKY_GLSL = `
 // Cloud shadows: patches of shade drifting across the land with the wind.
 // Computed per pixel in every lit material, as a dimmer on the sunlight only,
 // so shaded ground still gets the sky's light.
-const CLOUD_GLSL = `
+const CLOUD_GLSL = GLOBE_GLSL + `
   uniform float uCloudT;
-  float cloudShade(vec2 p) {
+  float cloudAt(vec2 p) {
     vec2 q = p * 0.045 + vec2(0.82, 0.57) * uCloudT * 0.012;
-    float n = vnoise2(q) * 0.62 + vnoise2(q * 2.3 + 5.0) * 0.28 + vnoise2(q * 5.1 + 9.0) * 0.1;
+    return vnoise2(q) * 0.62 + vnoise2(q * 2.3 + 5.0) * 0.28 + vnoise2(q * 5.1 + 9.0) * 0.1;
+  }
+  float cloudShade(vec2 p) {
+    float n = cloudAt(p);
+    #ifdef GLOBE_SEAMS
+    float t = globeSeam(p.x);
+    if (t > 0.0) n = mix(n, cloudAt(globeWest(p)), t);
+    #endif
     return 1.0 - 0.55 * smoothstep(0.5, 0.66, n);
   }
 `;
@@ -2202,7 +2229,7 @@ function worldPosPatch(sh) {
       gwP = instanceMatrix * gwP;
     #endif
     vGW = (modelMatrix * gwP).xyz;`);
-  sh.fragmentShader = "varying vec3 vGW;\n" + NOISE_GLSL + sh.fragmentShader;
+  sh.fragmentShader = "varying vec3 vGW;\n" + NOISE_GLSL + GLOBE_GLSL + sh.fragmentShader;
 }
 
 // The ground: beaches are drawn here from each pixel's height, so the line
@@ -2211,13 +2238,23 @@ function worldPosPatch(sh) {
 // the broad colours (meadow patches, earth and rock on slopes).
 function groundPatch(sh) {
   worldPosPatch(sh);
-  sh.fragmentShader = sh.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+  sh.fragmentShader = sh.fragmentShader.replace("void main() {", `
+    // The sand line's wobble (x) and the grain (y, z) at a flat-world spot.
+    vec3 groundNoise(vec2 g) {
+      return vec3(vnoise2(g * 0.8) * 0.6 + vnoise2(g * 2.6) * 0.3 + vnoise2(g * 7.0) * 0.1, vnoise2(g * 40.0), vnoise2(g * 13.0));
+    }
+    void main() {`).replace("#include <color_fragment>", `#include <color_fragment>
     {
       vec2 g = vGW.xz;
-      float gn = vnoise2(g * 0.8) * 0.6 + vnoise2(g * 2.6) * 0.3 + vnoise2(g * 7.0) * 0.1;
+      vec3 gnz = groundNoise(g);
+      #ifdef GLOBE_SEAMS
+      float gseam = globeSeam(g.x);
+      if (gseam > 0.0) gnz = mix(gnz, groundNoise(globeWest(g)), gseam);
+      #endif
+      float gn = gnz.x;
       float line = 0.13 + (gn - 0.5) * 0.18;               // the height where grass gives way to sand
       float sandAmt = 1.0 - smoothstep(line - 0.008, line + 0.008, vGW.y);
-      float grain = vnoise2(g * 40.0), grain2 = vnoise2(g * 13.0);
+      float grain = gnz.y, grain2 = gnz.z;
       vec3 dry = vec3(0.60, 0.49, 0.24), wet = vec3(0.33, 0.25, 0.12);
       vec3 sand = mix(dry, wet, smoothstep(${(WATER_Y + 0.14).toFixed(3)}, ${(WATER_Y + 0.01).toFixed(3)}, vGW.y));
       sand *= 0.9 + 0.12 * grain + 0.08 * grain2;
@@ -3547,7 +3584,9 @@ function buildWorld() {
   fowUniforms.uMapSize.value = new THREE.Vector2(MW, MH);
   fowUniforms.uRound.value = W.map_round ? W.map_round() : 0;
   // The Globe: its ball, and the camera's reach.
+  const wasGlobe = GLOBE.on;
   GLOBE.on = !!(W.map_globe && W.map_globe());
+  if (GLOBE.on !== wasGlobe) for (const r of fowMats) { const m = r.deref(); if (m) m.needsUpdate = true; }
   GLOBE.R = MW / (2 * Math.PI);
   GLOBE.u.uGlobe.value.set(GLOBE.on ? GLOBE.R : 0, MW, MH, GLOBE.top);
   R3.camera.far = GLOBE.on ? 1500 : 400; R3.camera.updateProjectionMatrix();
@@ -3729,7 +3768,21 @@ function buildWater() {
       vWPos = position.xz;
       // A slow swell, calm in the shallows.
       transformed.y += (sin(position.x * 0.9 + uTime * 0.9) + cos(position.z * 0.7 + uTime * 0.65) + sin((position.x + position.z) * 1.6 + uTime * 1.4) * 0.5) * 0.018 * clamp(aDepth * 3.0, 0.0, 1.0);`);
-    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nuniform vec4 uHeightBox;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + `
+    sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nuniform vec4 uHeightBox;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + GLOBE_GLSL + `
+      // The patterns on the sea at a flat-world spot, each a function of
+      // where it is (so the Globe can join them up at its seam, see
+      // globeSeam): x the wide banks, y the caustics, z the foam's
+      // raggedness, w the whitecaps.
+      vec4 seaLooks(vec2 p) {
+        float bank = vnoise2(p * 0.05 + 7.3) * 0.65 + vnoise2(p * 0.13 + 2.1) * 0.35;
+        vec2 cp = p * 2.4;
+        float c1 = vnoise2(cp + vec2(uTime * 0.22, uTime * 0.16)), c2 = vnoise2(cp * 1.37 + vec2(-uTime * 0.19, uTime * 0.25) + 4.1);
+        float caus = pow(1.0 - abs(c1 - c2), 16.0);
+        float fn = vnoise2(p * 5.0 + vec2(uTime * 0.35, -uTime * 0.2));
+        vec2 wq = mat2(0.8, -0.6, 0.6, 0.8) * p;
+        float cap = smoothstep(0.74, 0.86, vnoise2(wq * 0.9 + vec2(uTime * 0.2, uTime * 0.07))) * smoothstep(0.55, 0.8, vnoise2(wq * vec2(3.0, 9.0) + vec2(-uTime * 0.5, 0.0)));
+        return vec4(bank, caus, fn, cap);
+      }
       // The water's surface: waves running different ways, and noise to
       // break them up. Returns its slope (d height / dx, dz), for the normal.
       vec2 waterSlope(vec2 p, float t) {
@@ -3770,7 +3823,12 @@ function buildWater() {
         diffuseColor.rgb = mix(shallow, deep, deepness);
         // The open sea isn't one flat blue: wide slow patches, a little
         // lighter and greener, as over banks and currents.
-        float bank = vnoise2(vWPos * 0.05 + 7.3) * 0.65 + vnoise2(vWPos * 0.13 + 2.1) * 0.35;
+        vec4 looks = seaLooks(vWPos);
+        #ifdef GLOBE_SEAMS
+        float seam = globeSeam(vWPos.x);
+        if (seam > 0.0) looks = mix(looks, seaLooks(globeWest(vWPos)), seam);
+        #endif
+        float bank = looks.x;
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.012, 0.15, 0.34), smoothstep(0.4, 0.75, bank) * deepness * 0.75);
         // How far past the map's edge (tiles): out there the sea melts into
         // a haze, so the end of the world reads as distance, not as a wall.
@@ -3780,19 +3838,19 @@ function buildWater() {
         float haze = smoothstep(uRound > 0.0 ? -4.0 : 2.0, uRound > 0.0 ? 22.0 : 38.0, outside);
         // Caustics: the waves focus the sunlight into a moving net of bright
         // lines on the sand, seen through clear shallow water.
-        vec2 cp = vWPos * 2.4;
-        float c1 = vnoise2(cp + vec2(uTime * 0.22, uTime * 0.16)), c2 = vnoise2(cp * 1.37 + vec2(-uTime * 0.19, uTime * 0.25) + 4.1);
-        float caus = pow(1.0 - abs(c1 - c2), 16.0);
+        float caus = looks.y;
         diffuseColor.rgb += vec3(0.45, 0.6, 0.5) * caus * 0.22 * (1.0 - smoothstep(0.03, 0.45, d));
         // Foam: a broken line where the water meets the sand, and waves of
         // it washing in and out just beyond.
-        float fn = vnoise2(vWPos * 5.0 + vec2(uTime * 0.35, -uTime * 0.2));
+        float fn = looks.z;
         float edge = 1.0 - smoothstep(0.0, 0.008 + 0.022 * fn, d);
-        float wash = sin(uTime * 1.5 - d * 70.0 + sin(vWPos.x * 1.7) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
+        // (On the Globe the wobble's x is turned into one that comes round
+        // whole at the seam: 2pi * 173 waves round the world, as sin(x * 1.7) has.)
+        float wobX = uGlobe.x > 0.0 ? vWPos.x / uGlobe.y * 6.2831853 * floor(uGlobe.y * 1.7 / 6.2831853 + 0.5) : vWPos.x * 1.7;
+        float wash = sin(uTime * 1.5 - d * 70.0 + sin(wobX) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
         float wave = smoothstep(0.7, 0.95, wash) * (1.0 - smoothstep(0.015, 0.08, d)) * smoothstep(0.3, 0.7, fn);
         // Whitecaps out at sea: small crests that come and go.
-        vec2 wq = mat2(0.8, -0.6, 0.6, 0.8) * vWPos;
-        float cap = smoothstep(0.74, 0.86, vnoise2(wq * 0.9 + vec2(uTime * 0.2, uTime * 0.07))) * smoothstep(0.55, 0.8, vnoise2(wq * vec2(3.0, 9.0) + vec2(-uTime * 0.5, 0.0))) * smoothstep(0.5, 1.2, d) * (1.0 - haze)
+        float cap = looks.w * smoothstep(0.5, 1.2, d) * (1.0 - haze)
           * (1.0 - smoothstep(70.0, 150.0, length(vViewPosition)));   // (from far off they'd be specks of noise)
         float foam = clamp(max(max(edge, wave * 0.8), cap * 0.4), 0.0, 1.0);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.95, 0.95), foam);
@@ -3804,7 +3862,11 @@ function buildWater() {
         // Waves fade out with distance: there they're finer than a pixel and would shimmer.
         float waveAmt = (1.0 - smoothstep(30.0, 80.0, length(vViewPosition))) * (1.0 - haze);
         {
-          vec2 sl = waterSlope(vWPos, uTime) * waveAmt;
+          vec2 sl = waterSlope(vWPos, uTime);
+          #ifdef GLOBE_SEAMS
+          if (seam > 0.0) sl = mix(sl, waterSlope(globeWest(vWPos), uTime), seam);
+          #endif
+          sl *= waveAmt;
           vec3 nw = normalize(vec3(-sl.x, 1.0, -sl.y));
           normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);
         }`)
@@ -6068,7 +6130,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "4a3083767298", "base": "55cbfc4675"};
+const BUILD_INFO = {"sim": "4a3083767298", "base": "726092aa35"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -7529,6 +7591,7 @@ function bakeTerrain() {
   MW = W.map_w(); MH = W.map_h();
   computeHeights();
   const ter = u8(W.terrain_ptr(), MW * MH).slice();
+  const globe = !!(W.map_globe && W.map_globe());
   // Colour at any map position. Grass blends lush, dark and sun-dried greens
   // in big soft patches; slopes turn to earth and rock; shores to sand.
   // A clean, almost flat green, like Totally Accurate Battle Simulator's fields:
@@ -7539,7 +7602,11 @@ function bakeTerrain() {
   // the ground shader (render3d.js), so only the minimap wants it.
   const colourAt = (x, y, beach = true) => {
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
-    const n1 = vnoise(x / 9, y / 9, 3), n2 = vnoise(x / 3.5, y / 3.5, 11), n3 = vnoise(x * 1.3, y * 1.3, 29);
+    // (On the Globe the patches join up where the east and west edges
+    // meet: the last tiles fade into what the first ones have.)
+    const seam = globe ? Math.max(0, Math.min(1, (x - (MW - 24)) / 24)) : 0;
+    const nz = (f, sd) => { const v = vnoise(x * f, y * f, sd); return seam > 0 ? v + (vnoise((x - MW) * f, y * f, sd) - v) * seam : v; };
+    const n1 = nz(1 / 9, 3), n2 = nz(1 / 3.5, 11), n3 = nz(1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
     c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
     const sl = slopeAt(x, y), ht = hAt(x, y);

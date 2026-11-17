@@ -147,5 +147,12 @@ not straight away (see `CLAUDE.md`).
   the map at the end of each tick. The generator joins the coast noise and
   the ocean across 180°. `the_globe_goes_round` walks, sails and shoots
   across; `the_globe_seam_is_one_ocean` checks the join. Costs about 10-15%
-  per tick on the Globe. A faint line still shows in the sea's colour at
-  the seam (its noise isn't periodic).
+  per tick on the Globe. Patterns drawn from the flat world's position
+  (the sea's looks and waves, the sand line and grain, cloud shadows, the
+  painted ground colours) fade over the last 24 tiles into what the west
+  edge has, so they join at the seam (`globeSeam`, `globeWest`). That code
+  is compiled in only on the Globe (`GLOBE_SEAMS`, part of withFow's
+  shader key; materials recompile when a Globe game starts or ends): it
+  doubled parts of the water and ground shaders, and compiling them pushed
+  Frontier's first frame past the browser test's 30 s in the software
+  renderer.
