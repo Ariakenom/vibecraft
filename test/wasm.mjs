@@ -12,7 +12,7 @@ const w = instance.exports;
 let failed = 0;
 const check = (ok, what) => { console.log((ok ? "ok   " : "FAIL ") + what); if (!ok) failed++; };
 
-w.init(7, 2, 4); // 4 computer players on Hard, so the map fills up
+w.init_game(7, 2, 4, 0); // 4 computer players on Hard, so the map fills up
 const t0 = performance.now();
 for (let s = 0; s < 20 * 60 * 10; s++) { w.tick(); if (s % 20 === 0) w.take_events(); } // 10 minutes in
 const tickMs = (performance.now() - t0) / (20 * 60 * 10);
@@ -35,7 +35,7 @@ console.log(`tick ${tickMs.toFixed(3)} ms · copy ${saveMs.toFixed(3)} ms · res
 // tick costs as the camps grow. Set FRONTIER_MINUTES for a longer game.
 {
   const minutes = +(process.env.FRONTIER_MINUTES || 10);
-  w.init_frontier(7, 1, 2);
+  w.init_game(7, 1, 2, 1);
   w.set_ai(1, 1); w.set_ai(2, 1);
   check(w.game_mode() === 1, "a Frontier game says so");
   check(w.is_barbarian(3) === 1 && w.is_barbarian(2) === 0, "owners after the seats are barbarians");

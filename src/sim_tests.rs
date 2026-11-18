@@ -2326,3 +2326,57 @@ fn the_globe_goes_round() {
     assert!(g.ents[foe as usize].hp < hp || !g.ents[foe as usize].alive, "no shot across the line");
     assert!(g.ents[archer as usize].alive);
 }
+
+/// Hills and forests: sheep graze on hills; on a hill a unit sees and
+/// shoots twice as far and climbs at half speed; from below you can't see
+/// up onto it; trees hide what's among them; and you can walk among them.
+#[test]
+fn hills_and_forests() {
+    let mut g = Game::new(3, 1, 2);
+    let m = &g.map;
+    // Sheep stand on hills.
+    let sheep: Vec<_> = g.deps.iter().filter(|d| d.kind == Dep::Hills).collect();
+    assert!(!sheep.is_empty() && sheep.iter().all(|d| m.hill(d.tx, d.ty)));
+    // A hill tile next to low ground, both open.
+    let open = |x: i32, y: i32| m.passable(x, y) && !m.covered(x, y);
+    let (top, low) = (0..m.h)
+        .flat_map(|y| (0..m.w).map(move |x| (x, y)))
+        .find_map(|(x, y)| {
+            let below = (x + 3, y);
+            (m.hill(x, y) && open(x, y) && !m.hill(below.0, below.1) && open(below.0, below.1) && (x + 1..below.0).all(|xx| m.passable(xx, y))).then_some(((x, y), below))
+        })
+        .expect("a hill with low ground beside it");
+    let (tx, ty, lx, ly) = (top.0 as f32 + 0.5, top.1 as f32 + 0.5, low.0 as f32 + 0.5, low.1 as f32 + 0.5);
+    assert!(g.sees(tx, ty, lx, ly, false), "from a hill you see down");
+    assert!(!g.sees(lx, ly, tx, ty, false), "from below you can't see up");
+    assert!(g.sees(lx, ly, tx, ty, true), "nothing hides from the air");
+    let archer = g.spawn_unit(Kind::Archer, 1, tx, ty);
+    let st = Kind::Archer.stats();
+    let a = &g.ents[archer as usize];
+    assert_eq!((g.sight_of(a), g.range_of(a)), (st.sight * 2.0, st.range * 2.0));
+    // Forests: some tile among trees, open, that you can't see into from
+    // outside, nor out of.
+    let m = &g.map;
+    let inside = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find(|&(x, y)| m.covered(x, y) && m.passable(x, y) && !m.covered(x + 4, y) && m.passable(x + 4, y)).expect("a glade");
+    let (ix, iy, ox, oy) = (inside.0 as f32 + 0.5, inside.1 as f32 + 0.5, inside.0 as f32 + 4.5, inside.1 as f32 + 0.5);
+    assert!(!g.sees(ox, oy, ix, iy, false) && !g.sees(ix, iy, ox, oy, false));
+    // Climbing is slow: up the hill takes longer than down it.
+    let walk = |g: &mut Game, from: (f32, f32), to: (f32, f32)| {
+        let u = g.spawn_unit(Kind::Spearman, 1, from.0, from.1);
+        g.order_move(u, to.0, to.1);
+        let mut t = 0;
+        while t < 400 && (g.ents[u as usize].x - to.0).hypot(g.ents[u as usize].y - to.1) > 0.3 {
+            g.tick();
+            t += 1;
+        }
+        g.ents[u as usize].hp = 0.0;
+        g.tick();
+        t
+    };
+    let (up, down) = (walk(&mut g, (lx, ly), (tx, ty)), walk(&mut g, (tx, ty), (lx, ly)));
+    assert!(up as f32 > down as f32 * 1.2, "up {up} ticks, down {down}");
+    // Most of a forest's ground is walkable: no forest is a wall.
+    let m = &g.map;
+    let (trees, glades) = (0..(m.w * m.h) as usize).filter(|&i| m.cover[i]).fold((0, 0), |(t, o), i| if m.blocked[i] { (t + 1, o) } else { (t, o + 1) });
+    assert!(glades > trees, "{trees} trees, {glades} open tiles among them");
+}

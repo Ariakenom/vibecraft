@@ -9,7 +9,7 @@ const TILE = 32; // pixels per tile in the baked terrain texture
 const SIM_MS = 50;
 // Units are kinds 0–63, buildings 64 and up (defs.rs).
 const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossbowman: 6, Knight: 7, Trebuchet: 8, Musketeer: 9, Dragoon: 10, Cannon: 11, Rifleman: 12, MachineGunner: 13, FieldGun: 14, Infantry: 15, Tank: 16, Fighter: 17, Bomber: 18, RocketArtillery: 19, Jet: 20,
-  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29, Carrier: 30,
+  FishingBoat: 21, Transport: 22, Galley: 23, Cog: 24, Galleon: 25, Ironclad: 26, Destroyer: 27, Submarine: 28, NuclearSub: 29, Carrier: 30, Whaler: 31,
   Capitol: 64, Barracks: 65, Range: 66, Stable: 67, Tower: 68, Farm: 69,
   LumberCamp: 70, Quarry: 71, HuntingLodge: 73, Orchard: 74, Pasture: 75, Hut: 77,
   Cottage: 78, SheepFarm: 79, IronMine: 80, Brickworks: 81, Bakery: 82, Weaver: 83, Brewery: 84, SiegeWorkshop: 85,
@@ -21,7 +21,7 @@ const K = { Worker: 0, Spearman: 1, Archer: 2, Horseman: 3, Swordsman: 5, Crossb
 // Aircraft fly above everything (drawn high up; see defs.rs Kind::is_air).
 const isAir = k => k === K.Fighter || k === K.Bomber || k === K.Jet;
 // Boats sail on the water (see defs.rs Kind::is_naval).
-const isNaval = k => k >= K.FishingBoat && k <= K.Carrier;
+const isNaval = k => k >= K.FishingBoat && k <= K.Whaler;
 // Mounted units: a horse under them (sounds, drawing).
 const isMounted = k => k === K.Horseman || k === K.Knight || k === K.Dragoon;
 // Firearms: a bang and a puff of smoke instead of the twang of a bow.
@@ -49,7 +49,7 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Reactor]: "Reactor", [K.CarPlant]: "Car Plant", [K.TvPlant]: "TV Plant", [K.MissileSilo]: "Missile Silo",
   [K.Sawmill]: "Sawmill", [K.Stoneworks]: "Stone Works", [K.Kiln]: "Kiln", [K.AirDefense]: "Air Defense",
   [K.Dock]: "Dock", [K.FishingBoat]: "Fishing Boat", [K.Transport]: "Transport", [K.Galley]: "Galley", [K.Cog]: "War Cog",
-  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer", [K.Submarine]: "Submarine", [K.NuclearSub]: "Nuclear Submarine", [K.Carrier]: "Aircraft Carrier" };
+  [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer", [K.Submarine]: "Submarine", [K.NuclearSub]: "Nuclear Submarine", [K.Carrier]: "Aircraft Carrier", [K.Whaler]: "Whaler" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits in the town square. Free workers go where they're needed by themselves; training a soldier turns one into the soldier. Workers fight badly and fall quickly: keep them out of battles.",
   [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
@@ -87,6 +87,7 @@ const DESC = {
   [K.Quarry]: "Cuts stone from rock next to it. For more, a Stone Works from the Gunpowder era.",
   [K.Dock]: "Builds boats, which come out on the water next to it: fishing boats, transports and warships. Build it on the sea shore to reach other towns' coasts.",
   [K.FishingBoat]: "Fishes the fish shoals out on the water (the pale ripples; every harbour has one): 3 fish while it lies still on or next to a shoal. Moving it stops the catch. A person, like any unit.",
+  [K.Whaler]: "Hunts the whales far out at sea (the dark backs and spouts): 3 oil and 3 meat while it lies still at a whale pod, one whaler to a pod. Moving it stops the hunt. A person, like any unit. Costs wood and iron.",
   [K.Transport]: "Carries up to 8 land units over the water. Right-click it with land units to board (it comes in to meet them); with it selected, right-click the shore to put them ashore there. If it sinks, everyone aboard is lost.",
   [K.Galley]: "An oared warship with archers on deck. Sinks boats, and shoots at anything near the shore.",
   [K.Cog]: "A sturdier Medieval warship with crossbows. Costs iron.",
@@ -146,7 +147,7 @@ const RES_NAMES = ["wood", "stone", "grain", "fish", "meat", "fruit", "horses", 
   "aluminum", "radios", "uranium", "cars", "TVs"];
 const R = { wood: 0, stone: 1, grain: 2, fish: 3, meat: 4, fruit: 5, horses: 6 };
 // What an extractor has to stand next to, in the order of `enum Dep`.
-const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore", "a fish shoal"];
+const DEP_NAMES = ["wild fruit bushes", "a forest", "rock", "wild horses", "game", "water", "iron ore", "clay", "sheep hills", "saltpeter", "a coal seam", "an oil field", "bauxite", "uranium ore", "a fish shoal", "whales"];
 const ORDER_TEXT = ["Idle", "Moving", "Attack-moving", "Fighting", "", "", "On the way to build", "Working", "On the way to enlist", "On the way to board", "Sailing to put its cargo ashore"];
 // Player colours: 0 is nature, then blue, red, green, gold.
 const PCOL = ["#999", "#3f86e0", "#d2452f", "#3fae5a", "#e0b23a"];
@@ -243,7 +244,7 @@ const ACTION_SLOTS = ["Z", "X", "C", "V", "", "⇧Q"];
 const TRAINS = { [K.Barracks]: [K.Spearman, K.Swordsman, K.Musketeer, K.Rifleman, K.Infantry], [K.Range]: [K.Archer, K.Crossbowman, K.MachineGunner],
   [K.Stable]: [K.Horseman, K.Knight, K.Dragoon], [K.SiegeWorkshop]: [K.Trebuchet, K.Cannon], [K.Factory]: [K.FieldGun, K.RocketArtillery],
   [K.TankWorks]: [K.Tank], [K.Airfield]: [K.Fighter, K.Bomber, K.Jet],
-  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Submarine, K.Destroyer, K.Carrier, K.NuclearSub] };
+  [K.Dock]: [K.FishingBoat, K.Transport, K.Galley, K.Cog, K.Galleon, K.Ironclad, K.Submarine, K.Whaler, K.Destroyer, K.Carrier, K.NuclearSub] };
 
 // Small icons for the resources. Later eras' resources get a lettered disc until they have their own.
 const RES_ICON = [
@@ -684,8 +685,8 @@ function drawMinimap() {
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep), every era's: fruit bushes, forest, stone,
   // horses, game, (5, water, has no dots), iron ore, clay, sheep hills,
-  // saltpeter, coal, oil, bauxite, uranium, fish shoals.
-  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a", "#cfe9f0"], dot = Math.max(1.5, s);
+  // saltpeter, coal, oil, bauxite, uranium, fish shoals, whales.
+  const RES_DOT = ["#d04848", "#24451f", "#b8b2a6", "#a0703f", "#c8a26a", null, "#7a4a3a", "#c0703f", "#f0ece0", "#dcd8c8", "#202024", "#3a3036", "#b86a4a", "#9ed14a", "#cfe9f0", "#2a3a4a"], dot = Math.max(1.5, s);
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
@@ -1092,7 +1093,8 @@ function singleInfo(panel, i) {
   if (atk > 0) html += ` · attack <b>${atk}</b> · ${stat(k, 2) > 1.5 ? `range <b>${stat(k, 2)}</b>` : "melee"}`;
   html += `</div>`;
   if (!isBld(k)) {
-    const doing = k !== K.FishingBoat || E(i, F.order) !== 0 ? ORDER_TEXT[E(i, F.order)]
+    const doing = (k !== K.FishingBoat && k !== K.Whaler) || E(i, F.order) !== 0 ? ORDER_TEXT[E(i, F.order)]
+      : k === K.Whaler ? (E(i, F.flags) & 1024 ? "Whaling: 3 oil and 3 meat while it lies here" : "No whales here: send it to a whale pod, far out at sea")
       : E(i, F.flags) & 1024 ? "Fishing: 3 fish while it lies here" : "No fish here: send it to a fish shoal (the pale ripples on the water)";
     if (owner === ME || observe) html += `<div class="statline">${doing}</div>`;
     if (isAir(k) && (owner === ME || observe)) html += E(i, F.residents) > 0

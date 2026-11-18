@@ -20,7 +20,7 @@
 //! the poles.
 
 use crate::defs::Dep;
-use crate::map::{dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map::{place_whales, raise_sheep_hills, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 use crate::map_frontier::Site;
 
 /// The map's radius in tiles, and the radius of 58° south (sea beyond it).
@@ -294,29 +294,36 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
         true
     };
 
-    // Round every town: what a Skirmish start has (dx, dy, kind, size),
-    // turned by chance for each.
-    let home: [(i32, i32, Feat, f32); 13] = [
-        (-8, -9, Feat::Tree, 3.4),
-        (6, -6, Feat::Fertile, 2.4),
-        (9, 4, Feat::Horses, 1.6),
-        (-6, 6, Feat::Stone, 1.5),
-        (2, 9, Feat::Game, 2.4),
-        (-2, -14, Feat::Iron, 1.5),
-        (14, 8, Feat::Clay, 1.5),
-        (14, -2, Feat::Hills, 1.6),
-        (-10, -2, Feat::Nitrate, 1.4),
-        (2, -19, Feat::Coal, 1.5),
-        (-12, 8, Feat::Tree, 3.0),
-        (-6, 15, Feat::Stone, 1.5),
-        (10, -13, Feat::Fertile, 2.2),
+    // Round every town, as on Frontier: wood by the town, the rest in
+    // bands further out, each in a direction of its own (trying others
+    // where that one is sea). The later eras' deposits are out in the
+    // world (below).
+    let bands: [(f32, f32, &[(Feat, f32)]); 5] = [
+        (12.0, 15.0, &[(Feat::Tree, 3.0), (Feat::Tree, 3.0)]),
+        (26.0, 40.0, &[(Feat::Stone, 1.5), (Feat::Fertile, 2.4), (Feat::Game, 2.2)]),
+        (40.0, 58.0, &[(Feat::Stone, 1.5), (Feat::Fertile, 2.2), (Feat::Game, 2.0), (Feat::Horses, 1.6)]),
+        (58.0, 80.0, &[(Feat::Clay, 1.6), (Feat::Hills, 1.6), (Feat::Iron, 1.5)]),
+        (80.0, 100.0, &[(Feat::Nitrate, 1.4), (Feat::Iron, 1.5), (Feat::Clay, 1.6)]),
     ];
     for (bi, &(bx, by)) in bases.iter().enumerate() {
         let turn = hash(bi as i32, 923, seed) * std::f32::consts::TAU;
-        for &(dx, dy, f, r) in &home {
-            let (fx, fy) = (dx as f32 * 1.5, dy as f32 * 1.5);
-            let (fx, fy) = (fx * turn.cos() - fy * turn.sin(), fx * turn.sin() + fy * turn.cos());
-            place(&mut terrain, &mut feat, &keep_clear, bx + fx.round() as i32, by + fy.round() as i32, f, r, 22);
+        let mut k = 0;
+        for &(lo, hi, kinds) in &bands {
+            for (j, &(f, r)) in kinds.iter().enumerate() {
+                k += 1;
+                for t in 0..12 {
+                    let a = turn + (j as f32 + 0.5) / kinds.len() as f32 * std::f32::consts::TAU + t as f32 * 2.4;
+                    let d = lo + (hi - lo) * hash(bi as i32 * 64 + k, 53 + t, seed);
+                    let (x, y) = (bx as f32 + a.cos() * d, by as f32 + a.sin() * d);
+                    // (Not in another town's backyard.)
+                    if bases.iter().enumerate().any(|(o, &(ox, oy))| o != bi && dist((x, y), (ox as f32, oy as f32)) < 34.0) {
+                        continue;
+                    }
+                    if place(&mut terrain, &mut feat, &keep_clear, bx + (a.cos() * d) as i32, by + (a.sin() * d) as i32, f, r, 6) {
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -388,7 +395,7 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             t += 1;
             let (x, y) = ((hash(t, 75, seed) * w as f32) as i32, (hash(t, 77, seed) * h as f32) as i32);
             let p = (x as f32 + 0.5, y as f32 + 0.5);
-            if !in_world(p, 10.0) || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || near_base(p) < 34.0 {
+            if !in_world(p, 10.0) || !matches!(terrain[(y * w + x) as usize], GRASS | HILL) || near_base(p) < if matches!(f, Feat::Coal | Feat::Oil | Feat::Bauxite | Feat::Uranium) { 100.0 } else { 34.0 } {
                 continue;
             }
             put += place(&mut terrain, &mut feat, &keep_clear, x, y, f, r, 4) as usize;
@@ -499,6 +506,9 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     for (x, y) in spots {
         feat[(y * w + x) as usize] = Feat::Fish;
     }
+    raise_sheep_hills(&mut terrain, &mut shade, &feat, w, h);
+    thin_forests(&mut feat, w, h, &[Sym::Id], seed);
+    place_whales(&terrain, &mut feat, w, h, &[Sym::Id], &bases, 30, 40.0, seed);
 
     let mut deps = Vec::new();
     let mut blocked = vec![false; n];
@@ -508,14 +518,14 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             let i = (y * w + x) as usize;
             if matches!(terrain[i], WATER | EDGE) {
                 blocked[i] = true;
-                if feat[i] == Feat::Fish {
+                if matches!(feat[i], Feat::Fish | Feat::Whales) {
                     dep_at[i] = deps.len() as i32;
-                    deps.push(Deposit { kind: Dep::Fish, tx: x, ty: y });
+                    deps.push(Deposit { kind: if feat[i] == Feat::Fish { Dep::Fish } else { Dep::Whales }, tx: x, ty: y });
                 }
                 continue;
             }
             let kind = match feat[i] {
-                Feat::None | Feat::Fish => continue,
+                Feat::None | Feat::Fish | Feat::Whales => continue,
                 Feat::Tree => Dep::Forest,
                 Feat::Fertile => Dep::Fertile,
                 Feat::Stone => Dep::Stone,
@@ -568,8 +578,18 @@ mod tests {
                     for o in &bases[i + 1..] {
                         assert!(dist((bx as f32, by as f32), (o.0 as f32, o.1 as f32)) >= HOME_GAP * 0.75, "seed {seed}: towns too close");
                     }
+                    // Spread out as on Frontier: only wood by the town.
+                    let near = |d: &Deposit| dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32));
+                    if let Some(d) = deps.iter().find(|d| !matches!(d.kind, Dep::Forest | Dep::Fish) && near(d) < 18.0) {
+                        panic!("{players}p seed {seed}: town {i} has {:?} {} tiles away", d.kind, near(d));
+                    }
                     for k in [Dep::Forest, Dep::Stone, Dep::Fertile, Dep::Game, Dep::Iron, Dep::Clay, Dep::Fish] {
-                        let far = if k == Dep::Fish { 70.0 } else { 45.0 };
+                        let far = match k {
+                            Dep::Forest => 25.0,
+                            Dep::Fish => 70.0,
+                            Dep::Iron | Dep::Clay => 110.0,
+                            _ => 65.0,
+                        };
                         assert!(deps.iter().any(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32)) < far), "{players}p seed {seed}: town {i} has no {k:?} near");
                     }
                 }

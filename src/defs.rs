@@ -117,6 +117,8 @@ pub enum Dep {
     Uranium = 13,
     /// A fish shoal, out on the water: where fishing boats fish.
     Fish = 14,
+    /// Whales, far out at sea: whalers hunt them for oil and meat.
+    Whales = 15,
 }
 
 impl Dep {
@@ -137,6 +139,7 @@ impl Dep {
             12 => Dep::Bauxite,
             13 => Dep::Uranium,
             14 => Dep::Fish,
+            15 => Dep::Whales,
             _ => return None,
         })
     }
@@ -204,6 +207,9 @@ pub enum Kind {
     /// Atomic: a submarine that carries a nuke, armed at one of its
     /// owner's docks and launched from anywhere at sea.
     NuclearSub = 29,
+    /// Industrial: hunts the whales far out at sea, for oil and meat, while
+    /// it lies still at a pod (like a fishing boat at a shoal).
+    Whaler = 31,
     /// Modern: a floating airfield. Aircraft refuel next to it.
     Carrier = 30,
     Capitol = 64,
@@ -370,6 +376,7 @@ static JET: Stats = unit(340.0, 36.0, 4.5, 0.6, 9.0, 13.0, &[(Aluminum, 2), (Oil
 // (fast, and they shoot at aircraft).
 //                                       hp   atk  range  cd   speed sight cost          time
 static FISHING_BOAT: Stats = Stats { produces: &[(Fish, 3)], ..unit(70.0, 0.0, 0.0, 1.0, 2.4, 8.0, &[(Wood, 1)], 14.0) };
+static WHALER: Stats = Stats { produces: &[(Oil, 3), (Meat, 3)], ..unit(160.0, 0.0, 0.0, 1.0, 2.6, 9.0, &[(Wood, 2), (Iron, 1)], 20.0) };
 static TRANSPORT: Stats = unit(220.0, 0.0, 0.0, 1.0, 2.8, 10.0, &[(Wood, 2)], 18.0);
 static GALLEY: Stats = unit(220.0, 7.0, 5.0, 1.8, 2.6, 11.0, &[(Wood, 2)], 20.0);
 static COG: Stats = unit(320.0, 11.0, 6.0, 1.9, 2.5, 11.0, &[(Wood, 2), (Iron, 1)], 24.0);
@@ -607,10 +614,10 @@ pub const LAST_ERA: u8 = 5;
 impl Kind {
     /// Every kind, for loops over all of them: units, then buildings in
     /// tech-tree order (the tech tree panel shows them in this order).
-    pub const ALL: [Kind; 83] = {
+    pub const ALL: [Kind; 84] = {
         use Kind::*;
         [
-            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Submarine, Destroyer, Carrier, NuclearSub, Capitol, Hut, Farm, LumberCamp, Quarry, Dock, HuntingLodge, Orchard, Pasture,
+            Worker, Spearman, Archer, Horseman, Swordsman, Crossbowman, Knight, Trebuchet, Musketeer, Dragoon, Cannon, Rifleman, MachineGunner, FieldGun, FishingBoat, Transport, Galley, Cog, Galleon, Ironclad, Submarine, Destroyer, Carrier, NuclearSub, Whaler, Capitol, Hut, Farm, LumberCamp, Quarry, Dock, HuntingLodge, Orchard, Pasture,
             Barracks, Range, Stable, Tower, Cottage, SheepFarm, IronMine, Brickworks, Bakery, Weaver, Brewery, SiegeWorkshop, Townhouse, SaltpeterWorks, PowderMill, Carpenter, Printer, Circus, Tenement, CoalMine, SteelMill,
             ExplosivesWorks, Cannery, CoalYard, Press, Factory, Infantry, Tank, Fighter, Bomber, Apartment, OilWell, BauxiteMine, PowerPlant, HaberBosch, RadioFactory, TankWorks, Airfield,
             RocketArtillery, Jet, TowerBlock, UraniumMine, Reactor, CarPlant, TvPlant, MissileSilo, Sawmill, Stoneworks, Kiln, AirDefense,
@@ -699,6 +706,7 @@ impl Kind {
             AirDefense => &AIR_DEFENSE,
             Kiln => &KILN,
             FishingBoat => &FISHING_BOAT,
+            Whaler => &WHALER,
             Transport => &TRANSPORT,
             Galley => &GALLEY,
             Cog => &COG,
@@ -762,7 +770,7 @@ impl Kind {
             Trebuchet | Cannon | FieldGun | Bomber | RocketArtillery => Class::Siege,
             Fighter | Jet => Class::Air,
             Galley | Cog | Galleon | Ironclad | Submarine | NuclearSub | Destroyer | Carrier => Class::Naval,
-            FishingBoat | Transport => Class::Civilian,
+            FishingBoat | Transport | Whaler => Class::Civilian,
             _ => Class::Building,
         }
     }
@@ -794,7 +802,7 @@ impl Kind {
         match self {
             Cog | Horseman | Stable | Pasture | Capitol | Sawmill | Swordsman | Crossbowman | Knight | Trebuchet | Cottage | SheepFarm | IronMine | Brickworks | Bakery | Weaver | Brewery | SiegeWorkshop => 1,
             Galleon | Stoneworks | Kiln | Musketeer | Dragoon | Cannon | Townhouse | SaltpeterWorks | PowderMill | Carpenter | Printer | Circus => 2,
-            Ironclad | Submarine | Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
+            Ironclad | Submarine | Whaler | Rifleman | MachineGunner | FieldGun | Tenement | CoalMine | SteelMill | ExplosivesWorks | Cannery | CoalYard | Press | Factory => 3,
             Carrier | Destroyer | Infantry | Tank | Fighter | Bomber | Apartment | OilWell | BauxiteMine | PowerPlant | HaberBosch | RadioFactory | TankWorks | Airfield | AirDefense => 4,
             NuclearSub | RocketArtillery | Jet | TowerBlock | UraniumMine | Reactor | CarPlant | TvPlant | MissileSilo => 5,
             _ => 0,
@@ -820,9 +828,19 @@ impl Kind {
         matches!(self, Kind::Fighter | Kind::Bomber | Kind::Jet)
     }
 
+    /// What a boat that works by lying still hunts: fishing boats fish
+    /// shoals, whalers whales.
+    pub fn hunts(self) -> Option<Dep> {
+        match self {
+            Kind::FishingBoat => Some(Dep::Fish),
+            Kind::Whaler => Some(Dep::Whales),
+            _ => None,
+        }
+    }
+
     /// Does it sail? Boats move on water only, land units on land only.
     pub fn is_naval(self) -> bool {
-        matches!(self, Kind::FishingBoat | Kind::Transport | Kind::Galley | Kind::Cog | Kind::Galleon | Kind::Ironclad | Kind::Submarine | Kind::NuclearSub | Kind::Destroyer | Kind::Carrier)
+        matches!(self, Kind::FishingBoat | Kind::Whaler | Kind::Transport | Kind::Galley | Kind::Cog | Kind::Galleon | Kind::Ironclad | Kind::Submarine | Kind::NuclearSub | Kind::Destroyer | Kind::Carrier)
     }
 
     /// Does it sail under the water? Hidden until spotted (`SUB_DETECT`),
@@ -873,7 +891,7 @@ impl Kind {
             Kind::Factory => &[Kind::FieldGun, Kind::RocketArtillery],
             Kind::Stable => &[Kind::Horseman, Kind::Knight, Kind::Dragoon],
             Kind::SiegeWorkshop => &[Kind::Trebuchet, Kind::Cannon],
-            Kind::Dock => &[Kind::FishingBoat, Kind::Transport, Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Submarine, Kind::Destroyer, Kind::Carrier, Kind::NuclearSub],
+            Kind::Dock => &[Kind::FishingBoat, Kind::Transport, Kind::Galley, Kind::Cog, Kind::Galleon, Kind::Ironclad, Kind::Submarine, Kind::Whaler, Kind::Destroyer, Kind::Carrier, Kind::NuclearSub],
             _ => &[],
         }
     }
@@ -895,6 +913,7 @@ impl Kind {
             Kind::Fighter | Kind::Bomber | Kind::Jet | Kind::RocketArtillery => 0.45,
             Kind::Worker => 0.28,
             Kind::FishingBoat => 0.38,
+            Kind::Whaler => 0.44,
             Kind::Transport | Kind::Galley | Kind::Cog => 0.48,
             Kind::Galleon | Kind::Ironclad | Kind::Destroyer => 0.55,
             Kind::Submarine | Kind::NuclearSub => 0.5,

@@ -205,7 +205,7 @@ pub extern "C" fn render() -> u32 {
                 flags |= 512;
             }
             // A fishing boat on a shoal, fishing (1024).
-            if e.kind == Kind::FishingBoat && e.crewed {
+            if e.kind.hunts().is_some() && e.crewed {
                 flags |= 1024;
             }
             let progress = if e.built < 1.0 { e.built } else { e.progress };

@@ -514,3 +514,17 @@ fn empty_aircraft_go_home_and_wait_until_full() {
     assert!(matches!(o, Order::Attack { target, .. } if target == intruder) || g.ents[intruder as usize].hp < Kind::Transport.stats().hp, "full and idle, it leaves the intruder alone: {o:?}");
 }
 
+
+/// A whaler at a whale pod makes oil and meat, like a fishing boat at a
+/// shoal; and every map has pods, out at sea.
+#[test]
+fn whalers_hunt_whales_for_oil_and_meat() {
+    let mut g = quiet(4, 2);
+    g.players[1].cheat = false;
+    let pod = g.deps.iter().find(|d| d.kind == Dep::Whales).expect("no whales on the map").center();
+    let (oil, meat) = (|g: &Game| g.players[1].supply[Res::Oil.idx()], |g: &Game| g.players[1].supply[Res::Meat.idx()]);
+    let before = (oil(&g), meat(&g));
+    g.spawn_unit(Kind::Whaler, 1, pod.0, pod.1);
+    run(&mut g, 0.2);
+    assert_eq!((oil(&g), meat(&g)), (before.0 + 3, before.1 + 3));
+}

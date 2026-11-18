@@ -122,6 +122,8 @@ const LOW_MATERIAL: i32 = 4;
 const PARALLEL: usize = 4;
 /// Fishing boats the computer keeps, and warships at each difficulty.
 const FISHING_BOATS: usize = 2;
+/// Whalers a town keeps, once it's in the Industrial era (if there are whales).
+const WHALERS: usize = 2;
 const WARSHIPS: [usize; 3] = [0, 2, 4];
 /// The computer wants an air defense within this many tiles of each of its
 /// Capitols and of its silo: a nuke aimed at them then falls well inside
@@ -1266,8 +1268,11 @@ impl Game {
         if self.ents[dock].queue.is_empty() && c.spare > KEEP_FREE {
             let want = WARSHIPS[self.ais[me as usize].difficulty.min(2) as usize];
             let ships: usize = NAVY.iter().map(|&k| count(self, k)).sum();
+            let pods = self.deps.iter().any(|d| d.kind == Dep::Whales && self.sea[self.map.idx(d.tx, d.ty)]);
             let unit = if count(self, Kind::FishingBoat) < FISHING_BOATS && affordable(Kind::FishingBoat) {
                 Some(Kind::FishingBoat)
+            } else if pods && count(self, Kind::Whaler) < WHALERS && affordable(Kind::Whaler) {
+                Some(Kind::Whaler)
             } else if ships < want && c.army.len() >= 4 {
                 // The latest era's it can afford; of two (ironclads and
                 // submarines), whichever it has fewer of.
@@ -1285,7 +1290,8 @@ impl Game {
         }
         // Fishing boats fish only at a spot of their own: an idle one that
         // isn't fishing goes to the nearest spot no boat fishes or is
-        // sailing to (anyone's: a spot takes one boat).
+        // sailing to (anyone's: a spot takes one boat). Whalers the same,
+        // at whale pods.
         let claims = self.fishing_claims();
         // (Which deposits are claimed, as a table: looking each one up in
         // `claims` was deposits × entities, most of a turn on a big map.)
@@ -1294,13 +1300,15 @@ impl Game {
             claimed[d] = true;
         }
         let mut busy: Vec<(f32, f32)> = self.deps.iter().enumerate().filter(|&(d, _)| claimed[d]).map(|(_, d)| d.center()).collect();
-        busy.extend(self.ents.iter().filter(|o| o.alive && o.kind == Kind::FishingBoat).filter_map(|o| match o.order { Order::Move { x, y } => Some((x, y)), _ => None }));
-        let shoals: Vec<(f32, f32)> = self.deps.iter().filter(|d| d.kind == Dep::Fish && self.sea[self.map.idx(d.tx, d.ty)]).map(|d| d.center()).collect();
+        busy.extend(self.ents.iter().filter(|o| o.alive && o.kind.hunts().is_some()).filter_map(|o| match o.order { Order::Move { x, y } => Some((x, y)), _ => None }));
+        let spots = |prey: Dep| -> Vec<(f32, f32)> { self.deps.iter().filter(|d| d.kind == prey && self.sea[self.map.idx(d.tx, d.ty)]).map(|d| d.center()).collect() };
+        let (shoals, pods) = (spots(Dep::Fish), spots(Dep::Whales));
         for i in 0..self.ents.len() {
             let e = &self.ents[i];
-            if !e.alive || e.owner != me || e.kind != Kind::FishingBoat || e.order != Order::Idle || claims[i].is_some() || !self.sea[self.map.idx(e.x as i32, e.y as i32)] {
+            if !e.alive || e.owner != me || e.kind.hunts().is_none() || e.order != Order::Idle || claims[i].is_some() || !self.sea[self.map.idx(e.x as i32, e.y as i32)] {
                 continue;
             }
+            let shoals = if e.kind == Kind::Whaler { &pods } else { &shoals };
             let (x, y) = (e.x, e.y);
             let best = shoals.iter().copied().filter(|p| !busy.iter().any(|b| wx(b.0 - p.0).hypot(b.1 - p.1) < 1.0)).min_by(|a, b| wx(a.0 - x).hypot(a.1 - y).total_cmp(&wx(b.0 - x).hypot(b.1 - y)));
             if let Some(p) = best {

@@ -687,6 +687,24 @@ function boatModel(kind, owner) {
       top = 0.62; mx = 0.08;
       break;
     }
+    case K.Whaler: {
+      // A steam whaler: a long dark hull, a funnel, a mast with a lookout,
+      // the harpoon gun at the bow and the try-works (a brick furnace for
+      // rendering the blubber) amidships.
+      hull(-0.42, 0.56, 0.32, 0.18, "#3a3430", "#7a6a58", team, { stern: 0.75, sheer: 0.06, rake: 0.08, n: 8, strake: 0.04 });
+      mast(-0.06, 0.7, 0.018);
+      on(cyl(0.04, 0.04, 0.03, 8), DARKWOOD, -0.06, 0.6);                  // the crow's nest
+      on(cyl(0.035, 0.04, 0.2, 8), "#2a2a2a", 0.12, 0.1); on(cyl(0.04, 0.04, 0.03, 8), team, 0.12, 0.2);   // the funnel
+      on(box(0.12, 0.08, 0.14), "#9a4a34", -0.24, 0.04);                   // the try-works
+      on(cyl(0.012, 0.012, 0.1, 5), "#2a2a2a", -0.24, 0.12);
+      { const gun = cyl(0.012, 0.016, 0.16, 6).rotateZ(Math.PI / 2 - 0.25); on(gun, IRON, 0.46, 0.08); }   // the harpoon gun
+      on(cone(0.016, 0.04, 4).rotateZ(-Math.PI / 2 - 0.25), IRON, 0.55, 0.1);
+      on(box(0.06, 0.1, 0.06), "#5a6a74", 0.38, 0.05, 0.05);             // the harpooner
+      on(ball(0.032, 0), SKIN, 0.38, 0.13, 0.05);
+      { const boat = box(0.2, 0.035, 0.06); on(boat, "#c9a878", -0.02, 0.06, 0.13); }   // a whaleboat on the side
+      top = 0.72; mx = -0.06;
+      break;
+    }
     case K.Transport: {
       hull(-0.52, 0.72, 0.5, 0.23, "#7a5532", "#b08a58", team, { stern: 0.8, sheer: 0.05, taper: 0.55, point: 1.4, rake: 0.05 });
       mast(0.05, 0.85, 0.024);
@@ -1080,6 +1098,16 @@ function resourceModels() {
     const body = ball(0.06, 1).scale(2.2, 0.6, 0.8).rotateY(a); fish.add(body, "#3d5f6e", x, -0.03, z);
     const fin = cone(0.025, 0.07, 3).rotateY(a); fish.add(fin, "#2c4652", x, 0.02, z);
   }
+  // Whales: two dark backs arching out of the water, a tail fluke going
+  // down, and a spout of spray.
+  const whale = new Model();
+  for (const [x, z, a, s] of [[0.05, 0.02, 0.4, 1], [-0.2, -0.16, 2.6, 0.75]]) {
+    const back = ball(0.16, 1).scale(2.1 * s, 0.55 * s, 0.8 * s).rotateY(a); whale.add(back, "#2e3a46", x, 0.0, z);
+    const fin = cone(0.03 * s, 0.07 * s, 3).rotateY(a); whale.add(fin, "#232c35", x - Math.cos(a) * 0.08 * s, 0.08 * s, z + Math.sin(a) * 0.08 * s);
+  }
+  { const fluke = box(0.22, 0.02, 0.08).rotateX(-0.5).rotateY(1.2); whale.add(fluke, "#232c35", 0.28, 0.07, 0.2); whale.add(box(0.04, 0.12, 0.04), "#2e3a46", 0.28, 0.02, 0.2); }
+  for (const [y, r] of [[0.16, 0.05], [0.24, 0.07], [0.3, 0.05]]) whale.add(ball(r, 1), "#e8f2f4", 0.12, y, 0.06);
+  for (const [r, y] of [[0.4, 0.012], [0.26, 0.016]]) whale.add(new THREE.TorusGeometry(r, 0.008, 3, 24).rotateX(Math.PI / 2), "#bfe0e6", 0, y, 0);
   const sheep = new Model();
   for (const [x, z] of [[-0.12, -0.08], [0.18, 0.14]]) {
     for (const [lx, lz] of [[0.08, 0.04], [0.08, -0.04], [-0.07, 0.04], [-0.07, -0.04]]) sheep.add(box(0.025, 0.1, 0.025), "#2a221c", x + lx, 0.05, z + lz);
@@ -1087,7 +1115,7 @@ function resourceModels() {
   }
   return { pine: pine.build(), oak: oak.build(), bush: bush.build(), stone: rock(false), gold: rock(true), horse: animal("#8a5c36", "#6a4528", "#2a1e14", 1, false, [[0, 0, 0]]),
     deer: animal("#a87d4f", "#7a5a3a", "#5a4026", 0.62, true, [[-0.18, -0.12, 0.4], [0.22, 0.18, 2.6]]),
-    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false), uranium: rock(false), fish: fish.build() };
+    iron: iron.build(), clay: clay.build(), sheep: sheep.build(), nitrate: rock(false), coal: rock(false), oil: rock(false), bauxite: rock(false), uranium: rock(false), fish: fish.build(), whale: whale.build() };
 }
 
 // --- Models made in Blender ------------------------------------------------------
@@ -1753,16 +1781,16 @@ function buildWorld() {
     depth: sways ? treeDepthMat : depthMat(),
   });
   R3.resLook = { pine: look(true), oak: look(true), bush: look(true), stone: look(false, stoneMat), gold: look(false, goldMat) };
-  for (const k of ["horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium"]) R3.resLook[k] = look(false);
+  for (const k of ["horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium", "whale"]) R3.resLook[k] = look(false);
   R3.res = new Map(); // RES_KINDS index * 65536 + block -> its mesh
 }
-const RES_KINDS = ["pine", "oak", "bush", "stone", "gold", "horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium"];
+const RES_KINDS = ["pine", "oak", "bush", "stone", "gold", "horse", "deer", "iron", "clay", "sheep", "fish", "nitrate", "coal", "oil", "bauxite", "uranium", "whale"];
 // Which of RES_KINDS draws a deposit of kind `dep` (defs::Dep) on tile tx, ty.
 function resKindOf(dep, tx, ty) {
   switch (dep) {
     case 1: return hash2(tx, ty) < 0.4 ? 0 : 1; // pine or oak
     case 0: return 2; case 3: return 5; case 4: return 6; case 6: return 7; case 7: return 8; case 8: return 9;
-    case 9: return 11; case 10: return 12; case 11: return 13; case 12: return 14; case 13: return 15; case 14: return 10;
+    case 9: return 11; case 10: return 12; case 11: return 13; case 12: return 14; case 13: return 15; case 14: return 10; case 15: return 16;
     default: return 3; // stone
   }
 }
@@ -3478,9 +3506,9 @@ function updateResources() {
     const h = hash2(tx, ty), h2 = hash2(ty * 3 + 1, tx * 7);
     // Deposit kinds (defs::Dep): 0 fertile land, 1 forest, 2 stone, 3 horses, 4 game,
     // 6 iron ore, 7 clay, 8 sheep hills, 9 saltpeter, 10 coal, 11 oil, 12 bauxite, 13 uranium,
-    // 14 fish shoals (out on the water).
+    // 14 fish shoals and 15 whales (out on the water).
     let mesh, scale;
-    if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 0.85 + h2 * 0.45; }
+    if (kind === 1) { mesh = h < 0.4 ? "pine" : "oak"; scale = 1.15 + h2 * 0.5; } // (big: a forest keeps gaps to walk in, so each tree fills more)
     else if (kind === 0) { mesh = "bush"; scale = 0.8 + 0.4 * h2; }
     else if (kind === 3) { mesh = "horse"; scale = 1; } // the size of a horseman's horse
     else if (kind === 4) { mesh = "deer"; scale = 1; }
@@ -3493,6 +3521,7 @@ function updateResources() {
     else if (kind === 12) { mesh = "bauxite"; scale = 0.8 + 0.3 * h2; }
     else if (kind === 13) { mesh = "uranium"; scale = 0.8 + 0.3 * h2; }
     else if (kind === 14) { mesh = "fish"; scale = 0.9 + 0.3 * h2; }
+    else if (kind === 15) { mesh = "whale"; scale = 2.2 + 0.4 * h2; }
     else { mesh = "stone"; scale = 0.8 + 0.3 * frac * h2; }
     const m = R3.res.get(place[i]);
     if (!m) continue;

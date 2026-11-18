@@ -10,7 +10,7 @@
 //! turned images, so every player gets the same.
 
 use crate::defs::Dep;
-use crate::map::{dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map::{place_whales, raise_sheep_hills, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 
 /// Land per side, before the open sea round it, for a Large map: ten times
 /// a Skirmish map's area (120 and 144).
@@ -553,9 +553,12 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
             (t2[i], s2[i], f2[i]) = (terrain[j], shade[j], feat[j]);
         }
     }
-    let (terrain, mut shade, feat) = (t2, s2, f2);
+    let (mut terrain, mut shade, mut feat) = (t2, s2, f2);
     let bases: Vec<(i32, i32)> = bases.into_iter().map(|(x, y)| (x + OPEN_SEA, y + OPEN_SEA)).collect();
     let sites: Vec<Site> = sites.iter().flat_map(|s| images(s.x, s.y).map(move |(x, y)| Site { x: x + OPEN_SEA, y: y + OPEN_SEA, era: s.era })).collect();
+    raise_sheep_hills(&mut terrain, &mut shade, &feat, w, h);
+    thin_forests(&mut feat, w, h, syms, seed);
+    place_whales(&terrain, &mut feat, w, h, syms, &bases, (l / 45) as usize, 40.0, seed);
 
     let mut deps = Vec::new();
     let mut blocked = vec![false; n];
@@ -565,14 +568,14 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
             let i = (y * w + x) as usize;
             if terrain[i] == WATER {
                 blocked[i] = true;
-                if feat[i] == Feat::Fish {
+                if matches!(feat[i], Feat::Fish | Feat::Whales) {
                     dep_at[i] = deps.len() as i32;
-                    deps.push(Deposit { kind: Dep::Fish, tx: x, ty: y });
+                    deps.push(Deposit { kind: if feat[i] == Feat::Fish { Dep::Fish } else { Dep::Whales }, tx: x, ty: y });
                 }
                 continue;
             }
             let kind = match feat[i] {
-                Feat::None | Feat::Fish => continue,
+                Feat::None | Feat::Fish | Feat::Whales => continue,
                 Feat::Tree => Dep::Forest,
                 Feat::Fertile => Dep::Fertile,
                 Feat::Stone => Dep::Stone,
@@ -666,7 +669,7 @@ mod tests {
                 assert!(sites.len() >= if size == Size::Large { 16 } else { 10 }, "seed {seed} {size:?}: only {} sites", sites.len());
                 for &(bx, by) in &bases {
                     let near = |r: f32, k: Dep| deps.iter().filter(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32)) < r).count();
-                    assert!(near(16.0, Dep::Forest) > 10, "seed {seed}: no wood by the start");
+                    assert!(near(16.0, Dep::Forest) > 4, "seed {seed}: no wood by the start");
                     for k in [Dep::Stone, Dep::Fertile, Dep::Game, Dep::Clay, Dep::Iron] {
                         assert_eq!(near(22.0, k), 0, "seed {seed}: {k:?} at the start");
                     }

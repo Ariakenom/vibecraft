@@ -593,7 +593,8 @@ impl Game {
     /// Assemble a game from its stored parts; scratch space (pathfinder
     /// buffers, the spatial grid) is made fresh. Used by `new` and `load`.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_parts(seed: u32, map: Map, deps: Vec<Deposit>, ents: Vec<Entity>, players: Vec<Player>, n_players: u8, proj: Vec<Projectile>, fog: Vec<u8>, ais: Vec<Ai>, local: u8) -> Game {
+    pub(crate) fn from_parts(seed: u32, mut map: Map, deps: Vec<Deposit>, ents: Vec<Entity>, players: Vec<Player>, n_players: u8, proj: Vec<Projectile>, fog: Vec<u8>, ais: Vec<Ai>, local: u8) -> Game {
+        map.set_cover(&deps);
         let n = (map.w * map.h) as usize;
         let cells = ((map.w / CELL + 1) * (map.h / CELL + 1)) as usize;
         let blds = ents.iter().filter(|e| e.is_building()).map(|e| e.id).collect();
@@ -669,6 +670,66 @@ impl Game {
     /// else is always "seen"; fog of war is separate.)
     pub fn spotted_by(e: &Entity, p: u8) -> bool {
         !e.kind.is_sub() || e.spotted & (1 << p) != 0
+    }
+
+    // -----------------------------------------------------------------------
+    // Hills and forests
+    //
+    // - A unit on a hill sees twice as far and, if it shoots, reaches twice
+    //   as far. Going uphill it moves at half speed.
+    // - From lower ground you can't see onto a hill.
+    // - Trees hide what's among them: from outside a forest you can't see
+    //   in, and from inside you can't see out.
+    // Right next to something (1.5 tiles) you always see it.
+
+    /// Is this unit standing on a hill? (Not boats, aircraft or buildings.)
+    pub fn on_hill(map: &Map, e: &Entity) -> bool {
+        !e.is_building() && !e.kind.is_air() && !e.kind.is_naval() && map.hill(e.x.floor() as i32, e.y.floor() as i32)
+    }
+    /// How far it sees: double on a hill.
+    pub fn sight_on(map: &Map, e: &Entity) -> f32 {
+        e.kind.stats().sight * if Self::on_hill(map, e) { 2.0 } else { 1.0 }
+    }
+    pub fn sight_of(&self, e: &Entity) -> f32 {
+        Self::sight_on(&self.map, e)
+    }
+    /// How far it shoots: double on a hill, for those that shoot.
+    pub fn range_of(&self, e: &Entity) -> f32 {
+        let r = e.kind.stats().range;
+        if r > 1.5 && Self::on_hill(&self.map, e) { r * 2.0 } else { r }
+    }
+    /// Can someone at (fx, fy) see the point (tx, ty)? `air`: the one
+    /// looking, or the one looked at, is in the air, where nothing hides.
+    pub fn sees_on(map: &Map, fx: f32, fy: f32, tx: f32, ty: f32, air: bool) -> bool {
+        if air || wx(tx - fx).powi(2) + (ty - fy).powi(2) <= 1.5 * 1.5 {
+            return true;
+        }
+        let (a, b) = ((fx.floor() as i32, fy.floor() as i32), (tx.floor() as i32, ty.floor() as i32));
+        map.covered(a.0, a.1) == map.covered(b.0, b.1) && (map.hill(a.0, a.1) || !map.hill(b.0, b.1))
+    }
+    pub fn sees(&self, fx: f32, fy: f32, tx: f32, ty: f32, air: bool) -> bool {
+        Self::sees_on(&self.map, fx, fy, tx, ty, air)
+    }
+    /// Is unit `i`, heading for `to`, going up a hill? (Half a tile ahead
+    /// is higher, and on hill ground.)
+    pub fn uphill(&self, i: usize, to: (f32, f32)) -> bool {
+        let e = &self.ents[i];
+        if e.kind.is_naval() || e.kind.is_air() {
+            return false;
+        }
+        let (dx, dy) = (wx(to.0 - e.x), to.1 - e.y);
+        let d = (dx * dx + dy * dy).sqrt();
+        if d < 1e-3 {
+            return false;
+        }
+        let (ax, ay) = (e.x + dx / d * 0.5, e.y + dy / d * 0.5);
+        let m = &self.map;
+        (m.hill(e.x.floor() as i32, e.y.floor() as i32) || m.hill(ax.floor() as i32, ay.floor() as i32)) && m.height_at(ax, ay) > m.height_at(e.x, e.y) + 1.0
+    }
+    /// Can entity `i` see entity `j`? (A building can't hide.)
+    pub fn sees_ent(&self, i: usize, j: usize) -> bool {
+        let (a, b) = (&self.ents[i], &self.ents[j]);
+        b.is_building() || self.sees(a.x, a.y, b.x, b.y, a.is_building() || a.kind.is_air() || b.kind.is_air())
     }
 
     /// The private timers, for `save`/`load`.
@@ -1074,7 +1135,7 @@ impl Game {
         let melee = !me.is_building() && me_kind.stats().range < 1.5;
         self.units_near(x, y, reach + 1.0, |id| {
             let e = &self.ents[id as usize];
-            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && Self::spotted_by(e, owner) && !(melee && e.kind.is_naval() != me_kind.is_naval()) {
+            if e.alive && Self::hostile(owner, e.owner) && me_kind.can_hit(e.kind) && Self::spotted_by(e, owner) && !(melee && e.kind.is_naval() != me_kind.is_naval()) && self.sees_ent(i, id as usize) {
                 let k = key(e);
                 if better(k, bk) {
                     bk = k;
@@ -1939,14 +2000,15 @@ impl Game {
         seen
     }
 
-    /// The fishing spot each fishing boat fishes, by entity index: one boat
-    /// to a spot. A boat lying still within `SHOAL_REACH` of a spot nobody
+    /// The spot each fishing boat fishes (or whaler hunts), by entity
+    /// index: one boat to a spot. A boat lying still within `SHOAL_REACH` of a spot nobody
     /// has yet takes the nearest such (older boats choose first).
     pub fn fishing_claims(&self) -> Vec<Option<usize>> {
         let mut out = vec![None; self.ents.len()];
         let mut taken = vec![false; self.deps.len()];
         for (i, e) in self.ents.iter().enumerate() {
-            if !e.alive || e.kind != Kind::FishingBoat || e.order != Order::Idle || e.aboard != 0 {
+            let Some(prey) = e.kind.hunts() else { continue };
+            if !e.alive || e.order != Order::Idle || e.aboard != 0 {
                 continue;
             }
             let (cx, cy) = (e.x.floor() as i32, e.y.floor() as i32);
@@ -1957,7 +2019,7 @@ impl Game {
                         continue;
                     }
                     let d = self.map.dep_at[self.map.idx(tx, ty)];
-                    if d < 0 || taken[d as usize] || self.deps[d as usize].kind != Dep::Fish {
+                    if d < 0 || taken[d as usize] || self.deps[d as usize].kind != prey {
                         continue;
                     }
                     let dist = wx(tx as f32 + 0.5 - e.x).hypot(ty as f32 + 0.5 - e.y);
@@ -2197,11 +2259,11 @@ impl Game {
 
     fn do_idle(&mut self, i: usize) {
         // A fishing boat lying still is fishing (see `resolve`).
-        self.ents[i].anim = if self.ents[i].kind == Kind::FishingBoat { Anim::Work } else { Anim::Idle };
+        self.ents[i].anim = if self.ents[i].kind.hunts().is_some() { Anim::Work } else { Anim::Idle };
         let e = &self.ents[i];
         if e.kind.is_military() && e.scan <= 0.0 && self.ready(i) {
             self.ents[i].scan = 0.5;
-            let sight = self.ents[i].kind.stats().sight;
+            let sight = self.sight_of(&self.ents[i]);
             if let Some(t) = self.nearest_enemy(i, sight) {
                 let e = &mut self.ents[i];
                 e.resume = Some((e.x, e.y));
@@ -2213,7 +2275,7 @@ impl Game {
     fn do_attack_move(&mut self, i: usize, x: f32, y: f32) {
         if self.ents[i].kind.stats().attack > 0.0 && self.ents[i].scan <= 0.0 && Self::armed(&self.ents[i]) {
             self.ents[i].scan = 0.4;
-            let sight = self.ents[i].kind.stats().sight;
+            let sight = self.sight_of(&self.ents[i]);
             if let Some(t) = self.nearest_enemy(i, sight) {
                 let e = &mut self.ents[i];
                 e.set_order(Order::Attack { target: t, auto: true });
@@ -2252,22 +2314,24 @@ impl Game {
         let t = &self.ents[target as usize];
         let (tx, ty, t_is_bld) = (t.x, t.y, t.is_building());
         let d = t.edge_dist(x, y) - kind.radius();
-        // Automatic fights give up when the target runs out of sight.
-        if auto && d > st.sight * 1.3 {
+        let (sight, range) = (self.sight_of(&self.ents[i]), self.range_of(&self.ents[i]));
+        // Automatic fights give up when the target runs out of sight, or
+        // slips behind trees or up a hill.
+        if auto && (d > sight * 1.3 || !self.sees_ent(i, target as usize)) {
             return self.end_attack(i);
         }
         // ...and turn to anything that fights back, when hitting something
         // that doesn't (a worker, a house).
         if auto && Self::threat_tier(&self.ents[target as usize]) > 0 && self.ents[i].scan <= 0.0 {
             self.ents[i].scan = 0.5;
-            if let Some(t) = self.nearest_enemy(i, st.sight) {
+            if let Some(t) = self.nearest_enemy(i, sight) {
                 if Self::threat_tier(&self.ents[t as usize]) < Self::threat_tier(&self.ents[target as usize]) {
                     self.ents[i].set_order(Order::Attack { target: t, auto: true });
                     return;
                 }
             }
         }
-        if d <= st.range {
+        if d <= range {
             let e = &mut self.ents[i];
             e.path.clear();
             e.goal = None;
@@ -2500,11 +2564,11 @@ impl Game {
             self.compute_path(i, goal);
             self.ents[i].repath = repath_every;
         }
-        let speed = self.ents[i].kind.stats().speed * DT;
         let target = match self.ents[i].path.last() {
             Some(&p) => p,
             None => goal.nearest_point(x, y),
         };
+        let speed = self.ents[i].kind.stats().speed * DT * if self.uphill(i, target) { 0.5 } else { 1.0 };
         let moved = self.step_toward(i, target.0, target.1, speed);
         let e = &mut self.ents[i];
         if let Some(&(wx, wy)) = e.path.last() {
@@ -2668,7 +2732,7 @@ impl Game {
         let map = &self.map;
         for e in self.ents.iter().filter(|e| e.alive && e.owner != GAIA && e.owner <= self.n_players && e.owner < 8 && Self::staked_on(map, e)) {
             let st = e.kind.stats();
-            let r = st.sight + st.size as f32 / 2.0;
+            let r = Self::sight_on(map, e) + st.size as f32 / 2.0;
             let ri = r.ceil() as i32;
             let (cx, cy) = (e.x.floor() as i32, e.y.floor() as i32);
             let bit = 1u8 << e.owner;
@@ -2715,13 +2779,15 @@ impl Game {
         let mine = owned.get(me as usize).into_iter().flatten().map(|&i| &ents[i as usize]).filter(|e| e.alive);
         for e in mine.filter(|e| Self::staked_on(map, e)) {
             let st = e.kind.stats();
-            let r = st.sight + st.size as f32 / 2.0;
+            let r = Self::sight_on(map, e) + st.size as f32 / 2.0;
             let ri = r.ceil() as i32;
             let (cx, cy) = (e.x.floor() as i32, e.y.floor() as i32);
+            // (A building sees past trees and hills: it's tall.)
+            let free = e.is_building() || e.kind.is_air();
             for dy in -ri..=ri {
                 for dx in -ri..=ri {
                     let (x, y) = (map.tile_x(cx + dx), cy + dy);
-                    if x >= 0 && y >= 0 && x < w && y < self.map.h && ((dx * dx + dy * dy) as f32) <= r * r {
+                    if x >= 0 && y >= 0 && x < w && y < self.map.h && ((dx * dx + dy * dy) as f32) <= r * r && Self::sees_on(map, e.x, e.y, (cx + dx) as f32 + 0.5, y as f32 + 0.5, free) {
                         self.fog[(y * w + x) as usize] = 2;
                     }
                 }

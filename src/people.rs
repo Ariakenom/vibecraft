@@ -263,7 +263,7 @@ impl Game {
             }
             e.crewed = e.built >= 1.0 && e.crew >= st.workers;
             // A fishing boat fishes while it lies still at a spot of its own.
-            if e.kind == Kind::FishingBoat {
+            if e.kind.hunts().is_some() {
                 e.crewed = fishing[e.id as usize];
             }
             if e.crewed && st.consumes.is_empty() {

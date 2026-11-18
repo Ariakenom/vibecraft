@@ -64,7 +64,7 @@ check(r.n === 10, `ten kinds of boat on the water (${r.n})`);
 check(r.cursorBoard === 7, `right-clicking a transport with soldiers means board (${r.cursorBoard})`);
 check(r.visibleMen === 0 && r.aboard === 2, `the soldiers went aboard and aren't drawn (${r.visibleMen} drawn, ${r.aboard} aboard)`);
 check(r.cursorUnload === 8, `right-clicking land with a loaded transport means put ashore (${r.cursorUnload})`);
-check(r.trains === 10 && r.name === "Galleon", `the dock trains ten boats (${r.trains})`);
+check(r.trains === 11 && r.name === "Galleon", `the dock trains eleven boats (${r.trains})`);
 check(r.subButtons === 2, `a nuclear submarine has Launch and Arm buttons (${r.buttons})`);
 check(/Fuel \d+ of 45/.test(r.panel) && /Ammunition 12 of 12/.test(r.panel), `a fighter shows its fuel and ammunition (${r.panel})`);
 check(r.subArm !== 0, `arming away from a dock is refused (${r.subArm})`);

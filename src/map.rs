@@ -123,6 +123,9 @@ pub struct Map {
     /// craters): people can't walk from one piece to another. Worked out
     /// from the terrain (`with_land`), not saved.
     pub land: Vec<u32>,
+    /// Tiles among trees (`set_cover`): sight doesn't cross a forest's
+    /// edge (`Game::sees`). Worked out from the deposits, not saved.
+    pub cover: Vec<bool>,
     /// The east and west edges meet (the Globe): see `wx`. Told by the
     /// map's size, which no other map has, so saves need nothing new.
     pub wrap: bool,
@@ -131,7 +134,7 @@ pub struct Map {
 impl Map {
     pub fn new(w: i32, h: i32, terrain: Vec<u8>, shade: Vec<u8>, blocked: Vec<bool>, dep_at: Vec<i32>, bld_at: Vec<i32>) -> Map {
         let wrap = (w, h) == (crate::map_world::GLOBE_W, crate::map_world::GLOBE_H);
-        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new(), wrap };
+        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new(), cover: Vec::new(), wrap };
         use_wrap(&m);
         m.relabel_land();
         m
@@ -167,6 +170,45 @@ impl Map {
                 }
             }
         }
+    }
+    /// Mark the tiles among trees (`cover`): a tree's own tile, and open
+    /// ground with two or more trees round it.
+    pub fn set_cover(&mut self, deps: &[Deposit]) {
+        let n = (self.w * self.h) as usize;
+        let tree: Vec<bool> = (0..n).map(|i| self.dep_at[i] >= 0 && deps.get(self.dep_at[i] as usize).is_some_and(|d| d.kind == Dep::Forest)).collect();
+        self.cover = (0..n)
+            .map(|i| {
+                if tree[i] {
+                    return true;
+                }
+                let (x, y) = ((i as i32) % self.w, (i as i32) / self.w);
+                let around = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)].iter().filter(|&&(dx, dy)| self.inside(x + dx, y + dy) && tree[self.idx(x + dx, y + dy)]).count();
+                around >= 2 && !matches!(self.terrain[i], WATER | SHALLOW)
+            })
+            .collect();
+    }
+    /// Among trees? (False until `set_cover` has run.)
+    pub fn covered(&self, x: i32, y: i32) -> bool {
+        self.inside(x, y) && self.cover.get(self.idx(x, y)).copied().unwrap_or(false)
+    }
+    /// On a hill?
+    pub fn hill(&self, x: i32, y: i32) -> bool {
+        self.inside(x, y) && self.terrain[self.idx(x, y)] == HILL
+    }
+    /// The ground's height at a point, in `shade`'s units, smoothly between
+    /// the tiles' middles (for "uphill").
+    pub fn height_at(&self, x: f32, y: f32) -> f32 {
+        let (fx, fy) = (x - 0.5, (y - 0.5).clamp(0.0, (self.h - 1) as f32));
+        let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
+        let (ax, ay) = (fx - x0 as f32, fy - y0 as f32);
+        let at = |x: i32, y: i32| {
+            let y = y.clamp(0, self.h - 1);
+            let x = if self.wrap { x } else { x.clamp(0, self.w - 1) };
+            self.shade[self.idx(x, y)] as f32
+        };
+        let top = at(x0, y0) * (1.0 - ax) + at(x0 + 1, y0) * ax;
+        let bottom = at(x0, y0 + 1) * (1.0 - ax) + at(x0 + 1, y0 + 1) * ax;
+        top * (1.0 - ay) + bottom * ay
     }
     /// The piece of land at (x, y), or next to it (someone at the water's
     /// edge); 0 if there's none.
@@ -311,6 +353,87 @@ pub(crate) enum Feat {
     Uranium,
     /// A fish shoal: on the water.
     Fish,
+    /// A pod of whales: far out on the open sea.
+    Whales,
+}
+
+/// Sheep graze on hills: the ground round every sheep deposit rises into
+/// one (hill ground within 2.5 tiles, sloping down over the next few).
+pub(crate) fn raise_sheep_hills(terrain: &mut [u8], shade: &mut [u8], feat: &[Feat], w: i32, h: i32) {
+    let n = (w * h) as usize;
+    let mut near = vec![f32::MAX; n];
+    for i in (0..n).filter(|&i| feat[i] == Feat::Hills) {
+        let (sx, sy) = ((i as i32) % w, (i as i32) / w);
+        for dy in -4..=4 {
+            for dx in -4..=4 {
+                let (x, y) = (sx + dx, sy + dy);
+                if x < 0 || y < 0 || x >= w || y >= h {
+                    continue;
+                }
+                let j = (y * w + x) as usize;
+                near[j] = near[j].min(((dx * dx + dy * dy) as f32).sqrt());
+            }
+        }
+    }
+    for i in 0..n {
+        let d = near[i];
+        if d > 4.0 || terrain[i] != GRASS && terrain[i] != HILL {
+            continue;
+        }
+        shade[i] = shade[i].max((215.0 - 11.0 * d) as u8);
+        if d <= 2.5 {
+            terrain[i] = HILL;
+        }
+    }
+}
+
+/// Room to walk among the trees: a forest keeps its trees on two tiles in
+/// five, a knight's-move lattice whose gaps all join up, and drops a few
+/// more by chance. Worked out on each tile's first image, so the map stays
+/// symmetric.
+pub(crate) fn thin_forests(feat: &mut [Feat], w: i32, h: i32, syms: &[Sym], seed: u32) {
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            if feat[i] != Feat::Tree {
+                continue;
+            }
+            let (cx, cy) = syms.iter().map(|s| s.apply(x, y, w, h)).min_by_key(|&(a, b)| b * w + a).unwrap();
+            if !matches!((cx + 2 * cy).rem_euclid(5), 0 | 2) || hash(cx, cy, seed ^ 0x7EE5) < 0.1 {
+                feat[i] = Feat::None;
+            }
+        }
+    }
+}
+
+/// Whale pods out on the open sea: `count` spots (each with its images),
+/// in deep water at least `from_town` tiles from every town and well apart.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn place_whales(terrain: &[u8], feat: &mut [Feat], w: i32, h: i32, syms: &[Sym], towns: &[(i32, i32)], count: usize, from_town: f32, seed: u32) {
+    let mut spots: Vec<(i32, i32)> = Vec::new();
+    let mut put = 0;
+    for t in 0..8000 {
+        if put >= count {
+            break;
+        }
+        let (x, y) = ((hash(t, 91, seed) * w as f32) as i32, (hash(t, 93, seed) * h as f32) as i32);
+        if x < 5 || y < 5 || x >= w - 5 || y >= h - 5 {
+            continue;
+        }
+        let deep = (-3..=3).all(|dy| (-3..=3).all(|dx| terrain[((y + dy) * w + x + dx) as usize] == WATER));
+        let clear = (-5..=5).all(|dy| (-5..=5).all(|dx| !matches!(feat[((y + dy) * w + x + dx) as usize], Feat::Fish | Feat::Whales)));
+        let far = towns.iter().all(|&(bx, by)| (((bx - x).pow(2) + (by - y).pow(2)) as f32).sqrt() >= from_town);
+        let apart = syms.iter().map(|s| s.apply(x, y, w, h)).all(|(a, b)| spots.iter().all(|&(sx, sy)| (sx - a).abs().max((sy - b).abs()) >= 16));
+        if !(deep && clear && far && apart) {
+            continue;
+        }
+        for s in syms {
+            let (a, b) = s.apply(x, y, w, h);
+            spots.push((a, b));
+            feat[(b * w + a) as usize] = Feat::Whales;
+        }
+        put += 1;
+    }
 }
 
 /// How far from its middle a cluster of `f` with size `r` can reach: what
@@ -994,7 +1117,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             (t2[i], s2[i], f2[i]) = (terrain[j], shade[j], feat[j]);
         }
     }
-    let (terrain, mut shade, mut feat) = (t2, s2, f2);
+    let (mut terrain, mut shade, mut feat) = (t2, s2, f2);
     let bases: Vec<(i32, i32)> = bases.into_iter().map(|(x, y)| (x + OPEN_SEA, y + OPEN_SEA)).collect();
     // Fishing spots out there: along each edge, half way out, and turned.
     let images = |x: i32, y: i32| syms.iter().map(move |s| s.apply(x, y, w, h));
@@ -1007,6 +1130,10 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
         }
     }
 
+    raise_sheep_hills(&mut terrain, &mut shade, &feat, w, h);
+    thin_forests(&mut feat, w, h, syms, seed);
+    place_whales(&terrain, &mut feat, w, h, syms, &bases, 1, 22.0, seed);
+
     // Turn features into deposits and mark blocked tiles.
     let mut deps = Vec::new();
     let mut blocked = vec![false; n];
@@ -1017,9 +1144,9 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
             if terrain[i] == WATER {
                 blocked[i] = true;
                 // (Boats sail over shoals: `sailable` goes by the terrain.)
-                if feat[i] == Feat::Fish {
+                if matches!(feat[i], Feat::Fish | Feat::Whales) {
                     dep_at[i] = deps.len() as i32;
-                    deps.push(Deposit { kind: Dep::Fish, tx: x, ty: y });
+                    deps.push(Deposit { kind: if feat[i] == Feat::Fish { Dep::Fish } else { Dep::Whales }, tx: x, ty: y });
                 }
                 continue;
             }
@@ -1038,7 +1165,7 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 Feat::Oil => Dep::Oil,
                 Feat::Bauxite => Dep::Bauxite,
                 Feat::Uranium => Dep::Uranium,
-                Feat::Fish => continue, // (only ever on water, above)
+                Feat::Fish | Feat::Whales => continue, // (only ever on water, above)
             };
             dep_at[i] = deps.len() as i32;
             blocked[i] = true;
@@ -1075,7 +1202,7 @@ mod tests {
     fn islands(seed: u32, players: usize) -> usize {
         let (m, deps, _) = generate(seed, players);
         deps.iter()
-            .filter(|d| d.kind != Dep::Forest && d.kind != Dep::Fish)
+            .filter(|d| !matches!(d.kind, Dep::Forest | Dep::Fish | Dep::Whales))
             .filter(|d| {
                 let mut wet = 0;
                 for dy in -2..=2 {
@@ -1103,7 +1230,7 @@ mod tests {
     fn tightest(seed: u32, players: usize) -> f32 {
         let (_, deps, _) = generate(seed, players);
         // (Shoals are out on the water: nothing is built on them.)
-        let d: Vec<_> = deps.iter().filter(|d| d.kind != Dep::Forest && d.kind != Dep::Fish).collect();
+        let d: Vec<_> = deps.iter().filter(|d| !matches!(d.kind, Dep::Forest | Dep::Fish | Dep::Whales)).collect();
         let mut best = f32::MAX;
         for (i, a) in d.iter().enumerate() {
             for b in &d[i + 1..] {
