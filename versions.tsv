@@ -61,3 +61,5 @@
 1795111353	2026-11-19	049fddeb69b44b327100133b5aef8d7c0e72a14a	Merge pull request #65 from Ariakenom/idle-workers
 1795111846	2026-11-19	5b30cc979f8b7c2c69d0980515655bff1a5a1e05	Map preview: draw the Globe at its own size
 1795112195	2026-11-19	ab7397bcb4206be2c326a82834118fb925727a13	Merge pull request #66 from Ariakenom/map-preview
+1795112097	2026-11-19	1e84441ab1e4c8a98ae2995d7482fdb1dc1ca9df	Forests: sight among trees reaches 3 tiles, in, out and within
+1795112201	2026-11-19	3991300765f6689231b2c0fc79e4886f55edfb4f	Merge pull request #67 from Ariakenom/forest-sight
