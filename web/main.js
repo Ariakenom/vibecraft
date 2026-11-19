@@ -877,7 +877,7 @@ function renderTopBar() {
   const hungry = W.unsupplied(), freeP = W.people(0), all = W.people(4);
   topBar.pop.className = "chip pop" + (hungry ? " full" : "");
   topBar.pop.innerHTML = `<svg viewBox="0 0 16 16"><circle cx="8" cy="4.5" r="2.8" fill="#d9c9a8"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="#d9c9a8"/></svg>${freeP}<small>/ ${all}</small>${hungry ? ` · ${hungry} unsupplied` : ""}`;
-  renderIdleBtn(freeP);
+  renderIdleBtn(W.count_stray_workers());
   topBar.era.textContent = `${ERA_NAMES[eraIndex()]} era`;
   const nextEra = eraIndex() + 1;
   topBar.era.title = nextEra <= W.era_progress(2)
@@ -887,12 +887,16 @@ function renderTopBar() {
   if (resTipFor >= 0) renderResTip();
 }
 
-// The free workers ("." or the button by the minimap): select them and look at the next.
+// Idle workers away from the town squares ("." or the button by the
+// minimap): sent off and left there, or unable to walk home. Free workers in
+// a square find work by themselves; these don't, so the button finds them.
+// Each press selects them all and looks at the next one.
+let strayTurn = 0;
 function nextFreeWorker() {
   if (!running || observe) return;
-  const id = W.free_workers();
+  const id = W.stray_workers(strayTurn++);
   if (id >= 0) { readWorld(); const i = byId.get(id); if (i != null) centerOn(E(i, F.x), E(i, F.y)); selKey = ""; }
-  else toast("Nobody is free in the town square.");
+  else toast("No idle workers outside the town square.");
 }
 $("idleBtn").onclick = e => { nextFreeWorker(); e.currentTarget.blur(); };
 function renderIdleBtn(n) {
@@ -901,7 +905,7 @@ function renderIdleBtn(n) {
   b.classList.toggle("gone", !!observe && !observe.view);
   const c = $("idleCount");
   if (c.textContent !== String(n)) c.textContent = String(n);
-  b.title = n ? `${n} free worker${n === 1 ? "" : "s"} in the town square: select them (.)` : "No free workers (.)";
+  b.title = n ? `${n} idle worker${n === 1 ? "" : "s"} outside the town square: select them (.)` : "No idle workers outside the town square (.)";
 }
 
 // Where a resource's slots come from and what holds them.
@@ -1035,7 +1039,7 @@ function renderSelection(force) {
   } else if (sel.length === 0) {
     const d = document.createElement("div");
     d.className = "tips";
-    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait in the <b>town square</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Town Square) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> or the worker button at the bottom left to select the free workers`;
+    d.innerHTML = `<h3>Outlast your rivals</h3>Buildings <b>make</b> resources and everything you have <b>holds</b> some while it exists. Your free workers wait in the <b>town square</b>: they build, go to work and enlist by themselves, and every producer needs its workers standing there. Select a worker (or your Town Square) to build: a <b>Lumber Camp</b> by a forest, <b>Farms</b>, then <b>Huts</b>; each kind of food a hut gets is 2 more beds, and newcomers fill free beds. Press <kbd class="k">.</kbd> or the worker button at the bottom left to find workers left idle outside the square`;
     panel.append(d);
   } else if (sel.length === 1) {
     singleInfo(panel, sel[0]);

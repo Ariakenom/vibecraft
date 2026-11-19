@@ -82,10 +82,27 @@ await pg.keyboard.press("Escape");
 const closed = await pg.evaluate(() => $("menuScreen").hidden);
 check(opened && closed, "Esc opens and closes the menu");
 
-// The free-workers button: how many, and a click selects them (like ".").
+// The idle-workers button finds workers left idle outside the town square
+// (free workers in the square go to work by themselves): none at first; one
+// sent off and left there shows, and a click (like ".") selects it.
 await pg.evaluate(() => { for (let i = 0; i < 200; i++) { W.tick(); simTick++; } readWorld(); renderTopBar(); });
-r = await pg.evaluate(() => { const n = W.people(0), shown = $("idleCount").textContent; W.clear_selection(); $("idleBtn").click(); readWorld(); return { n, shown, sel: selection().length, visible: !$("idleBtn").classList.contains("gone") }; });
-check(r.n > 0 && r.shown === String(r.n) && r.sel === r.n && r.visible, `the free-workers button shows ${r.shown} and selects them (${r.sel})`);
+r = await pg.evaluate(() => {
+  const out = { free: W.people(0), shown0: $("idleCount").textContent };
+  W.clear_selection(); $("idleBtn").click(); readWorld(); out.sel0 = selection().length;
+  let w = -1, cx = 0, cy = 0;
+  for (let i = 0; i < entCount; i++) if (E(i, F.owner) === ME && E(i, F.kind) === K.Capitol) { cx = E(i, F.x); cy = E(i, F.y); }
+  for (let i = 0; i < entCount && w < 0; i++) if (E(i, F.owner) === ME && E(i, F.kind) === K.Worker && E(i, F.order) === 0) w = E(i, F.id);
+  issue({ c: 1, ids: [w], x: cx + 9, y: cy + 9 });
+  for (let i = 0; i < 600; i++) { W.tick(); simTick++; }
+  readWorld(); renderTopBar();
+  out.shown1 = $("idleCount").textContent;
+  W.clear_selection(); $("idleBtn").click(); readWorld();
+  out.sel1 = selection().map(i => E(i, F.id)); out.w = w;
+  out.visible = !$("idleBtn").classList.contains("gone");
+  return out;
+});
+check(r.free > 0 && r.shown0 === "0" && r.sel0 === 0, `free workers in the square aren't counted (${r.free} free, button ${r.shown0})`);
+check(r.shown1 === "1" && r.sel1.length === 1 && r.sel1[0] === r.w && r.visible, `a worker left outside shows (${r.shown1}) and a click selects it (${r.sel1})`);
 check(pg.errors.length === 0, "no page errors");
 
 // The old four levels carry over.
