@@ -57,3 +57,5 @@
 1795044061	2026-11-19	de78453a982645a7baee322b2207df1977bfc7e3	Hills, forests, whalers, and Frontier-style Globe starts
 1795110762	2026-11-19	32801dc3ddf82133980888ab2113e528628c696c	HUD icons on the Globe: draw them flat
 1795111347	2026-11-19	e78c54ee96f91fb9bc49e422b4f8bb4053a7b069	Merge pull request #64 from Ariakenom/globe-icons
+1795111151	2026-11-19	02ed0fca1837ce6f85f5525c4a58cfe2e8cd4de7	Idle-workers button: find workers left idle outside the town square
+1795111353	2026-11-19	049fddeb69b44b327100133b5aef8d7c0e72a14a	Merge pull request #65 from Ariakenom/idle-workers
