@@ -55,3 +55,5 @@
 1794958080	2026-11-18	70b012ecf8ba0c3ec50f5a687a859d53c5b96e34	One way to start a game: online World and Globe games, and watching the Globe
 1794958545	2026-11-18	f5baae57730e629c141018b7e50565b110232b13	Merge pull request #63 from Ariakenom/multiplayer-world
 1795044061	2026-11-19	de78453a982645a7baee322b2207df1977bfc7e3	Hills, forests, whalers, and Frontier-style Globe starts
+1795110762	2026-11-19	32801dc3ddf82133980888ab2113e528628c696c	HUD icons on the Globe: draw them flat
+1795111347	2026-11-19	e78c54ee96f91fb9bc49e422b4f8bb4053a7b069	Merge pull request #64 from Ariakenom/globe-icons
