@@ -26,6 +26,16 @@ const after = await pg.evaluate(() => ({ url: $("mapPreview").toDataURL(), seed:
 check(after.url !== before && after.seed !== 4242, `Another: map ${after.seed}`);
 await pg.fill("#mapSeed", "4242");
 await sleep(100);
+// Every kind of map: the picture is the map's size (the Globe is twice as
+// wide as tall; reading it as square drew stripes of nonsense below).
+const sizes = await pg.evaluate(() => [0, 1, 2, 3, 4].map(m => {
+  gameMode = m; previewKey = ""; renderMapPick();
+  const c = $("mapPreview"), h = W.preview_height();
+  return { m, w: c.width, h: c.height, mapH: h };
+}));
+await pg.evaluate(() => { gameMode = 0; previewKey = ""; renderMapPick(); });
+check(sizes.every(s => s.h === s.mapH && s.w > 0), `the preview is each map's own size (${sizes.map(s => s.w + "x" + s.h).join(", ")})`);
+check(sizes[4].w > sizes[4].h, "the Globe is wider than tall");
 // It's remembered, and Begin plays that map.
 check(await pg.evaluate(() => JSON.parse(localStorage.getItem("vibecraft.map")).seed === 4242), "the choice is remembered");
 if (process.env.SHOT) {
