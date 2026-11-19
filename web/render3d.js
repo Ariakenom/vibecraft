@@ -89,6 +89,23 @@ const GLOBE_GLSL = `
     vec3 d = vec3(c * sin(lon), s, c * cos(lon));
     return uGlobeAt + uGlobeRot * (d * (R + p.y * k)) - vec3(0.0, R, 0.0);
   }
+  // A thing standing on the ground (a unit, a building, a tree), anchored
+  // at flat point a: its anchor goes where the ground is bent to, and the
+  // rest of it is laid out round that spot by the ground's east, up and
+  // south there, all at one scale. So it keeps its shape anywhere; bent
+  // point by point it was squeezed thin toward the poles, where the map's
+  // columns narrow.
+  vec3 globeRigid(vec3 p, vec3 a) {
+    float R = uGlobe.x;
+    float lon = (a.x / uGlobe.y - 0.5) * 6.2831853;
+    float lat = globeLatOf(a.z), c = cos(lat), s = sin(lat);
+    float k = a.z < uGlobeB.x ? uGlobeB.y * R : a.z > uGlobeB.z ? uGlobeB.w * R : c;
+    vec3 up = vec3(c * sin(lon), s, c * cos(lon));
+    vec3 east = vec3(cos(lon), 0.0, -sin(lon));
+    vec3 south = vec3(s * sin(lon), -c, s * cos(lon));
+    vec3 o = (p - a) * k;
+    return uGlobeAt + uGlobeRot * (up * (R + a.y * k + o.y) + east * o.x + south * o.z) - vec3(0.0, R, 0.0);
+  }
   #endif
 `;
 THREE.ShaderChunk.common = GLOBE_GLSL + THREE.ShaderChunk.common;
@@ -96,7 +113,18 @@ THREE.ShaderChunk.common = GLOBE_GLSL + THREE.ShaderChunk.common;
   const flat = "mvPosition = modelViewMatrix * mvPosition;";
   if (!THREE.ShaderChunk.project_vertex.includes(flat)) console.error("three.js project_vertex changed: the Globe won't bend");
   THREE.ShaderChunk.project_vertex = THREE.ShaderChunk.project_vertex.replace(flat,
-    "if (uGlobe.x > 0.0) { mvPosition = viewMatrix * vec4(globeBend((modelMatrix * mvPosition).xyz), 1.0); } else { mvPosition = modelViewMatrix * mvPosition; }");
+    // (A mesh placed somewhere, or an instance of one, is a thing standing
+    // on the ground: `globeRigid` round where it's placed. The ground, the
+    // water and the shores are built where they lie, their meshes at 0:
+    // bent point by point.)
+    `if (uGlobe.x > 0.0) {
+      vec4 gwAnchor = vec4(0.0, 0.0, 0.0, 1.0);
+      #ifdef USE_INSTANCING
+        gwAnchor = instanceMatrix * gwAnchor;
+      #endif
+      vec3 gwA = (modelMatrix * gwAnchor).xyz, gwP = (modelMatrix * mvPosition).xyz;
+      mvPosition = viewMatrix * vec4(dot(gwA, gwA) > 1e-6 ? globeRigid(gwP, gwA) : globeBend(gwP), 1.0);
+    } else { mvPosition = modelViewMatrix * mvPosition; }`);
 }
 // Every material gets the globe's uniforms, but the shadow pass's: shadows
 // are cast and looked up in the flat world (a material without the uniforms

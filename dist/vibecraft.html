@@ -1958,6 +1958,23 @@ const GLOBE_GLSL = `
     vec3 d = vec3(c * sin(lon), s, c * cos(lon));
     return uGlobeAt + uGlobeRot * (d * (R + p.y * k)) - vec3(0.0, R, 0.0);
   }
+  // A thing standing on the ground (a unit, a building, a tree), anchored
+  // at flat point a: its anchor goes where the ground is bent to, and the
+  // rest of it is laid out round that spot by the ground's east, up and
+  // south there, all at one scale. So it keeps its shape anywhere; bent
+  // point by point it was squeezed thin toward the poles, where the map's
+  // columns narrow.
+  vec3 globeRigid(vec3 p, vec3 a) {
+    float R = uGlobe.x;
+    float lon = (a.x / uGlobe.y - 0.5) * 6.2831853;
+    float lat = globeLatOf(a.z), c = cos(lat), s = sin(lat);
+    float k = a.z < uGlobeB.x ? uGlobeB.y * R : a.z > uGlobeB.z ? uGlobeB.w * R : c;
+    vec3 up = vec3(c * sin(lon), s, c * cos(lon));
+    vec3 east = vec3(cos(lon), 0.0, -sin(lon));
+    vec3 south = vec3(s * sin(lon), -c, s * cos(lon));
+    vec3 o = (p - a) * k;
+    return uGlobeAt + uGlobeRot * (up * (R + a.y * k + o.y) + east * o.x + south * o.z) - vec3(0.0, R, 0.0);
+  }
   #endif
 `;
 THREE.ShaderChunk.common = GLOBE_GLSL + THREE.ShaderChunk.common;
@@ -1965,7 +1982,18 @@ THREE.ShaderChunk.common = GLOBE_GLSL + THREE.ShaderChunk.common;
   const flat = "mvPosition = modelViewMatrix * mvPosition;";
   if (!THREE.ShaderChunk.project_vertex.includes(flat)) console.error("three.js project_vertex changed: the Globe won't bend");
   THREE.ShaderChunk.project_vertex = THREE.ShaderChunk.project_vertex.replace(flat,
-    "if (uGlobe.x > 0.0) { mvPosition = viewMatrix * vec4(globeBend((modelMatrix * mvPosition).xyz), 1.0); } else { mvPosition = modelViewMatrix * mvPosition; }");
+    // (A mesh placed somewhere, or an instance of one, is a thing standing
+    // on the ground: `globeRigid` round where it's placed. The ground, the
+    // water and the shores are built where they lie, their meshes at 0:
+    // bent point by point.)
+    `if (uGlobe.x > 0.0) {
+      vec4 gwAnchor = vec4(0.0, 0.0, 0.0, 1.0);
+      #ifdef USE_INSTANCING
+        gwAnchor = instanceMatrix * gwAnchor;
+      #endif
+      vec3 gwA = (modelMatrix * gwAnchor).xyz, gwP = (modelMatrix * mvPosition).xyz;
+      mvPosition = viewMatrix * vec4(dot(gwA, gwA) > 1e-6 ? globeRigid(gwP, gwA) : globeBend(gwP), 1.0);
+    } else { mvPosition = modelViewMatrix * mvPosition; }`);
 }
 // Every material gets the globe's uniforms, but the shadow pass's: shadows
 // are cast and looked up in the flat world (a material without the uniforms
@@ -6213,7 +6241,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "d6b937e7bdda", "base": "1f52cf6a82"};
+const BUILD_INFO = {"sim": "d6b937e7bdda", "base": "eaf8c02ee9"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -8810,7 +8838,7 @@ view.addEventListener("pointerdown", e => {
   if (!running) return;
   view.setPointerCapture(e.pointerId);
   const p = localPos(e); mouse.x = p.x; mouse.y = p.y; mouse.inside = true;
-  if (e.pointerType === "touch") { touch = { x0: p.x, y0: p.y, cx: cam.x, cy: cam.y, moved: false }; return; }
+  if (e.pointerType === "touch") { touch = { x0: p.x, y0: p.y, cx: cam.x, cy: cam.y, yaw: cam.yaw, moved: false }; return; }
   if (e.button === 1) { orbit = { x0: p.x, y0: p.y, yaw: cam.yaw, pitch: cam.pitch }; e.preventDefault(); return; }
   if (e.button === 2) {
     if (placing != null || amode) { placing = null; setAmode(false); return; }
@@ -8834,9 +8862,10 @@ view.addEventListener("pointermove", e => {
     if (Math.hypot(p.x - touch.x0, p.y - touch.y0) > 10) touch.moved = true;
     if (touch.moved) {
       // Drag the map under your finger.
-      const k = cam.dist / view._h * 1.6, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
+      // (From where the drag began, the view turned as it was then.)
+      const k = cam.dist / view._h * 1.6, c = Math.cos(touch.yaw), s = Math.sin(touch.yaw);
       const dx = -(p.x - touch.x0) * k, dy = -(p.y - touch.y0) * k;
-      cam.x = touch.cx + dx * c + dy * s; cam.y = touch.cy - dx * s + dy * c; clampCam();
+      cam.x = touch.cx; cam.y = touch.cy; cam.yaw = touch.yaw; panCam(dx * c + dy * s, -dx * s + dy * c);
     }
     return;
   }
@@ -9044,8 +9073,21 @@ function scrollCamera(dt) {
   }
   if (!dx && !dy) return;
   const v = cam.dist * 1.1 * dt, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
-  cam.x += (dx * c + dy * s) * v;
-  cam.y += (-dx * s + dy * c) * v;
+  panCam((dx * c + dy * s) * v, (-dx * s + dy * c) * v);
+}
+// Move the camera east and south (map tiles, as on the equator). On the
+// Globe toward the poles a tile east is narrower than a tile south (the
+// polar bands), so east goes as much further, to move as far either way;
+// and the camera keeps facing the same way over the ground, not round the
+// pole, as it goes east or west (its yaw turns with the meridians there).
+function panCam(east, south) {
+  if (typeof GLOBE !== "undefined" && GLOBE.on) {
+    globeLat(cam.y);
+    const wide = Math.min(12, GLOBE.k / Math.max(1e-3, GLOBE.c)), dx = east * wide;
+    cam.x += dx;
+    cam.yaw -= dx / MW * 2 * Math.PI * GLOBE.s;
+  } else cam.x += east;
+  cam.y += south;
   clampCam();
 }
 
