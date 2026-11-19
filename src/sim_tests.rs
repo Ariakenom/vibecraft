@@ -2473,3 +2473,50 @@ fn mountains_stand_in_hills_and_see_furthest() {
     }
     panic!("no skirmish map with a mountaintop beside a hilltop in 40 seeds");
 }
+
+/// Over the North Pole on the Globe: a worker sent from one side of the
+/// pole to the other, half the world round, walks over the top (a short
+/// way, not round the world), never leaves the map, and arrives; and an
+/// archer by the pole shoots a spearman on the far side of it.
+#[test]
+fn the_globe_goes_over_the_poles() {
+    use crate::map::{pdist, ICE};
+    let mut g = Game::new_frontier(3, 1, 2, crate::map_frontier::Size::Globe);
+    for p in g.seat_ids() {
+        g.set_ai(p, false);
+    }
+    let (w, h) = (g.map.w as f32, g.map.h as f32);
+    assert_eq!(g.map.terrain[g.map.idx(10, 1)], ICE, "ice by the North Pole");
+    // Ten rows from the pole, and the same row half the world round.
+    let (x0, y0) = (100.5, 10.5);
+    let (x1, y1) = (x0 + w / 2.0, 10.5);
+    assert!((pdist(x0, y0, x1, y1) - 21.0).abs() < 0.01, "over the pole it's 21 tiles");
+    let walker = g.spawn_unit(Kind::Worker, 1, x0, y0);
+    g.order_move(walker, x1, y1);
+    let (mut was, mut walked, mut crossed) = ((x0, y0), 0.0, false);
+    for _ in 0..(40.0 * 20.0) as u32 {
+        g.tick();
+        g.events.clear();
+        let e = &g.ents[walker as usize];
+        assert!((0.0..w).contains(&e.x) && (0.0..=h).contains(&e.y), "off the map at {}, {}", e.x, e.y);
+        let step = pdist(was.0, was.1, e.x, e.y);
+        assert!(step < 0.3, "a jump from {was:?} to {}, {}", e.x, e.y);
+        walked += step;
+        crossed |= (e.x - x1).abs() < 40.0;
+        was = (e.x, e.y);
+    }
+    let e = &g.ents[walker as usize];
+    assert!(crossed && pdist(e.x, e.y, x1, y1) < 0.8, "the walker is at {}, {}", e.x, e.y);
+    assert!(walked < 30.0, "it walked {walked:.1} tiles, not over the pole");
+
+    // An archer three tiles from the pole shoots a spearman three tiles past it.
+    let archer = g.spawn_unit(Kind::Archer, 1, 200.5, 3.0);
+    let foe = g.spawn_unit(Kind::Spearman, 2, 200.5 + w / 2.0, 3.0);
+    let hp = g.ents[foe as usize].hp;
+    for _ in 0..(6.0 * 20.0) as u32 {
+        g.tick();
+        g.events.clear();
+    }
+    assert!(!g.alive(foe) || g.ents[foe as usize].hp < hp, "the archer shot over the pole");
+}
+

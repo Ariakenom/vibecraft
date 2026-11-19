@@ -137,6 +137,15 @@ pub extern "C" fn map_round() -> u32 {
 
 /// 1 if this map is the Globe's: the page wraps it round a ball
 /// (`map_world::Shape::Globe`; told by its size, which no other map has).
+/// The Globe's rows (`map_world::GlobeProj`), for the page to draw with
+/// the same latitudes: 0 the ball's radius, 1 the north band's rows, 2 its
+/// radians a row, 3 Mercator's y where it starts, 4 the row the south band
+/// starts at, 5 its radians a row.
+#[unsafe(no_mangle)]
+pub extern "C" fn globe_proj(which: u32) -> f32 {
+    let p = map_world::GlobeProj::new();
+    [p.r, p.yn, p.hn, p.top, p.ys, p.hs].get(which as usize).copied().unwrap_or(0.0)
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn map_globe() -> u32 {
     game(|g| (g.map.w == map_world::GLOBE_W && g.map.h == map_world::GLOBE_H) as u32)
@@ -1333,7 +1342,7 @@ thread_local! {
 
 /// Make the map of `seed` for `players` and keep a picture of it: a byte a
 /// tile, row by row (0 deep water, 1 shallows, 2 sand, 3 grass, 4 hills,
-/// 5 forest, 6 a deposit, 7 a town site, 8 fish, 9 mountains). Returns its width;
+/// 5 forest, 6 a deposit, 7 a town site, 8 fish, 9 mountains, 10 ice). Returns its width;
 /// `preview_height` has its height (the Globe is wider than tall) and
 /// `preview_ptr` the bytes.
 #[unsafe(no_mangle)]
@@ -1354,6 +1363,7 @@ pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
         map::SAND => 2,
         map::HILL => 4,
         map::MOUNTAIN => 9,
+        map::ICE => 10,
         _ => 3,
     }).collect();
     for d in &deps {

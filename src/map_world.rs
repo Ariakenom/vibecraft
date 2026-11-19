@@ -15,17 +15,22 @@
 //! scattered, so some starts are better placed than others. It plays as a
 //! Frontier game (barbarians, the big map's rules).
 //!
-//! The Globe (`Shape::Globe`) is the same world laid out for a sphere: a
-//! Mercator map, 180° west at the left edge to 180° east at the right, 72°
-//! north to 56° south. The game on it is as flat as any other; the page
-//! wraps what it draws round a ball (render3d.js, `GLOBE`), where the left
-//! and right edges meet at 180°, between Siberia and Alaska; the game goes
-//! on across that line (`Map::wrap`, `map::wx`). Mercator, because
-//! it keeps shapes: a house is a house at any latitude, only smaller toward
-//! the poles.
+//! The Globe (`Shape::Globe`) is the same world laid out for a sphere, from
+//! pole to pole: 180° west at the left edge to 180° east at the right, the
+//! North Pole along the top edge and the South Pole along the bottom. The
+//! game on it is as flat as any other; the page wraps what it draws round a
+//! ball (render3d.js, `GLOBE`). The left and right edges meet at 180°,
+//! between Siberia and Alaska, and the game goes on across that line
+//! (`Map::wrap`, `map::wx`); over the top edge it goes on over the pole, half
+//! the world round (`map::wrap_pos`, `map::delta`). Between 66° north and
+//! 56° south the rows are Mercator's, which keeps shapes: a house is a
+//! house at any latitude, only smaller toward the poles. Past those, in
+//! the polar bands, the rows are evenly spaced to the pole, so the map
+//! ends there; things are drawn narrower and narrower toward the pole
+//! itself, where the ground is ice (`ICE`) and nothing is built.
 
 use crate::defs::Dep;
-use crate::map::{place_whales, raise_sheep_hills, settle_mountains, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, MOUNTAIN, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map::{place_whales, raise_sheep_hills, settle_mountains, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, ICE, MOUNTAIN, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 use crate::map_frontier::Site;
 
 /// The map's radius in tiles, and the radius of 58° south (sea beyond it).
@@ -33,12 +38,65 @@ pub const RADIUS: i32 = 212;
 const LAT_RADIUS: f32 = 200.0;
 /// Latitudes the disc covers: the pole in the middle to this far south.
 const SOUTH: f32 = -58.0;
-/// The Globe's map in tiles: once round the equator, and from 72° north to
-/// 56° south in Mercator's spacing (`GLOBE_TOP` is Mercator's y at the top
-/// edge, ln tan(45° + 72°/2); the page has the same numbers).
+/// The Globe's map in tiles: once round the equator, and pole to pole
+/// (`GlobeProj`).
 pub const GLOBE_W: i32 = 640;
-pub const GLOBE_H: i32 = 308;
-pub const GLOBE_TOP: f32 = 1.8427;
+pub const GLOBE_H: i32 = 492;
+/// Where Mercator's rows give way to the polar bands (degrees north, south).
+const POLAR_N: f32 = 66.0;
+const POLAR_S: f32 = 56.0;
+
+/// The Globe's rows: which latitude each is at. North band, rows 0 to
+/// `yn`, evenly from 90° to `POLAR_N` (`hn` radians a row); Mercator to
+/// row `ys` (Mercator's y is `top - (row - yn) / r`); south band to the
+/// last row, evenly to -90° (`hs` radians a row). Each band's rows are as
+/// tall as Mercator's where they meet. The page gets the same numbers
+/// (`globe_proj` in lib.rs).
+pub struct GlobeProj {
+    /// Tiles to a radian: the ball's radius.
+    pub r: f32,
+    pub yn: f32,
+    pub hn: f32,
+    pub top: f32,
+    pub ys: f32,
+    pub hs: f32,
+}
+
+impl GlobeProj {
+    pub fn new() -> GlobeProj {
+        let r = GLOBE_W as f32 / std::f32::consts::TAU;
+        let merc = |lat: f32| (std::f32::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln();
+        // A Mercator row at latitude a is cos(a) / r radians tall.
+        let hn = POLAR_N.to_radians().cos() / r;
+        let yn = (90.0 - POLAR_N).to_radians() / hn;
+        let top = merc(POLAR_N);
+        let ys = yn + (top + merc(POLAR_S)) * r;
+        let hs = (90.0 - POLAR_S).to_radians() / (GLOBE_H as f32 - ys);
+        GlobeProj { r, yn, hn, top, ys, hs }
+    }
+    /// The latitude (degrees) of a row (fractional: a point's y).
+    pub fn lat(&self, y: f32) -> f32 {
+        if y < self.yn {
+            90.0 - (y * self.hn).to_degrees()
+        } else if y < self.ys {
+            let m = self.top - (y - self.yn) / self.r;
+            (2.0 * m.exp().atan() - std::f32::consts::FRAC_PI_2).to_degrees()
+        } else {
+            -POLAR_S - ((y - self.ys) * self.hs).to_degrees()
+        }
+    }
+    /// The row (fractional) a latitude is at.
+    pub fn y(&self, lat: f32) -> f32 {
+        if lat > POLAR_N {
+            (90.0 - lat).to_radians() / self.hn
+        } else if lat > -POLAR_S {
+            let m = (std::f32::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln();
+            self.yn + (self.top - m) * self.r
+        } else {
+            self.ys + (-POLAR_S - lat).to_radians() / self.hs
+        }
+    }
+}
 
 /// How the world is laid out.
 #[derive(Clone, Copy, PartialEq)]
@@ -217,19 +275,17 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     let lakes = decode(LAKES_RLE);
     // A tile for a place on the globe, and back.
     // (On the Globe: Mercator, `ball` tiles to a radian.)
-    let ball = w as f32 / std::f32::consts::TAU;
+    let proj = GlobeProj::new();
     let tile_of = |lat: f32, lon: f32| {
         if globe {
-            let m = (std::f32::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln();
-            return (((lon / 360.0 + 0.5) * w as f32) as i32, ((GLOBE_TOP - m) * ball) as i32);
+            return (((lon / 360.0 + 0.5) * w as f32) as i32, proj.y(lat) as i32);
         }
         let (d, a) = ((90.0 - lat) / (90.0 - SOUTH) * LAT_RADIUS, lon.to_radians());
         ((centre.0 + d * a.sin()) as i32, (centre.1 + d * a.cos()) as i32)
     };
     let globe_of = |p: (f32, f32)| {
         if globe {
-            let m = GLOBE_TOP - p.1 / ball;
-            return ((2.0 * m.exp().atan() - std::f32::consts::FRAC_PI_2).to_degrees(), (p.0 / w as f32 - 0.5) * 360.0);
+            return (proj.lat(p.1), (p.0 / w as f32 - 0.5) * 360.0);
         }
         let (dx, dy) = (p.0 - centre.0, p.1 - centre.1);
         (90.0 - dist(p, centre) / LAT_RADIUS * (90.0 - SOUTH), dx.atan2(dy).to_degrees())
@@ -339,6 +395,20 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             } else {
                 GRASS
             };
+            // Polar ice: the Arctic from 72° north, sea and land (so the pole
+            // can be walked across from Siberia and Canada), Greenland's inland ice,
+            // Antarctica and its ice shelves, and the last rows by either
+            // pole whatever lies there.
+            if globe && terrain[i] != SHALLOW {
+                let wet = terrain[i] == WATER;
+                let greenland = lat > 60.0 && (-58.0..-18.0).contains(&lon) && land(&grid, lat, lon) > 0.97 && land(&grid, lat + 0.8, lon) > 0.97 && land(&grid, lat - 0.8, lon) > 0.97;
+                let icy = y < 3 || y >= h - 3 || lat > 72.0 || greenland || (lat < -62.0 && !wet) || lat < -74.0;
+                if icy {
+                    terrain[i] = ICE;
+                    // (Drawn just above the sea: flat, like the pack ice it is.)
+                    ht = if wet { water_at + 0.035 } else { ht.max(water_at + 0.05) };
+                }
+            }
             let drawn = if terrain[i] == WATER { ht } else { (water_at + 0.05 + (ht - water_at) * 0.4).min(0.62) + if matches!(terrain[i], HILL | MOUNTAIN) { 0.18 } else { 0.0 } };
             shade[i] = ((drawn - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
             // Forests, thinner in the desert belts and the far north.
@@ -360,7 +430,7 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             }
             let tiles = shape_tiles(terrain, w, h, f, x, y, r, seed);
             tiles.iter().all(|&(a, b)| keep.iter().all(|&(kx, ky, k)| dist(((x + a) as f32, (y + b) as f32), (kx, ky)) > k + 1.5))
-                && shape_fits(terrain, feat, w, h, syms, &tiles, x, y, f, GAP, &[WATER, SAND, EDGE]) == (true, true)
+                && shape_fits(terrain, feat, w, h, syms, &tiles, x, y, f, GAP, &[WATER, SAND, EDGE, ICE]) == (true, true)
         };
         let mut at = None;
         'search: for liked in [true, false] {
@@ -783,8 +853,7 @@ mod tests {
             let globe = shape == Shape::Globe;
             let tile = |lat: f32, lon: f32| -> (i32, i32) {
                 if globe {
-                    let y = (GLOBE_TOP - (std::f32::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln()) * m.w as f32 / std::f32::consts::TAU;
-                    (((lon / 360.0 + 0.5) * m.w as f32) as i32, y as i32)
+                    (((lon / 360.0 + 0.5) * m.w as f32) as i32, GlobeProj::new().y(lat) as i32)
                 } else {
                     let (d, a) = ((90.0 - lat) / (90.0 - SOUTH) * LAT_RADIUS, lon.to_radians());
                     ((m.w as f32 / 2.0 + d * a.sin()) as i32, (m.h as f32 / 2.0 + d * a.cos()) as i32)
@@ -813,6 +882,25 @@ mod tests {
         }
     }
 
+    /// The Globe runs pole to pole and the poles can be crossed on foot:
+    /// the ice at the North Pole is one piece of land with Siberia and with
+    /// Canada, and the rows meet at the poles (90° at the edges).
+    #[test]
+    fn the_north_pole_can_be_walked_across() {
+        let p = GlobeProj::new();
+        assert!((p.lat(0.0) - 90.0).abs() < 1e-3 && (p.lat(GLOBE_H as f32) + 90.0).abs() < 1e-3);
+        for lat in [80.0, 66.0, 30.0, 0.0, -40.0, -56.0, -70.0] {
+            assert!((p.lat(p.y(lat)) - lat).abs() < 0.01, "{lat}");
+        }
+        let (m, ..) = generate_world(2, 2, Shape::Globe);
+        let at = |lat: f32, lon: f32| m.land[m.idx(((lon / 360.0 + 0.5) * m.w as f32) as i32, p.y(lat) as i32)];
+        let pole = at(89.0, 0.0);
+        assert!(pole != 0, "ice at the pole");
+        assert_eq!(at(89.0, 180.0 - 1.0), pole, "the pole's ice is one piece");
+        assert_eq!(at(65.0, 100.0), pole, "Siberia walks to the pole");
+        assert_eq!(at(65.0, -110.0), pole, "Canada walks to the pole");
+    }
+
     /// A picture (PPM) for a look: `VC_OUT=/tmp cargo test --release
     /// world_picture -- --ignored --nocapture`, seeds 1 to 4.
     #[test]
@@ -830,7 +918,7 @@ mod tests {
             };
             for y in 0..m.h {
                 for x in 0..m.w {
-                    put(x, y, match m.terrain[m.idx(x, y)] { EDGE => [12, 14, 30], WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], MOUNTAIN => [175, 120, 190], _ => [90, 170, 70] });
+                    put(x, y, match m.terrain[m.idx(x, y)] { EDGE => [12, 14, 30], WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], MOUNTAIN => [175, 120, 190], ICE => [235, 240, 248], _ => [90, 170, 70] });
                 }
             }
             let mut count = [0u32; 16];

@@ -23,7 +23,7 @@
 
 use crate::defs::*;
 use crate::game::*;
-use crate::map::wx;
+use crate::map::{delta, pdist, wx};
 
 /// Half the side of the town square round a Capitol's statue (tiles): it
 /// covers the 5x5 tiles centred on the Capitol, and nothing else may be
@@ -78,7 +78,7 @@ impl Game {
     /// `owner`'s finished Capitol nearest (x, y); ties go to the older.
     pub fn nearest_capitol(&self, owner: u8, x: f32, y: f32) -> Option<usize> {
         self.capitols(owner).min_by(|&a, &b| {
-            let d = |c: usize| wx(self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
+            let d = |c: usize| pdist(x, y, self.ents[c].x, self.ents[c].y).powi(2);
             d(a).total_cmp(&d(b)).then(a.cmp(&b))
         })
     }
@@ -132,7 +132,7 @@ impl Game {
     pub(crate) fn go_home(&mut self, i: usize) {
         let (owner, id, x, y) = (self.ents[i].owner, self.ents[i].id, self.ents[i].x, self.ents[i].y);
         let walk = self.capitols(owner).filter(|&c| self.map.same_land((x, y), (self.ents[c].x, self.ents[c].y))).min_by(|&a, &b| {
-            let d = |c: usize| wx(self.ents[c].x - x).powi(2) + (self.ents[c].y - y).powi(2);
+            let d = |c: usize| pdist(x, y, self.ents[c].x, self.ents[c].y).powi(2);
             d(a).total_cmp(&d(b)).then(a.cmp(&b))
         });
         match walk.or_else(|| self.nearest_capitol(owner, x, y)) {
@@ -842,7 +842,7 @@ impl Game {
             Travel::Arrived => {
                 let e = &mut self.ents[i];
                 e.anim = Anim::Work;
-                e.facing = (by - e.y).atan2(wx(bx - e.x));
+                e.facing = { let (dx, dy) = delta(e.x, e.y, bx, by); dy.atan2(dx) };
             }
         }
     }
@@ -873,7 +873,7 @@ impl Game {
             Travel::Arrived => {
                 let e = &mut self.ents[i];
                 e.anim = Anim::Work;
-                e.facing = (by - e.y).atan2(wx(bx - e.x));
+                e.facing = { let (dx, dy) = delta(e.x, e.y, bx, by); dy.atan2(dx) };
             }
         }
     }
