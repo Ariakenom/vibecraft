@@ -486,7 +486,7 @@ function bakeTerrain() {
   // A clean, almost flat green, like Totally Accurate Battle Simulator's fields:
   // only broad, gentle patches. Small 3D pieces (grass clumps, flowers,
   // pebbles; render3d.js) give the detail instead of painted strokes.
-  const LUSH = [90, 156, 62], DARK = [76, 138, 54], DRY = [118, 156, 66], EARTH = [130, 112, 78], ROCK = [138, 132, 118], SAND = [204, 186, 132], SEABED = [120, 132, 96];
+  const LUSH = [90, 156, 62], DARK = [76, 138, 54], DRY = [118, 156, 66], EARTH = [130, 112, 78], ROCK = [138, 132, 118], SAND = [204, 186, 132], SEABED = [120, 132, 96], SNOW = [236, 240, 244];
   // `beach`: paint the sand in. The 3D view draws its own crisp beaches in
   // the ground shader (render3d.js), so only the minimap wants it.
   const colourAt = (x, y, beach = true) => {
@@ -502,6 +502,7 @@ function bakeTerrain() {
     c = mixc(c, EARTH, Math.max(0, Math.min(1, (sl - 0.18) * 4)));
     c = mixc(c, ROCK, Math.max(0, Math.min(1, (sl - 0.38) * 4)));
     c = mixc(c, [c[0] * 1.08, c[1] * 1.05, c[2] * 0.95], Math.max(0, Math.min(1, ht - 0.8))); // sunnier up high
+    if (t === 7) c = mixc(mixc(c, ROCK, 0.55), SNOW, Math.max(0, Math.min(1, (ht - 2.2) * 1.5 + (n2 - 0.5)))); // mountains: rock, and snow on the tops
     // Beaches follow the (smooth) height near the water, not the square tiles.
     if (beach) c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
     if (t === 1 || t === 5 || t === 6) c = mixc(SAND, SEABED, Math.min(1, -ht));
@@ -2757,7 +2758,7 @@ try { const v = JSON.parse(localStorage.getItem(MAP_KEY) || "null"); if (v && v.
 function saveMapChoice() { try { localStorage.setItem(MAP_KEY, JSON.stringify({ mode: mapMode, seed: mapSeed })); } catch { /* storage blocked */ } }
 // The seed a new game starts with.
 function chosenSeed() { return mapMode === "pick" ? mapSeed : (Math.random() * 1e9) >>> 0; }
-const PREVIEW_COL = ["#1f4f8f", "#5aa8c8", "#c9b27a", "#5f9a3c", "#86884a", "#2e5a2a", "#a8a49a", "#fff", "#3f72b0"];
+const PREVIEW_COL = ["#1f4f8f", "#5aa8c8", "#c9b27a", "#5f9a3c", "#86884a", "#2e5a2a", "#a8a49a", "#fff", "#3f72b0", "#b8b0a2"];
 function renderMapPick() {
   const guest = !!guestOf;
   $("mapRow").hidden = guest;

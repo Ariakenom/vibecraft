@@ -10,7 +10,7 @@
 //! turned images, so every player gets the same.
 
 use crate::defs::Dep;
-use crate::map::{place_whales, raise_sheep_hills, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, GRASS, HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map::{place_whales, raise_sheep_hills, settle_mountains, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, GRASS, HILL, MOUNTAIN, MOUNTAIN_ABOVE_HILL, OPEN_SEA, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 
 /// Land per side, before the open sea round it, for a Large map: ten times
 /// a Skirmish map's area (120 and 144).
@@ -193,12 +193,14 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
                 WATER
             } else if ht < water_at + 0.03 {
                 SAND
+            } else if hills > hill_at + MOUNTAIN_ABOVE_HILL && near > 20.0 {
+                MOUNTAIN
             } else if hills > hill_at && near > 14.0 {
                 HILL
             } else {
                 GRASS
             };
-            let drawn = if terrain[i] == WATER { ht } else { (water_at + 0.05 + (ht - water_at) * 0.4).min(0.62) + if terrain[i] == HILL { 0.18 } else { 0.0 } };
+            let drawn = if terrain[i] == WATER { ht } else { (water_at + 0.05 + (ht - water_at) * 0.4).min(0.62) + if matches!(terrain[i], HILL | MOUNTAIN) { 0.18 } else { 0.0 } };
             shade[i] = ((drawn - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
             let f = fbm(cx as f32 / wood_scale + 40.0, cy as f32 / wood_scale + 40.0, seed ^ 0xBEEF);
             if matches!(terrain[i], GRASS | HILL) && f > wood_at && hash(cx, cy, seed ^ 7) < 0.82 && near > 11.0 {
@@ -557,6 +559,9 @@ pub fn generate_frontier(seed: u32, players: usize, size: Size) -> (Map, Vec<Dep
     let bases: Vec<(i32, i32)> = bases.into_iter().map(|(x, y)| (x + OPEN_SEA, y + OPEN_SEA)).collect();
     let sites: Vec<Site> = sites.iter().flat_map(|s| images(s.x, s.y).map(move |(x, y)| Site { x: x + OPEN_SEA, y: y + OPEN_SEA, era: s.era })).collect();
     raise_sheep_hills(&mut terrain, &mut shade, &feat, w, h);
+    // (Last of the terrain's changes: what came after the first pass, the
+    // towns' clearings and the shores, can leave a mountain by the lowland.)
+    settle_mountains(&mut terrain, &mut shade, &mut feat, w, h);
     thin_forests(&mut feat, w, h, syms, seed);
     place_whales(&terrain, &mut feat, w, h, syms, &bases, (l / 45) as usize, 40.0, seed);
 

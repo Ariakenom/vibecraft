@@ -4,6 +4,11 @@
 //! Asia on the right, the Americas on the left, and the map ends in a circle
 //! at 58° south. Past the circle there is nothing (`EDGE`).
 //!
+//! The land is the real world's: Natural Earth's coastlines and lakes on a
+//! grid of quarter degrees (`earth.rle`, `lakes.rle`, from
+//! `assets/earth.py`), with the great mountain ranges drawn in by hand
+//! (`RANGES`).
+//!
 //! Unlike the other maps it isn't symmetric: every player starts in a
 //! different part of the world, with the same deposits laid round their
 //! town; the rest of the world's deposits and its barbarian sites are
@@ -20,7 +25,7 @@
 //! the poles.
 
 use crate::defs::Dep;
-use crate::map::{place_whales, raise_sheep_hills, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
+use crate::map::{place_whales, raise_sheep_hills, settle_mountains, thin_forests, dist, fbm, hash, liking, reach, ring_point, shape_fits, shape_tiles, Deposit, Feat, Map, Sym, EDGE, GRASS, HILL, MOUNTAIN, SAND, SHADE_BEACH, SHADE_WATER, SHALLOW, WATER};
 use crate::map_frontier::Site;
 
 /// The map's radius in tiles, and the radius of 58° south (sea beyond it).
@@ -44,55 +49,141 @@ pub enum Shape {
     Globe,
 }
 
-/// The Earth, coarsely: one row per 5° of latitude from 80° north to 55°
-/// south, one column per 5° of longitude from 180° west. Drawn by hand from
-/// the atlas, for a game map: don't navigate by it.
-const EARTH: [&str; 27] = [
-    "............#########.##########.......##..............###..............",
-    "...........##########....#######..............##....##############......",
-    "##.#####################..#####........#################################",
-    "...##############...###...##...##....##################################.",
-    "....#....########....###...........#..##########################...##...",
-    "..........###############.........##.###########################...#....",
-    "...........##############..........#############################........",
-    "...........###########............###.####..##.###############..#.......",
-    "............#########...................######.#############.#.#........",
-    ".............#######..............##########################..#.........",
-    ".............####................###########################............",
-    "...............##.###............###############..#########.............",
-    "...............###...#...........##############....##..###..............",
-    "..................#..###.........#############.....#....##..#...........",
-    "...................#######.......#############.........##..##...........",
-    "....................######............#######...........#.####..........",
-    "....................#######...........######............#.###.####......",
-    "....................#########.........######.............####...##......",
-    ".....................########..........#####..................#.........",
-    ".....................#######..........######.#..............#####.......",
-    "......................######...........####..#.............#######......",
-    "......................####.............####................########.....",
-    "......................####..............##.................#######......",
-    ".....................####.......................................##.....#",
-    ".....................##..........................................#....#.",
-    ".....................##.................................................",
-    ".....................#.................................................."
-];
+/// The Earth's land (not its lakes): Natural Earth's 1:50m on a grid of
+/// quarter degrees (1440 x 720, from 180° west and 90° north), stored as
+/// runs (`assets/earth.py` makes it).
+static EARTH_RLE: &[u8] = include_bytes!("earth.rle");
+const EARTH_COLS: usize = 1440;
+const EARTH_ROWS: usize = 720;
+const EARTH_STEP: f32 = 0.25;
 
-/// How much of the ground at (lat, lon) is land, 0 to 1: `EARTH`, smoothed
-/// between its cells.
-fn land(lat: f32, lon: f32) -> f32 {
+/// The lakes (Natural Earth's), on the same grid.
+static LAKES_RLE: &[u8] = include_bytes!("lakes.rle");
+
+/// A grid from its runs, one bool a cell, row by row.
+fn earth() -> Vec<bool> {
+    decode(EARTH_RLE)
+}
+fn decode(rle: &[u8]) -> Vec<bool> {
+    let mut grid = Vec::with_capacity(EARTH_COLS * EARTH_ROWS);
+    let mut land = false;
+    let mut in_row = 0;
+    for run in rle.chunks_exact(2) {
+        let n = u16::from_le_bytes([run[0], run[1]]) as usize;
+        grid.extend(std::iter::repeat_n(land, n));
+        in_row += n;
+        land = !land;
+        if in_row == EARTH_COLS {
+            in_row = 0;
+            land = false;
+        }
+    }
+    debug_assert_eq!(grid.len(), EARTH_COLS * EARTH_ROWS);
+    grid
+}
+
+/// How much of the ground at (lat, lon) is land, 0 to 1: the grid,
+/// smoothed between its cells and over about half a degree round, so the
+/// coast is soft enough for the noise to give it a little wobble.
+fn land(grid: &[bool], lat: f32, lon: f32) -> f32 {
     let cell = |r: i32, c: i32| -> f32 {
-        if r < 0 || r >= EARTH.len() as i32 {
+        if r < 0 || r >= EARTH_ROWS as i32 {
             return 0.0;
         }
-        (EARTH[r as usize].as_bytes()[c.rem_euclid(72) as usize] == b'#') as u8 as f32
+        grid[r as usize * EARTH_COLS + c.rem_euclid(EARTH_COLS as i32) as usize] as u8 as f32
     };
-    let (fr, fc) = ((77.5 - lat) / 5.0, (lon + 177.5) / 5.0);
-    let (r0, c0) = (fr.floor(), fc.floor());
-    let (tr, tc) = (fr - r0, fc - c0);
-    let (r0, c0) = (r0 as i32, c0 as i32);
-    let top = cell(r0, c0) * (1.0 - tc) + cell(r0, c0 + 1) * tc;
-    let bottom = cell(r0 + 1, c0) * (1.0 - tc) + cell(r0 + 1, c0 + 1) * tc;
-    top * (1.0 - tr) + bottom * tr
+    let at = |lat: f32, lon: f32| {
+        let (fr, fc) = ((90.0 - lat) / EARTH_STEP - 0.5, (lon + 180.0) / EARTH_STEP - 0.5);
+        let (r0, c0) = (fr.floor(), fc.floor());
+        let (tr, tc) = (fr - r0, fc - c0);
+        let (r0, c0) = (r0 as i32, c0 as i32);
+        let top = cell(r0, c0) * (1.0 - tc) + cell(r0, c0 + 1) * tc;
+        let bottom = cell(r0 + 1, c0) * (1.0 - tc) + cell(r0 + 1, c0 + 1) * tc;
+        top * (1.0 - tr) + bottom * tr
+    };
+    const R: f32 = 0.3;
+    let wide = R / lat.to_radians().cos().max(0.2);
+    (at(lat, lon) * 2.0 + at(lat + R, lon) + at(lat - R, lon) + at(lat, lon + wide) + at(lat, lon - wide)) / 6.0
+}
+
+/// The great mountain ranges and some lesser hill country, drawn by hand
+/// from the atlas: each a line of (latitude, longitude) points, its half
+/// width in degrees, and how high it stands (2: mountains in hills; 1:
+/// hills only).
+const RANGES: &[(&[(f32, f32)], f32, u8)] = &[
+    // Himalaya, Karakoram and Hindu Kush, Kunlun, Tian Shan, Altai.
+    (&[(35.5, 70.0), (35.8, 74.5), (34.0, 77.5), (30.5, 80.5), (28.3, 85.0), (27.8, 89.0), (28.0, 93.0), (28.3, 97.0)], 1.6, 2),
+    (&[(34.5, 67.0), (36.0, 71.0), (36.0, 76.0)], 1.2, 2),
+    (&[(36.2, 78.0), (35.8, 84.0), (35.6, 90.0), (35.0, 96.0)], 1.0, 2),
+    (&[(41.0, 69.0), (42.0, 75.0), (42.8, 81.0), (43.3, 87.0)], 1.2, 2),
+    (&[(50.5, 84.0), (49.0, 89.0), (47.0, 94.0)], 1.0, 2),
+    // The Tibetan plateau: high hill country.
+    (&[(32.0, 80.0), (33.0, 86.0), (32.5, 92.0)], 3.0, 1),
+    // Pamir, Zagros, Elburz, Caucasus, Taurus.
+    (&[(37.0, 44.0), (34.5, 47.0), (31.0, 50.5), (28.0, 55.0)], 1.0, 2),
+    (&[(36.5, 50.5), (36.0, 53.5)], 0.6, 2),
+    (&[(43.5, 40.0), (42.8, 44.0), (41.8, 47.5)], 0.8, 2),
+    (&[(36.8, 30.0), (37.3, 34.0), (38.2, 38.5)], 0.7, 1),
+    // Alps, Pyrenees, Carpathians, Balkans, Apennines, Scandinavia, Urals.
+    (&[(43.9, 6.8), (45.9, 7.2), (46.5, 9.5), (46.9, 12.0), (47.3, 14.5)], 0.8, 2),
+    (&[(42.8, -1.5), (42.6, 2.0)], 0.5, 2),
+    (&[(49.2, 18.5), (48.8, 22.5), (47.5, 25.0), (45.6, 25.0), (45.0, 22.0)], 0.6, 1),
+    (&[(45.5, 15.5), (43.5, 18.0), (42.0, 20.0), (40.0, 21.5)], 0.6, 1),
+    (&[(44.2, 10.0), (42.5, 13.2), (40.5, 15.5), (38.8, 16.3)], 0.5, 1),
+    (&[(69.5, 20.0), (67.0, 16.0), (64.0, 13.0), (61.5, 8.5)], 0.9, 2),
+    (&[(67.5, 65.5), (63.0, 59.5), (58.0, 59.0), (53.0, 58.5)], 0.7, 1),
+    // Atlas, Ethiopian highlands, Kilimanjaro, Ruwenzori, Drakensberg.
+    (&[(30.5, -9.0), (32.0, -5.5), (34.0, -1.0), (35.5, 5.5)], 0.8, 2),
+    (&[(13.5, 38.0), (10.0, 38.5), (7.0, 38.5)], 1.5, 2),
+    (&[(-3.1, 37.4)], 0.6, 2),
+    (&[(0.4, 29.9)], 0.5, 2),
+    (&[(-27.5, 29.8), (-29.8, 29.0), (-31.8, 27.5)], 0.6, 2),
+    // The Rockies, the Coast Mountains and Cascades and Sierra Nevada, the
+    // Sierra Madre, the Alaska Range, the Brooks Range, the Appalachians.
+    (&[(62.0, -130.0), (57.0, -124.0), (52.0, -117.5), (47.5, -113.5), (43.5, -110.0), (39.0, -106.0), (35.0, -106.0)], 1.6, 2),
+    (&[(58.0, -131.0), (53.0, -126.5), (49.0, -121.5), (45.0, -121.8), (41.0, -122.0), (38.0, -119.5), (36.0, -118.3)], 0.8, 2),
+    (&[(30.0, -108.0), (25.0, -105.5), (20.0, -102.0), (17.5, -97.5)], 1.0, 2),
+    (&[(61.0, -153.0), (63.0, -149.0), (62.5, -143.0), (60.5, -140.0)], 1.0, 2),
+    (&[(68.0, -160.0), (68.3, -152.0), (68.8, -144.0)], 0.8, 1),
+    (&[(34.0, -84.5), (36.5, -81.5), (39.5, -78.5), (42.0, -75.0), (44.5, -71.5)], 0.9, 1),
+    // The Andes.
+    (&[(10.0, -72.5), (6.0, -75.5), (1.0, -77.5), (-4.0, -79.0), (-9.0, -77.5), (-14.0, -73.5), (-17.5, -69.5), (-22.0, -67.5), (-27.0, -68.5), (-32.5, -70.0), (-38.0, -71.0), (-43.0, -72.0), (-48.0, -73.0), (-52.0, -73.0)], 1.5, 2),
+    // The Brazilian highlands, the Guiana highlands.
+    (&[(-14.0, -47.0), (-18.0, -44.0), (-21.0, -44.5)], 2.0, 1),
+    (&[(5.0, -62.0), (4.5, -58.0)], 1.5, 1),
+    // Australia's Great Dividing Range, New Zealand's Southern Alps, Japan,
+    // Kamchatka, New Guinea.
+    (&[(-16.0, 145.0), (-21.0, 148.0), (-26.0, 151.0), (-31.0, 151.5), (-36.5, 148.5)], 0.8, 1),
+    (&[(-41.5, 172.5), (-43.5, 170.5), (-45.0, 168.5)], 0.5, 2),
+    (&[(35.5, 137.0), (36.5, 138.5), (39.0, 140.5)], 0.6, 2),
+    (&[(56.0, 159.0), (53.5, 158.0)], 0.6, 1),
+    (&[(-4.0, 136.0), (-5.0, 141.0), (-6.5, 145.5)], 0.8, 2),
+];
+
+/// How high the ranges make the ground at (lat, lon): 0 outside any, up to
+/// a range's height at its spine, falling off to its edge. `tile`: degrees
+/// a tile there (of latitude): every range is a few tiles wide at least, or
+/// it would be too thin to hold mountains in hills.
+fn range_height(lat: f32, lon: f32, tile: f32) -> f32 {
+    let mut best = 0.0f32;
+    let k = lat.to_radians().cos().max(0.2);
+    for &(line, half, height) in RANGES {
+        // (Degrees of longitude are shorter away from the equator.)
+        let p = |a: (f32, f32)| ((a.1 - lon + 540.0).rem_euclid(360.0) - 180.0) * k;
+        let mut d = f32::MAX;
+        for (j, &a) in line.iter().enumerate() {
+            let b = *line.get(j + 1).unwrap_or(&a);
+            let (ax, ay, bx, by) = (p(a), a.0 - lat, p(b), b.0 - lat);
+            let (vx, vy) = (bx - ax, by - ay);
+            let t = if vx == 0.0 && vy == 0.0 { 0.0 } else { (-(ax * vx + ay * vy) / (vx * vx + vy * vy)).clamp(0.0, 1.0) };
+            d = d.min((ax + vx * t).hypot(ay + vy * t));
+        }
+        let half = half.max(3.0 * tile) + tile;
+        if d < half {
+            best = best.max(height as f32 * (1.0 - d / half).sqrt());
+        }
+    }
+    best
 }
 
 /// Where the towns can stand: (latitude, longitude) of a homeland.
@@ -122,6 +213,8 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     let centre = (w as f32 / 2.0, h as f32 / 2.0);
     let syms: &[Sym] = &[Sym::Id];
     let pick = |k: i32, lo: f32, hi: f32| lo + (hi - lo) * hash(k, 919, seed);
+    let grid = earth();
+    let lakes = decode(LAKES_RLE);
     // A tile for a place on the globe, and back.
     // (On the Globe: Mercator, `ball` tiles to a radian.)
     let ball = w as f32 / std::f32::consts::TAU;
@@ -172,7 +265,7 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     // fish, and a town far inland ran out of wood feeding itself without.
     let land_at = |x: f32, y: f32| {
         let (lat, lon) = globe_of((x, y));
-        if no_land(lat, lon) { 0.0 } else { land(lat, lon) }
+        if no_land(lat, lon) { 0.0 } else { land(&grid, lat, lon) }
     };
     let by_the_sea = |home: (i32, i32)| -> (i32, i32) {
         let dirs: Vec<(f32, f32)> = (0..16).map(|k| (k as f32 / 16.0 * std::f32::consts::TAU).sin_cos()).collect();
@@ -222,22 +315,31 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             let (lat, lon) = globe_of(p);
             let noise = fbm_round(x as f32, y as f32, coast_scale, 0.0, seed);
             // The atlas says where the land is; noise makes the coast.
-            let mut ht = if no_land(lat, lon) { 0.1 } else { 0.08 + land(lat, lon) * 0.5 + noise * 0.24 };
+            let mut ht = if no_land(lat, lon) { 0.1 } else { 0.08 + land(&grid, lat, lon) * 0.5 + noise * 0.24 };
             let near = near_base(p);
             if near < 9.0 {
                 ht = ht.max(0.53 + (9.0 - near) / 9.0 * 0.1);
             }
             let hills = fbm_round(x as f32, y as f32, 9.0, 70.0, seed ^ 0x411);
+            // The world's ranges: mountains along their spines, broken by
+            // passes where the noise is low, in hills that run out to their
+            // edges. Elsewhere hills here and there, as on other maps.
+            // (A tile's size in degrees: on the Globe Mercator's, smaller
+            // toward the poles; on the disc about the same everywhere.)
+            let tile = if globe { 360.0 / w as f32 * lat.to_radians().cos() } else { (90.0 - SOUTH) / LAT_RADIUS };
+            let range = range_height(lat, lon, tile) * (0.3 + hills);
             terrain[i] = if ht < water_at {
                 WATER
             } else if ht < water_at + 0.03 {
                 SAND
-            } else if hills > hill_at && near > 14.0 {
+            } else if range > 1.4 && near > 20.0 {
+                MOUNTAIN
+            } else if (hills > hill_at || range > 0.55) && near > 14.0 {
                 HILL
             } else {
                 GRASS
             };
-            let drawn = if terrain[i] == WATER { ht } else { (water_at + 0.05 + (ht - water_at) * 0.4).min(0.62) + if terrain[i] == HILL { 0.18 } else { 0.0 } };
+            let drawn = if terrain[i] == WATER { ht } else { (water_at + 0.05 + (ht - water_at) * 0.4).min(0.62) + if matches!(terrain[i], HILL | MOUNTAIN) { 0.18 } else { 0.0 } };
             shade[i] = ((drawn - water_at + SHADE_WATER).clamp(0.0, 1.0) * 255.0) as u8;
             // Forests, thinner in the desert belts and the far north.
             let dry_belt = (lat.abs() > 15.0 && lat.abs() < 32.0) || lat > 68.0;
@@ -311,7 +413,9 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
         for &(lo, hi, kinds) in &bands {
             for (j, &(f, r)) in kinds.iter().enumerate() {
                 k += 1;
-                for t in 0..12 {
+                // (After 12 tries, on a small continent where the band is
+                // mostly sea, the search round each spot widens.)
+                for t in 0..36 {
                     let a = turn + (j as f32 + 0.5) / kinds.len() as f32 * std::f32::consts::TAU + t as f32 * 2.4;
                     let d = lo + (hi - lo) * hash(bi as i32 * 64 + k, 53 + t, seed);
                     let (x, y) = (bx as f32 + a.cos() * d, by as f32 + a.sin() * d);
@@ -319,7 +423,11 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
                     if bases.iter().enumerate().any(|(o, &(ox, oy))| o != bi && dist((x, y), (ox as f32, oy as f32)) < 34.0) {
                         continue;
                     }
-                    if place(&mut terrain, &mut feat, &keep_clear, bx + (a.cos() * d) as i32, by + (a.sin() * d) as i32, f, r, 6) {
+                    // (The search round a spot covers a square, so it can
+                    // come nearer than the band: it keeps 20 tiles from every
+                    // town, where only wood stands.)
+                    let keep: Vec<(f32, f32, f32)> = keep_clear.iter().copied().chain(all_bases.iter().map(|&(x, y)| (x, y, 20.0))).collect();
+                    if place(&mut terrain, &mut feat, &keep, bx + (a.cos() * d) as i32, by + (a.sin() * d) as i32, f, r, if t < 12 { 6 } else { 14 }) {
                         break;
                     }
                 }
@@ -332,15 +440,18 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
     let dry = |terrain: &[u8], cx: i32, cy: i32, r: i32| (-r..=r).all(|dy| (-r..=r).all(|dx| matches!(terrain[((cy + dy) * w + cx + dx) as usize], GRASS | HILL)));
     let mut sites: Vec<Site> = Vec::new();
     let mut tries = 0;
-    while sites.len() < 14 && tries < 6000 {
+    while sites.len() < 14 && tries < 20000 {
         tries += 1;
         let (x, y) = ((hash(tries, 61, seed) * w as f32) as i32, (hash(tries, 63, seed) * h as f32) as i32);
         let p = (x as f32 + 0.5, y as f32 + 0.5);
-        if !in_world(p, 12.0) || !dry(&terrain, x, y, 7) {
+        // (The real coasts are ragged and the ranges wide: past half the
+        // tries, a smaller patch of open land and closer neighbours will do.)
+        let late = tries > 10000;
+        if !in_world(p, 12.0) || !dry(&terrain, x, y, if late { 4 } else { 7 }) {
             continue;
         }
         let from = near_base(p);
-        if from < SITE_FROM_BASE || sites.iter().any(|s| dist(p, (s.x as f32 + 0.5, s.y as f32 + 0.5)) < SITE_GAP) {
+        if from < SITE_FROM_BASE || sites.iter().any(|s| dist(p, (s.x as f32 + 0.5, s.y as f32 + 0.5)) < if late { SITE_GAP * 0.75 } else { SITE_GAP }) {
             continue;
         }
         sites.push(Site { x, y, era: (((from - SITE_FROM_BASE) / if globe { 45.0 } else { 20.0 }) as u8).min(5) });
@@ -440,14 +551,61 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
         }
     }
 
-    // The sea is the water the Arctic (the middle) reaches; anything else
-    // is a lake: shallow, for people to wade and boats to sail.
+    // Straits narrower than a tile, opened so ships get through: Gibraltar,
+    // the Dardanelles and the Bosporus, the Danish straits, Bab-el-Mandeb,
+    // Hormuz and Hudson Strait.
+    const STRAITS: &[&[(f32, f32)]] = &[
+        &[(36.0, -6.6), (36.0, -5.6), (36.1, -4.6)],
+        &[(39.9, 25.9), (40.3, 26.6), (40.8, 27.6), (41.0, 28.9), (41.4, 29.3), (41.6, 29.8)],
+        &[(57.6, 10.9), (56.6, 11.6), (55.7, 12.7), (55.2, 13.1), (55.0, 14.5), (55.4, 16.0)],
+        &[(13.2, 42.9), (12.5, 43.5), (12.0, 44.0)],
+        &[(27.0, 55.8), (26.5, 56.4), (25.8, 57.0)],
+        &[(63.0, -79.0), (62.4, -73.0), (61.3, -66.0)],
+    ];
+    for line in STRAITS {
+        for k in 0..line.len() - 1 {
+            let (a, b) = (tile_of(line[k].0, line[k].1), tile_of(line[k + 1].0, line[k + 1].1));
+            let steps = (dist((a.0 as f32, a.1 as f32), (b.0 as f32, b.1 as f32)) * 2.0).ceil().max(1.0) as i32;
+            for t in 0..=steps {
+                let f = t as f32 / steps as f32;
+                let (cx, cy) = (a.0 as f32 + (b.0 - a.0) as f32 * f, a.1 as f32 + (b.1 - a.1) as f32 * f);
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let (x, y) = (cx as i32 + dx, cy as i32 + dy);
+                        if x < 0 || y < 0 || x >= w || y >= h || near_base((x as f32 + 0.5, y as f32 + 0.5)) < 6.0 {
+                            continue;
+                        }
+                        let i = (y * w + x) as usize;
+                        if terrain[i] != EDGE {
+                            terrain[i] = WATER;
+                            feat[i] = Feat::None;
+                            shade[i] = shade[i].min(80);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The sea is the water the atlas has as open water (oceans and seas,
+    // the Caspian too) and whatever water that reaches; the rest (the
+    // atlas's lakes, and ponds the noise makes on land) is shallow, for
+    // people to wade and boats to sail.
     let mut sea = vec![false; n];
-    // (On the Globe: the Pacific, at the left edge.)
-    let from = if globe { (1, h / 2) } else { (centre.0 as i32, centre.1 as i32) };
-    let start = (from.1 * w + from.0) as usize;
-    let mut stack = vec![from];
-    sea[start] = terrain[start] == WATER;
+    let mut stack: Vec<(i32, i32)> = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            if terrain[i] != WATER {
+                continue;
+            }
+            let (lat, lon) = globe_of((x as f32 + 0.5, y as f32 + 0.5));
+            if no_land(lat, lon) || (land(&grid, lat, lon) < 0.25 && land(&lakes, lat, lon) < 0.25) {
+                sea[i] = true;
+                stack.push((x, y));
+            }
+        }
+    }
     while let Some((x, y)) = stack.pop() {
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             // (On the Globe the ocean goes on across the seam.)
@@ -507,6 +665,9 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
         feat[(y * w + x) as usize] = Feat::Fish;
     }
     raise_sheep_hills(&mut terrain, &mut shade, &feat, w, h);
+    // (Last of the terrain's changes: what came after the first pass, the
+    // towns' clearings and the shores, can leave a mountain by the lowland.)
+    settle_mountains(&mut terrain, &mut shade, &mut feat, w, h);
     thin_forests(&mut feat, w, h, &[Sym::Id], seed);
     place_whales(&terrain, &mut feat, w, h, &[Sym::Id], &bases, 30, 40.0, seed);
 
@@ -590,7 +751,7 @@ mod tests {
                             Dep::Iron | Dep::Clay => 110.0,
                             _ => 65.0,
                         };
-                        assert!(deps.iter().any(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32)) < far), "{players}p seed {seed}: town {i} has no {k:?} near");
+                        assert!(deps.iter().any(|d| d.kind == k && dist((d.tx as f32, d.ty as f32), (bx as f32, by as f32)) < far), "{players}p seed {seed}: town {i} has no {k:?} near (town at {bx},{by}, {})", if shape == Shape::Globe { "Globe" } else { "disc" });
                     }
                 }
                 assert!(deps.iter().all(|d| m.terrain[m.idx(d.tx, d.ty)] != EDGE));
@@ -611,6 +772,47 @@ mod tests {
         }
     }
 
+    /// The atlas's seas are seas (deep water, not wadeable lakes) and the
+    /// straits are open: from the Atlantic a boat reaches the Mediterranean,
+    /// the Black Sea, the Baltic, the Red Sea, the Persian Gulf and Hudson
+    /// Bay. The Great Lakes are lakes.
+    #[test]
+    fn the_seas_are_open_and_the_lakes_are_lakes() {
+        for shape in [Shape::Globe, Shape::Disc] {
+            let (m, ..) = generate_world(3, 2, shape);
+            let globe = shape == Shape::Globe;
+            let tile = |lat: f32, lon: f32| -> (i32, i32) {
+                if globe {
+                    let y = (GLOBE_TOP - (std::f32::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln()) * m.w as f32 / std::f32::consts::TAU;
+                    (((lon / 360.0 + 0.5) * m.w as f32) as i32, y as i32)
+                } else {
+                    let (d, a) = ((90.0 - lat) / (90.0 - SOUTH) * LAT_RADIUS, lon.to_radians());
+                    ((m.w as f32 / 2.0 + d * a.sin()) as i32, (m.h as f32 / 2.0 + d * a.cos()) as i32)
+                }
+            };
+            // Every sea tile the Atlantic reaches.
+            let start = tile(30.0, -40.0);
+            let mut seen = vec![false; (m.w * m.h) as usize];
+            let mut todo = vec![start];
+            seen[m.idx(start.0, start.1)] = true;
+            while let Some((x, y)) = todo.pop() {
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, ny) = (if globe { (x + dx).rem_euclid(m.w) } else { x + dx }, y + dy);
+                    if m.inside(nx, ny) && !seen[m.idx(nx, ny)] && m.terrain[m.idx(nx, ny)] == WATER {
+                        seen[m.idx(nx, ny)] = true;
+                        todo.push((nx, ny));
+                    }
+                }
+            }
+            for (name, lat, lon) in [("Mediterranean", 35.0, 18.0), ("Black Sea", 43.0, 34.0), ("Baltic", 58.0, 20.0), ("Red Sea", 20.0, 38.5), ("Persian Gulf", 27.0, 51.0), ("Hudson Bay", 59.0, -86.0)] {
+                let (x, y) = tile(lat, lon);
+                assert!(seen[m.idx(x, y)], "{name} not reached from the Atlantic ({})", if globe { "Globe" } else { "disc" });
+            }
+            let (x, y) = tile(47.7, -87.5);
+            assert_eq!(m.terrain[m.idx(x, y)], SHALLOW, "Lake Superior is a lake");
+        }
+    }
+
     /// A picture (PPM) for a look: `VC_OUT=/tmp cargo test --release
     /// world_picture -- --ignored --nocapture`, seeds 1 to 4.
     #[test]
@@ -628,7 +830,7 @@ mod tests {
             };
             for y in 0..m.h {
                 for x in 0..m.w {
-                    put(x, y, match m.terrain[m.idx(x, y)] { EDGE => [12, 14, 30], WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], _ => [90, 170, 70] });
+                    put(x, y, match m.terrain[m.idx(x, y)] { EDGE => [12, 14, 30], WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], MOUNTAIN => [175, 120, 190], _ => [90, 170, 70] });
                 }
             }
             let mut count = [0u32; 16];

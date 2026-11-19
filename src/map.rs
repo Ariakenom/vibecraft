@@ -84,6 +84,9 @@ pub const SHALLOW: u8 = 5;
 /// Past the rim of a round map (the World map): nothing walks, sails or
 /// builds there. Drawn as sea running into the haze.
 pub const EDGE: u8 = 6;
+/// A mountain: two hills high. It stands in hills (`settle_mountains`),
+/// never straight out of the lowland, and no trees grow on it.
+pub const MOUNTAIN: u8 = 7;
 /// Where water meets land in `Map::shade` (0..1), whatever a map's water
 /// level: the 3D view draws its waterline there (`elevOf` in render3d.js).
 pub const SHADE_WATER: f32 = 0.36;
@@ -129,15 +132,75 @@ pub struct Map {
     /// The east and west edges meet (the Globe): see `wx`. Told by the
     /// map's size, which no other map has, so saves need nothing new.
     pub wrap: bool,
+    /// How high each tile stands, in hundredths of a level (`elevation`):
+    /// rising gradually from a hill's foot to its full height `RISE` tiles
+    /// in, and again from a mountain's edge. Worked out from the terrain,
+    /// not saved.
+    pub rise: Vec<u8>,
 }
+
+/// How many tiles in from its foot a hill (or from its edge a mountain)
+/// reaches its full height, for sight and range (`Map::elevation`).
+pub const RISE: i32 = 3;
 
 impl Map {
     pub fn new(w: i32, h: i32, terrain: Vec<u8>, shade: Vec<u8>, blocked: Vec<bool>, dep_at: Vec<i32>, bld_at: Vec<i32>) -> Map {
         let wrap = (w, h) == (crate::map_world::GLOBE_W, crate::map_world::GLOBE_H);
-        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new(), cover: Vec::new(), wrap };
+        let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new(), cover: Vec::new(), wrap, rise: Vec::new() };
         use_wrap(&m);
         m.relabel_land();
+        m.set_rise();
         m
+    }
+    /// Work out `rise`: for each level (hill, then mountain), how far in a
+    /// tile is from the ground below that level, up to `RISE` tiles, in
+    /// steps of half a tile (a two-pass chamfer distance: 2 a step across, 3
+    /// a step on the diagonal). Integers, so every computer gets the same.
+    pub(crate) fn set_rise(&mut self) {
+        let (w, h) = (self.w, self.h);
+        let n = (w * h) as usize;
+        let full = 2 * RISE;
+        let mut rise = vec![0u32; n];
+        for level in 1..=2u8 {
+            let mut d: Vec<i32> = (0..n).map(|i| if self.level((i as i32) % w, (i as i32) / w) < level { 0 } else { full }).collect();
+            let at = |d: &Vec<i32>, x: i32, y: i32| if x >= 0 && y >= 0 && x < w && y < h { d[(y * w + x) as usize] } else { full };
+            for y in 0..h {
+                for x in 0..w {
+                    let i = (y * w + x) as usize;
+                    let v = d[i].min(at(&d, x - 1, y) + 2).min(at(&d, x, y - 1) + 2).min(at(&d, x - 1, y - 1) + 3).min(at(&d, x + 1, y - 1) + 3);
+                    d[i] = v;
+                }
+            }
+            for y in (0..h).rev() {
+                for x in (0..w).rev() {
+                    let i = (y * w + x) as usize;
+                    let v = d[i].min(at(&d, x + 1, y) + 2).min(at(&d, x, y + 1) + 2).min(at(&d, x + 1, y + 1) + 3).min(at(&d, x - 1, y + 1) + 3);
+                    d[i] = v;
+                }
+            }
+            for i in 0..n {
+                rise[i] += (d[i].min(full) * 100 / full) as u32;
+            }
+        }
+        self.rise = rise.into_iter().map(|r| r.min(200) as u8).collect();
+    }
+    /// How high the ground stands at a point, in levels (0 the lowland, 1 a
+    /// hill's top, 2 a mountain's): smooth between the tiles' middles, so it
+    /// grows gradually as a unit climbs and falls as it comes down.
+    pub fn elevation(&self, x: f32, y: f32) -> f32 {
+        if self.rise.is_empty() {
+            return 0.0;
+        }
+        let (fx, fy) = (x - 0.5, y - 0.5);
+        let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let r = |x: i32, y: i32| {
+            let (x, y) = (if self.wrap { x.rem_euclid(self.w) } else { x.clamp(0, self.w - 1) }, y.clamp(0, self.h - 1));
+            self.rise[(y * self.w + x) as usize] as f32
+        };
+        let top = r(x0, y0) * (1.0 - tx) + r(x0 + 1, y0) * tx;
+        let bottom = r(x0, y0 + 1) * (1.0 - tx) + r(x0 + 1, y0 + 1) * tx;
+        (top * (1.0 - ty) + bottom * ty) / 100.0
     }
     /// Number the pieces of land (`land`) again: after the ground changed.
     /// Diagonal steps count (a little more joined than walking is, which
@@ -191,9 +254,20 @@ impl Map {
     pub fn covered(&self, x: i32, y: i32) -> bool {
         self.inside(x, y) && self.cover.get(self.idx(x, y)).copied().unwrap_or(false)
     }
-    /// On a hill?
+    /// On a hill or a mountain?
     pub fn hill(&self, x: i32, y: i32) -> bool {
-        self.inside(x, y) && self.terrain[self.idx(x, y)] == HILL
+        self.level(x, y) > 0
+    }
+    /// How high the ground stands: 0 low, 1 a hill, 2 a mountain.
+    pub fn level(&self, x: i32, y: i32) -> u8 {
+        if !self.inside(x, y) {
+            return 0;
+        }
+        match self.terrain[self.idx(x, y)] {
+            HILL => 1,
+            MOUNTAIN => 2,
+            _ => 0,
+        }
     }
     /// The ground's height at a point, in `shade`'s units, smoothly between
     /// the tiles' middles (for "uphill").
@@ -383,6 +457,40 @@ pub(crate) fn raise_sheep_hills(terrain: &mut [u8], shade: &mut [u8], feat: &[Fe
         shade[i] = shade[i].max((215.0 - 11.0 * d) as u8);
         if d <= 2.5 {
             terrain[i] = HILL;
+        }
+    }
+}
+
+/// How much higher a mountain is drawn than a hill, in `shade` (0..255).
+pub const MOUNTAIN_SHADE: u8 = 46;
+/// How far above the hill line (in the generators' noise) mountains start.
+pub const MOUNTAIN_ABOVE_HILL: f32 = 0.09;
+
+/// Make the generators' mountains stand in hills: a mountain tile with
+/// anything but hills or mountains round it (all eight) becomes a hill, so
+/// the way up is always lowland, hill, mountain. Then raise what's left by
+/// `MOUNTAIN_SHADE` and clear any trees off it. Call after the terrain and
+/// its shade are made, with the shade a hill there would have.
+pub fn settle_mountains(terrain: &mut [u8], shade: &mut [u8], feat: &mut [Feat], w: i32, h: i32) {
+    let before = terrain.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            if before[i] != MOUNTAIN {
+                continue;
+            }
+            let ringed = (-1..=1).all(|dy| (-1..=1).all(|dx| {
+                let (nx, ny) = (x + dx, y + dy);
+                nx >= 0 && ny >= 0 && nx < w && ny < h && matches!(before[(ny * w + nx) as usize], HILL | MOUNTAIN)
+            }));
+            if ringed {
+                shade[i] = shade[i].saturating_add(MOUNTAIN_SHADE);
+                if feat[i] == Feat::Tree {
+                    feat[i] = Feat::None;
+                }
+            } else {
+                terrain[i] = HILL;
+            }
         }
     }
 }
@@ -707,6 +815,8 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
                 WATER
             } else if ht < water_at + 0.035 {
                 SAND
+            } else if ht > hill_at + MOUNTAIN_ABOVE_HILL && road > 5.0 {
+                MOUNTAIN
             } else if ht > hill_at {
                 HILL
             } else {
@@ -1131,6 +1241,9 @@ pub fn generate(seed: u32, players: usize) -> (Map, Vec<Deposit>, Vec<(i32, i32)
     }
 
     raise_sheep_hills(&mut terrain, &mut shade, &feat, w, h);
+    // (Last of the terrain's changes: what came after the first pass, the
+    // towns' clearings and the shores, can leave a mountain by the lowland.)
+    settle_mountains(&mut terrain, &mut shade, &mut feat, w, h);
     thin_forests(&mut feat, w, h, syms, seed);
     place_whales(&terrain, &mut feat, w, h, syms, &bases, 1, 22.0, seed);
 
@@ -1349,7 +1462,7 @@ mod map_pictures {
                 let (m, deps, bases) = generate(seed, players);
                 let mut px = vec![0u8; (m.w * m.h * 3) as usize];
                 for i in 0..(m.w * m.h) as usize {
-                    let c = match m.terrain[i] { WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], _ => [90, 170, 70] };
+                    let c = match m.terrain[i] { WATER => [30, 80, 170], SHALLOW => [90, 170, 210], SAND => [210, 190, 120], HILL => [120, 140, 70], MOUNTAIN => [175, 120, 190], _ => [90, 170, 70] };
                     px[i * 3..i * 3 + 3].copy_from_slice(&c);
                 }
                 // Each kind of deposit in its own colour, and how many tiles of each.

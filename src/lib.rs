@@ -1333,7 +1333,7 @@ thread_local! {
 
 /// Make the map of `seed` for `players` and keep a picture of it: a byte a
 /// tile, row by row (0 deep water, 1 shallows, 2 sand, 3 grass, 4 hills,
-/// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width;
+/// 5 forest, 6 a deposit, 7 a town site, 8 fish, 9 mountains). Returns its width;
 /// `preview_height` has its height (the Globe is wider than tall) and
 /// `preview_ptr` the bytes.
 #[unsafe(no_mangle)]
@@ -1353,6 +1353,7 @@ pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
         map::SHALLOW => 1,
         map::SAND => 2,
         map::HILL => 4,
+        map::MOUNTAIN => 9,
         _ => 3,
     }).collect();
     for d in &deps {
