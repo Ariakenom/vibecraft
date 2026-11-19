@@ -1,4 +1,4 @@
-# Terrain: hills, mountains, forests and whales
+# Terrain: hills, mountains, forests, ice and whales
 
 Status: November 2026, built. The rules are kept simple on purpose.
 
@@ -32,6 +32,29 @@ Status: November 2026, built. The rules are kept simple on purpose.
   World and the Globe: along the real ranges (`map_world::RANGES`, drawn
   by hand: the Himalaya, Andes, Rockies, Alps and so on), broken by passes,
   with hills out to their edges.
+
+## The Globe's poles
+
+The Globe runs from pole to pole (640 x 492 tiles): Mercator's rows from
+66° north to 56° south, and past those, polar bands whose rows run evenly
+to the pole (`map_world::GlobeProj`; the page draws with the same numbers,
+`globe_proj`). The top edge is the North Pole and the bottom edge the
+South Pole.
+
+- Over a pole: walk off the top edge at x and you come back on at the top,
+  at x + w/2, walking south (`map::wrap_pos`). Tiles past an edge are the
+  tiles inside it on the far side (`Map::idx`, `Map::inside`); the
+  distance between two points tries their mirror images over each pole
+  (`map::delta`, `map::pdist`), so paths, aiming, sight, the fog and the
+  unit grid all go over the top when that's shorter.
+- Ice (`map::ICE`): the Arctic from 72° north, sea and land alike, so the
+  pole can be walked to from Siberia and Canada; Greenland's inland ice;
+  Antarctica and its shelves; and the last rows by each pole. People walk
+  on it; boats don't sail it; nothing is built, grows or lies on it.
+- Near the poles things are drawn narrower and narrower (every row meets
+  at the pole); flat patterns (cloud shadows, the ice's patches) fade out
+  there so they don't pinch into streaks.
+- The camera goes over a pole too, turned round (main.js `clampCam`).
 
 ## The World's land
 

@@ -1,6 +1,6 @@
 //! A* pathfinding on the tile grid.
 
-use crate::map::{wx, Map};
+use crate::map::{delta, Map};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -22,10 +22,10 @@ impl Goal {
     pub fn rect(tx: i32, ty: i32, size: i32, reach: f32) -> Goal {
         Goal { x0: tx as f32, y0: ty as f32, x1: (tx + size) as f32, y1: (ty + size) as f32, reach }
     }
-    /// (Round the world the short way: x is taken to the copy of itself
-    /// nearest the rectangle.)
+    /// (Round the world and over the poles the short way: the point is
+    /// taken to the copy of itself nearest the rectangle.)
     pub fn dist(&self, x: f32, y: f32) -> f32 {
-        let x = self.near_x(x);
+        let (x, y) = self.near(x, y);
         let dx = (self.x0 - x).max(0.0).max(x - self.x1);
         let dy = (self.y0 - y).max(0.0).max(y - self.y1);
         (dx * dx + dy * dy).sqrt()
@@ -34,12 +34,15 @@ impl Goal {
         self.dist(x, y) <= self.reach
     }
     pub fn nearest_point(&self, x: f32, y: f32) -> (f32, f32) {
-        (self.near_x(x).clamp(self.x0, self.x1), y.clamp(self.y0, self.y1))
+        let (x, y) = self.near(x, y);
+        (x.clamp(self.x0, self.x1), y.clamp(self.y0, self.y1))
     }
-    /// x, or the copy of it round the world that's nearest the rectangle.
-    fn near_x(&self, x: f32) -> f32 {
-        let c = (self.x0 + self.x1) * 0.5;
-        c + wx(x - c)
+    /// The point, or the copy of it round the world or over a pole that's
+    /// nearest the rectangle (`map::delta` from its middle).
+    fn near(&self, x: f32, y: f32) -> (f32, f32) {
+        let (cx, cy) = ((self.x0 + self.x1) * 0.5, (self.y0 + self.y1) * 0.5);
+        let (dx, dy) = delta(cx, cy, x, y);
+        (cx + dx, cy + dy)
     }
 }
 

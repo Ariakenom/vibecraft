@@ -11,7 +11,7 @@ use crate::ai::Ai;
 use crate::defs::Kind;
 use crate::game::{handicap, Game, Player, GAIA};
 use crate::map_frontier::Site;
-use crate::map::wx;
+use crate::map::pdist;
 
 /// Barbarian owner slots: at most this many camps at once.
 pub const MAX_BARBS: usize = 16;
@@ -165,7 +165,7 @@ impl Game {
             let site = f.sites[s];
             let (sx, sy) = (site.x as f32 + 0.5, site.y as f32 + 0.5);
             !held.contains(&(s as u16))
-                && !self.ents.iter().any(|e| e.alive && e.owner != GAIA && !self.is_barb(e.owner) && wx(e.x - sx).hypot(e.y - sy) < UNSEEN)
+                && !self.ents.iter().any(|e| e.alive && e.owner != GAIA && !self.is_barb(e.owner) && pdist(sx, sy, e.x, e.y) < UNSEEN)
                 && (site.y - 2..=site.y + 2).all(|y| (site.x - 2..=site.x + 2).all(|x| self.map.passable(x, y) && self.map.bld_at[self.map.idx(x, y)] < 0))
         });
         let Some(s) = free else { return };
@@ -431,7 +431,7 @@ mod paths {
         for k in 0..400usize {
             let a = land[(k * 7919) % land.len()];
             let b = land[(k * 104729 + 13) % land.len()];
-            if wx((a.0 - b.0) as f32).hypot((a.1 - b.1) as f32) < 80.0 {
+            if pdist(a.0 as f32, a.1 as f32, b.0 as f32, b.1 as f32) < 80.0 {
                 continue;
             }
             tried += 1;

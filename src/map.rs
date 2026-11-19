@@ -13,22 +13,23 @@ use std::cell::Cell;
 // at the end of every tick (`Game::tick`), so they stay in 0..w.
 
 thread_local! {
-    /// The width the world wraps at, or 0 (every other map). Set from the
-    /// map whenever one is made (`Map::new`) and at the start of every tick
-    /// and command, so it always belongs to the game being run.
-    static WRAP: Cell<f32> = const { Cell::new(0.0) };
+    /// The width and height of a world that wraps (the Globe), or (0, 0)
+    /// (every other map). Set from the map whenever one is made
+    /// (`Map::new`) and at the start of every tick and command, so it
+    /// always belongs to the game being run.
+    static WRAP: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
 }
 
-/// Make `m`'s wrapping the one `wx` and `wrap_x` use.
+/// Make `m`'s wrapping the one `wx`, `wrap_x`, `wrap_pos` and `delta` use.
 pub fn use_wrap(m: &Map) {
-    WRAP.with(|w| w.set(if m.wrap { m.w as f32 } else { 0.0 }));
+    WRAP.with(|w| w.set(if m.wrap { (m.w as f32, m.h as f32) } else { (0.0, 0.0) }));
 }
 
 /// The shortest way east (+) or west (-) from one x to another, given their
 /// plain difference: on a wrapping map, the other way round may be shorter.
 #[inline]
 pub fn wx(dx: f32) -> f32 {
-    let w = WRAP.with(|w| w.get());
+    let w = WRAP.with(|w| w.get().0);
     if w > 0.0 && dx.abs() > w * 0.5 {
         dx - w * (dx / w).round()
     } else {
@@ -39,13 +40,76 @@ pub fn wx(dx: f32) -> f32 {
 /// An x brought back onto the map (0..w) on a wrapping map.
 #[inline]
 pub fn wrap_x(x: f32) -> f32 {
-    let w = WRAP.with(|w| w.get());
+    let w = WRAP.with(|w| w.get().0);
     if w > 0.0 && !(0.0..w).contains(&x) {
         let r = x.rem_euclid(w);
         if r >= w { 0.0 } else { r }
     } else {
         x
     }
+}
+
+// Over the poles. The Globe's top edge is the North Pole and its bottom
+// edge the South Pole (map_world.rs). Walk north off the top at some x and
+// you come back on at the top, half the world round (x + w/2), walking
+// south: the ground just past the edge is the ground just inside it, on the
+// far side. So a point past the top edge, (x, -y), is (x + w/2, y), and
+// past the bottom, (x, h + y) is (x + w/2, h - y). Tiles do it in
+// `Map::idx` and `Map::inside`; distances between two points in `delta`
+// and `pdist`, which try the far point's mirror images over each pole as
+// well; positions in `wrap_pos`.
+
+/// A point brought back onto the map: round the world, and over a pole if
+/// it went past one. The flag says it crossed a pole: its way north and
+/// south has turned round (a heading `a` becomes `-a`).
+#[inline]
+pub fn wrap_pos(x: f32, y: f32) -> (f32, f32, bool) {
+    let (w, h) = WRAP.with(|w| w.get());
+    if w == 0.0 {
+        return (x, y, false);
+    }
+    if y < 0.0 {
+        (wrap_x(x + w * 0.5), (-y).min(h), true)
+    } else if y > h {
+        (wrap_x(x + w * 0.5), (2.0 * h - y).max(0.0), true)
+    } else {
+        (wrap_x(x), y, false)
+    }
+}
+
+/// The shortest way from a to b, as (east, south): round the world, and
+/// over a pole where that's shorter (then it's the way to b's mirror image
+/// past that pole, as seen from a).
+#[inline]
+pub fn delta(ax: f32, ay: f32, bx: f32, by: f32) -> (f32, f32) {
+    let (w, h) = WRAP.with(|w| w.get());
+    let direct = (wx(bx - ax), by - ay);
+    if w == 0.0 {
+        return direct;
+    }
+    let mut best = direct;
+    let mut d2 = direct.0 * direct.0 + direct.1 * direct.1;
+    // (Over a pole the way is at least as long as to it and back.)
+    let north = ay + by;
+    let south = 2.0 * h - ay - by;
+    if north * north < d2 || south * south < d2 {
+        let ex = wx(bx + w * 0.5 - ax);
+        for dy in [-north, south] {
+            let c = ex * ex + dy * dy;
+            if c < d2 {
+                d2 = c;
+                best = (ex, dy);
+            }
+        }
+    }
+    best
+}
+
+/// How far apart two points are, the shortest way (`delta`).
+#[inline]
+pub fn pdist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let (dx, dy) = delta(ax, ay, bx, by);
+    (dx * dx + dy * dy).sqrt()
 }
 
 pub const MAP_W: i32 = 120;
@@ -87,6 +151,10 @@ pub const EDGE: u8 = 6;
 /// A mountain: two hills high. It stands in hills (`settle_mountains`),
 /// never straight out of the lowland, and no trees grow on it.
 pub const MOUNTAIN: u8 = 7;
+/// Polar ice (the Globe's far north and south, on land and sea alike):
+/// people walk on it, boats don't sail it, and nothing is built or grows
+/// on it.
+pub const ICE: u8 = 8;
 /// Where water meets land in `Map::shade` (0..1), whatever a map's water
 /// level: the 3D view draws its waterline there (`elevOf` in render3d.js).
 pub const SHADE_WATER: f32 = 0.36;
@@ -195,8 +263,11 @@ impl Map {
         let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
         let r = |x: i32, y: i32| {
-            let (x, y) = (if self.wrap { x.rem_euclid(self.w) } else { x.clamp(0, self.w - 1) }, y.clamp(0, self.h - 1));
-            self.rise[(y * self.w + x) as usize] as f32
+            if self.wrap {
+                // (Round the world and over the poles.)
+                return self.rise[self.idx(x, y.clamp(-self.h, 2 * self.h - 1))] as f32;
+            }
+            self.rise[(y.clamp(0, self.h - 1) * self.w + x.clamp(0, self.w - 1)) as usize] as f32
         };
         let top = r(x0, y0) * (1.0 - tx) + r(x0 + 1, y0) * tx;
         let bottom = r(x0, y0 + 1) * (1.0 - tx) + r(x0 + 1, y0 + 1) * tx;
@@ -306,6 +377,13 @@ impl Map {
 
     #[inline]
     pub fn idx(&self, x: i32, y: i32) -> usize {
+        // (Over a pole: a row past the edge is the row inside it, half the
+        // world round. See `wrap_pos`.)
+        let (x, y) = if self.wrap && !(0..self.h).contains(&y) {
+            if y < 0 { (x + self.w / 2, -1 - y) } else { (x + self.w / 2, 2 * self.h - 1 - y) }
+        } else {
+            (x, y)
+        };
         // (Round the world: at most one width off either way, in practice;
         // a division on every lookup made the Globe's ticks half as fast.)
         let x = if self.wrap && !(0..self.w).contains(&x) {
@@ -315,9 +393,19 @@ impl Map {
         };
         (y * self.w + x) as usize
     }
-    /// (Any x is on a wrapping map: it's somewhere round the world.)
+    /// (Any x is on a wrapping map: it's somewhere round the world; and a
+    /// row up to one map's height past a pole is over it, on the far side.)
     pub fn inside(&self, x: i32, y: i32) -> bool {
-        (self.wrap || (x >= 0 && x < self.w)) && y >= 0 && y < self.h
+        if self.wrap {
+            y >= -self.h && y < 2 * self.h
+        } else {
+            x >= 0 && x < self.w && y >= 0 && y < self.h
+        }
+    }
+    /// A tile brought back onto the map: round the world, and over a pole.
+    pub fn tile_on(&self, x: i32, y: i32) -> (i32, i32) {
+        let i = self.idx(x, y) as i32;
+        (i % self.w, i / self.w)
     }
     /// A tile's x brought back onto the map (0..w) on a wrapping map.
     pub fn tile_x(&self, x: i32) -> i32 {
@@ -346,7 +434,7 @@ impl Map {
     /// straight line from a to b? Used to straighten the zig-zag tile paths
     /// that A* returns.
     pub fn line_clear(&self, naval: bool, a: (f32, f32), b: (f32, f32)) -> bool {
-        let (dx, dy) = (wx(b.0 - a.0), b.1 - a.1);
+        let (dx, dy) = delta(a.0, a.1, b.0, b.1);
         let len = (dx * dx + dy * dy).sqrt();
         let steps = (len / 0.2).ceil().max(1.0) as i32;
         const R: f32 = 0.24;
