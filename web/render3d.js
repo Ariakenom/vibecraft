@@ -4223,6 +4223,9 @@ function iconRenderer() {
   const d = new THREE.DirectionalLight("#fff3dd", 2.2); d.position.set(-2, 4, 3); scene.add(d);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // Icons are drawn flat, Globe or not: without this the Globe's bend moves
+  // the model to where the main camera looks, out of the icon's view.
+  mat.userData.flat = true;
   iconR = { renderer, scene, cam, mat };
   return iconR;
 }
@@ -4233,9 +4236,11 @@ function icon(k, owner, px) {
   const mdl = cachedModel(k, owner);
   const g = new THREE.Group();
   const body = new THREE.Mesh(mdl.body, mat);
+  body.userData.noCull = true; // (culled by the flat world's rules: see intersectsObject)
   g.add(body);
   if (mdl.tool) {
     const t = new THREE.Mesh(mdl.tool, mat);
+    t.userData.noCull = true;
     t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
     t.rotation.z = mdl.rig ? (k === K.Spearman || k === K.Swordsman ? -0.25 : k === K.Worker ? -0.4 : 0) : -(mdl.toolTilt || 0);
     g.add(t);
