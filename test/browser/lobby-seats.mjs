@@ -81,9 +81,10 @@ for (const [pg, n] of [[host, "host"], [ann, "Ann"], [bo, "Bo"], [cy, "Cy"]]) ch
 // Single player from the second seat: the host plays Red, the computer Blue.
 {
   const solo = await open(b);
-  await solo.evaluate(() => { seats = ["ai", "host", "open", "open"]; seatDiff = [0, 1, 1, 1]; lobbyChanged(); beginGame(); });
+  await solo.evaluate(async () => { seats = ["ai", "host", "open", "open"]; seatDiff = [0, 1, 1, 1]; lobbyChanged(); await beginGame(); });
   check(await solo.evaluate(() => running && !mp && ME === 2 && W.is_ai(1) === 1 && W.is_ai(2) === 0 && W.player_difficulty(1) === 0), "single player from the second seat: I play Red, an Easy computer Blue");
   await solo.evaluate(() => { $("restartBtn").click(); });
+  await solo.waitForFunction(() => !making);
   check(await solo.evaluate(() => ME === 2 && W.is_ai(1) === 1), "...and still after Restart");
   check(solo.errors.length === 0, "no page errors (single player)");
 }

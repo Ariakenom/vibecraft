@@ -223,9 +223,27 @@ const RANGES: &[(&[(f32, f32)], f32, u8)] = &[
 /// a tile there (of latitude): every range is a few tiles wide at least, or
 /// it would be too thin to hold mountains in hills.
 fn range_height(lat: f32, lon: f32, tile: f32) -> f32 {
+    // (Each range's box of latitudes and longitudes, with room for its
+    // width: most ranges are far from any one spot, and measuring every
+    // tile against every range was most of the time to make the map.)
+    static BOXES: std::sync::OnceLock<Vec<(f32, f32, f32, f32)>> = std::sync::OnceLock::new();
+    let boxes = BOXES.get_or_init(|| {
+        RANGES.iter().map(|&(line, half, _)| {
+            let m = half + 5.0;
+            let lat = line.iter().map(|p| p.0);
+            let lon = line.iter().map(|p| p.1);
+            (lat.clone().fold(f32::MAX, f32::min) - m, lat.fold(f32::MIN, f32::max) + m, lon.clone().fold(f32::MAX, f32::min) - m * 4.0, lon.fold(f32::MIN, f32::max) + m * 4.0)
+        }).collect()
+    });
     let mut best = 0.0f32;
     let k = lat.to_radians().cos().max(0.2);
-    for &(line, half, height) in RANGES {
+    // (Also, a range measured from a spot round the other side of the world
+    // could have its line wrap past the spot: the Brooks Range made faint
+    // hills in Lapland. In its box that can't happen.)
+    for (&(line, half, height), &(la0, la1, lo0, lo1)) in RANGES.iter().zip(boxes) {
+        if lat < la0 || lat > la1 || lon < lo0 || lon > lo1 {
+            continue;
+        }
         // (Degrees of longitude are shorter away from the equator.)
         let p = |a: (f32, f32)| ((a.1 - lon + 540.0).rem_euclid(360.0) - 180.0) * k;
         let mut d = f32::MAX;
@@ -402,7 +420,14 @@ pub fn generate_world(seed: u32, players: usize, shape: Shape) -> (Map, Vec<Depo
             if globe && terrain[i] != SHALLOW {
                 let wet = terrain[i] == WATER;
                 let greenland = lat > 60.0 && (-58.0..-18.0).contains(&lon) && land(&grid, lat, lon) > 0.97 && land(&grid, lat + 0.8, lon) > 0.97 && land(&grid, lat - 0.8, lon) > 0.97;
-                let icy = y < 3 || y >= h - 3 || lat > 72.0 || greenland || (lat < -62.0 && !wet) || lat < -74.0;
+                // (Where the pack ice ends: further north where the Gulf
+                // Stream warms the Barents Sea, further south off Alaska
+                // and Labrador, and ragged with noise, not a circle.)
+                let ragged = (fbm_round(x as f32, y as f32, 14.0, 130.0, seed ^ 0x1CE) - 0.5) * 9.0;
+                let bump = |at: f32, wide: f32| (-(((lon - at + 540.0).rem_euclid(360.0) - 180.0) / wide).powi(2)).exp();
+                let pack_n = 72.5 + 6.0 * bump(30.0, 35.0) - 3.5 * bump(-165.0, 25.0) - 3.0 * bump(-60.0, 20.0) + ragged;
+                let pack_s = -73.0 + ragged * 0.7;
+                let icy = y < 3 || y >= h - 3 || lat > pack_n || greenland || (lat < -62.0 && !wet) || lat < pack_s;
                 if icy {
                     terrain[i] = ICE;
                     // (Drawn just above the sea: flat, like the pack ice it is.)

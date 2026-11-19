@@ -3005,18 +3005,35 @@ function setupFromLobby() {
 }
 
 // The host pressed Begin.
+// Making a world takes a moment (a second or two on the Globe): show that
+// it's happening, let the page paint it, then do the work.
+let making = false;
+async function whileMaking(work) {
+  if (making) return;
+  making = true;
+  $("making").classList.add("on");
+  try {
+    await Boot.breathe(); await Boot.breathe();
+    work();
+  } finally {
+    $("making").classList.remove("on");
+    making = false;
+  }
+}
 function beginGame() {
-  if (guestOf || mp) return;
+  if (guestOf || mp || making) return;
   const active = seats.filter(s => s !== "open");
   if (active.length < 2) return;
   const setup = setupFromLobby();
   hostSlot = setup.hostSlot; // (the host's own seat, for the server below)
   if (!room || !active.some(isFriend)) {
     lastWasMultiplayer = false;
-    $("startScreen").hidden = true;
-    startGame(setup);
-    running = true; Rec.real = true;
-    publishLobby(); // friends who arrive now wait for the next game
+    return whileMaking(() => {
+      $("startScreen").hidden = true;
+      startGame(setup);
+      running = true; Rec.real = true;
+      publishLobby(); // friends who arrive now wait for the next game
+    });
     return;
   }
   // Who's who online: friends by their token, the setup for the game.
@@ -3712,7 +3729,7 @@ $("loadFile").onchange = async e => {
   } catch { toast("That file isn't a VibeCraft save or replay.", "bad"); }
 };
 $("resumeBtn").onclick = () => { $("menuScreen").hidden = true; if (paused && !mp) togglePause(); };
-$("restartBtn").onclick = () => { $("menuScreen").hidden = true; startGame({ ...lastSetup, seed: undefined }); Rec.real = true; };
+$("restartBtn").onclick = () => { $("menuScreen").hidden = true; whileMaking(() => { startGame({ ...lastSetup, seed: undefined }); Rec.real = true; }); };
 $("quitBtn").onclick = toMenu;
 // Copy the invite link. Some app views refuse the clipboard: then select it
 // so it can be copied by hand.

@@ -4,7 +4,7 @@ import { browser, open, check, failed, sleep } from "./lib.mjs";
 const b = await browser();
 const p = await open(b);
 await p.waitForFunction(() => roomCode && room);
-await p.evaluate(() => { seats[2] = "ai"; lobbyChanged(); beginGame(); });
+await p.evaluate(async () => { seats[2] = "ai"; lobbyChanged(); await beginGame(); });
 check(await p.evaluate(() => running && W.n_players() === 3 && !mp), "single player game with two computer players started");
 // Drive the game by hand so we know exactly what happened on which tick.
 const sums = await p.evaluate(() => {
