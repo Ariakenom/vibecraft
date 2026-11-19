@@ -219,7 +219,11 @@ function globeRay(ray) {
   // The way it comes in, by the east, up and north of the spot it meets.
   const sl = Math.sin(lon), cl = Math.cos(lon);
   const de = _gd.x * cl - _gd.z * sl, du = (_gd.x * hx + _gd.y * hy + _gd.z * hz) / R, dn = -_gd.x * s * sl + _gd.y * c - _gd.z * s * cl;
-  ray.direction.set(de, du, -dn).normalize();
+  // (Into the flat world's units there: a tile is drawn G.c wide and G.k
+  // long and high. The same in Mercator's rows; in the polar bands it
+  // narrows toward the pole.)
+  globeLat(fz);
+  ray.direction.set(de / Math.max(0.02, G.c), du / G.k, -dn / G.k).normalize();
   ray.origin.set(fx - ray.direction.x * 80, -ray.direction.y * 80, fz - ray.direction.z * 80);
   return true;
 }
@@ -2409,7 +2413,9 @@ function groundHit(ray) {
   }
   if (d.y < 0) t0 = Math.max(t0, (R3.hTop - o.y) / d.y); // (above the highest ground: nothing to hit)
   if (t0 > t1) return -1;
-  const above = t => o.y + d.y * t - hAt(o.x + d.x * t, o.z + d.z * t);
+  // (Over water, the water's surface: what you see and point at. Going
+  // down to the seabed put clicks on the sea a tile or two off.)
+  const above = t => o.y + d.y * t - Math.max(hAt(o.x + d.x * t, o.z + d.z * t), WATER_Y);
   const step = 0.25 / Math.max(0.05, Math.hypot(d.x, d.z)); // a quarter tile across the ground
   let prev = t0, fa = above(t0);
   if (fa <= 0) return t0;

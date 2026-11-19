@@ -22,7 +22,11 @@ for (const mode of ["skirmish", "frontier", "frontier-large"]) {
         if (!mesh) continue;
         out.n++;
         if (!w) { out.missed++; continue; }
-        out.worst = Math.max(out.worst, Math.hypot(w.x - mesh.point.x, w.y - mesh.point.z));
+        // (Over water the pointer picks the water's surface, where the ray
+        // meets it before the seabed.)
+        const ray = R3.raycaster.ray, tw = (WATER_Y - ray.origin.y) / ray.direction.y;
+        const at = mesh.point.y < WATER_Y && tw > 0 && tw < mesh.distance ? ray.at(tw, new THREE.Vector3()) : mesh.point;
+        out.worst = Math.max(out.worst, Math.hypot(w.x - at.x, w.y - at.z));
       }
     }
     const t = (f, n = 50) => { const a = performance.now(); for (let i = 0; i < n; i++) f(); return (performance.now() - a) / n; };
