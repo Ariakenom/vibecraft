@@ -27,6 +27,7 @@ check(await pg.evaluate(() => localStorage.getItem("vibecraft.mode")) === "front
 // Begin: a Frontier game, timed from the click to the first frame.
 let t = Date.now();
 await pg.click("#startBtn");
+await pg.waitForFunction(() => !making); // (the world is made a frame or two after the click: whileMaking)
 await pg.waitForFunction(() => running && W.game_time() > 0, null, { timeout: 60000 });
 const startMs = Date.now() - t;
 const g = await pg.evaluate(() => ({ mode: W.game_mode(), seed: W.game_seed(), n: W.n_players(), w: W.map_w(), barb: W.is_barbarian(3), col: PCOL[3], name: PNAME[3], seat: PCOL[2] }));

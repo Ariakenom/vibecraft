@@ -44,6 +44,7 @@ if (process.env.SHOT) {
   (await import("fs")).writeFileSync(process.env.SHOT, Buffer.from(data, "base64"));
 }
 await pg.click("#startBtn");
+await pg.waitForFunction(() => !making); // (the world is made a frame or two after the click: whileMaking)
 await sleep(500);
 check(await pg.evaluate(() => W.game_seed()) === 4242, "Begin plays the picked map");
 // Surprise again: a different map each time.

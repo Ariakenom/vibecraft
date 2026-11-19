@@ -6,7 +6,7 @@ const host = await open(b);
 await host.waitForFunction(() => roomCode && room);
 const code = await host.evaluate(() => roomCode);
 // The host plays alone against the computer.
-await host.evaluate(() => { beginGame(); });
+await host.evaluate(async () => { await beginGame(); });
 check(await host.evaluate(() => running && !mp), "host plays single player");
 await host.click("#menuBtn");
 check(await host.evaluate(() => !$("watchLinkBtn").hidden && watchLink().endsWith("#watch-" + roomCode)), "the menu offers a watch link");
@@ -38,7 +38,8 @@ await friend.waitForSelector("#endScreen:not([hidden])", { timeout: 15000 });
 check(await friend.evaluate(() => /Red won/.test($("endWhy").textContent) && /another game/.test($("endWhy").textContent) && !$("replayBtn").hidden), "the spectator sees the end, and that the next game will show");
 await host.click("#againBtn"); // Main menu
 await host.waitForSelector("#startScreen:not([hidden])", { timeout: 10000 });
-await host.click("#startBtn"); // and a new game
+await host.click("#startBtn");
+await host.waitForFunction(() => !making); // (the world is made a frame or two after the click: whileMaking) // and a new game
 await friend.waitForFunction(g => watcher && watcher.loaded && watcher.game !== g, firstGame, { timeout: 20000 });
 check(await friend.evaluate(() => $("endScreen").hidden && observe.kind === "watch" && !observe.over), "the host goes to the menu and starts another game: the spectator is watching the new game");
 // Stop watching: back to my own lobby.

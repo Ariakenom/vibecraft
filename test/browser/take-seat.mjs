@@ -33,7 +33,7 @@ async function give(host, slot) {
   const host = await open(b);
   await host.waitForFunction(() => roomCode && room);
   const code = await host.evaluate(() => roomCode);
-  await host.evaluate(() => { beginGame(); });
+  await host.evaluate(async () => { await beginGame(); });
   check(await host.evaluate(() => running && !mp && W.is_ai(2) === 1), "host plays single player against the computer");
   const spec = await open(b, "#watch-" + code);
   await spec.waitForFunction(() => watcher && watcher.loaded && observe.kind === "watch" && watcher.n > 0, null, { timeout: 30000 });

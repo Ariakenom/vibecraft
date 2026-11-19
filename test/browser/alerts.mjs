@@ -5,6 +5,7 @@ const b = await browser();
 const pg = await open(b, "", { draw: true });
 await sleep(300);
 await pg.click("#startBtn");
+await pg.waitForFunction(() => !making); // (the world is made a frame or two after the click: whileMaking)
 await pg.waitForFunction(() => running && W.game_time() > 0, null, { timeout: 60000 });
 const red = () => pg.evaluate(() => {
   const s = mini.width / MW, m = alertMarks[0];

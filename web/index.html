@@ -340,6 +340,10 @@ kbd.k { font: 700 12px var(--body); background: var(--panel-hi); border: 1px sol
 .lobby code { font-size: 12px; }
 #mpStatus.bad { color: var(--bad); }
 #startBtn:disabled { opacity: .55; cursor: default; filter: none; }
+/* While a new game's world is made (a second or two on the Globe): over
+   everything, so nothing moves; hidden, not removed, when not in use. */
+#making { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: #0d0b09cc; color: var(--gold, #e0b23a); font-size: 22px; letter-spacing: .04em; cursor: progress; visibility: hidden; }
+#making.on { visibility: visible; }
 #mpStatus:empty, #netStatus:empty, #openGames:empty { display: none; }
 .net-status { font-size: 12px; user-select: text; -webkit-user-select: text; }
 #netTrace { position: absolute; top: 10px; right: 10px; z-index: 4; display: grid; grid-template-rows: 1fr auto auto; gap: 8px; width: min(560px, calc(100% - 20px)); height: min(560px, calc(100% - 20px)); background: #1b1610ee; border: 1px solid var(--line); border-left: 3px solid var(--bronze); border-radius: 3px; padding: 10px 12px; user-select: text; -webkit-user-select: text; }
@@ -462,6 +466,7 @@ body.observing #hint { display: none; }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 </style>
 
+<div id="making" role="status" aria-live="polite">Making the world…</div>
 <div id="boot" role="status" aria-live="polite">
   <div class="glow"></div>
   <div class="sun"></div>
