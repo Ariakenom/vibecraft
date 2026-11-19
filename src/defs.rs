@@ -574,6 +574,9 @@ pub const SPLASH_SHARE: f32 = 0.5;
 /// Unsupplied units (more held than supplied, newest first) lose this
 /// fraction of their maximum health every second. 0 turns it off.
 pub const UNSUPPLIED_DAMAGE: f32 = 0.01;
+/// How far sight reaches among trees, in tiles: into a forest, out of one
+/// and within one (`Game::sees_on`).
+pub const FOREST_SIGHT: f32 = 3.0;
 /// More people than beds: one person at a time starves, dying over this
 /// many seconds (then the next). Beds back in time, and they live.
 pub const STARVE_SECS: f32 = 5.0;

@@ -700,12 +700,19 @@ impl Game {
     }
     /// Can someone at (fx, fy) see the point (tx, ty)? `air`: the one
     /// looking, or the one looked at, is in the air, where nothing hides.
+    /// Among trees, at either end, sight reaches `FOREST_SIGHT` tiles: the
+    /// same into a forest, out of one and within one, so a forest's edge is
+    /// seen as you come up to it.
     pub fn sees_on(map: &Map, fx: f32, fy: f32, tx: f32, ty: f32, air: bool) -> bool {
-        if air || wx(tx - fx).powi(2) + (ty - fy).powi(2) <= 1.5 * 1.5 {
+        let d2 = wx(tx - fx).powi(2) + (ty - fy).powi(2);
+        if air || d2 <= 1.5 * 1.5 {
             return true;
         }
         let (a, b) = ((fx.floor() as i32, fy.floor() as i32), (tx.floor() as i32, ty.floor() as i32));
-        map.covered(a.0, a.1) == map.covered(b.0, b.1) && (map.hill(a.0, a.1) || !map.hill(b.0, b.1))
+        if (map.covered(a.0, a.1) || map.covered(b.0, b.1)) && d2 > FOREST_SIGHT * FOREST_SIGHT {
+            return false;
+        }
+        map.hill(a.0, a.1) || !map.hill(b.0, b.1)
     }
     pub fn sees(&self, fx: f32, fy: f32, tx: f32, ty: f32, air: bool) -> bool {
         Self::sees_on(&self.map, fx, fy, tx, ty, air)

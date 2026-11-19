@@ -2379,12 +2379,19 @@ fn hills_and_forests() {
     let st = Kind::Archer.stats();
     let a = &g.ents[archer as usize];
     assert_eq!((g.sight_of(a), g.range_of(a)), (st.sight * 2.0, st.range * 2.0));
-    // Forests: some tile among trees, open, that you can't see into from
-    // outside, nor out of.
+    // Forests: among trees, sight reaches FOREST_SIGHT (3) tiles, into a
+    // forest, out of it and within it. 4 tiles away you can't see a spot
+    // among trees, nor out of one; 2 tiles away you can, both ways.
     let m = &g.map;
-    let inside = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find(|&(x, y)| m.covered(x, y) && m.passable(x, y) && !m.covered(x + 4, y) && m.passable(x + 4, y)).expect("a glade");
-    let (ix, iy, ox, oy) = (inside.0 as f32 + 0.5, inside.1 as f32 + 0.5, inside.0 as f32 + 4.5, inside.1 as f32 + 0.5);
-    assert!(!g.sees(ox, oy, ix, iy, false) && !g.sees(ix, iy, ox, oy, false));
+    let flat = |x: i32, y: i32| !m.hill(x, y);
+    let inside = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find(|&(x, y)| m.covered(x, y) && m.passable(x, y) && flat(x, y) && !m.covered(x + 4, y) && m.passable(x + 4, y) && flat(x + 4, y) && !m.covered(x + 2, y) && flat(x + 2, y)).expect("a glade");
+    let (ix, iy) = (inside.0 as f32 + 0.5, inside.1 as f32 + 0.5);
+    assert!(!g.sees(ix + 4.0, iy, ix, iy, false) && !g.sees(ix, iy, ix + 4.0, iy, false), "4 tiles: hidden");
+    assert!(g.sees(ix + 2.0, iy, ix, iy, false) && g.sees(ix, iy, ix + 2.0, iy, false), "2 tiles: the forest's edge is seen");
+    // Within a forest too: two spots among trees 6 apart don't see each other.
+    let deep = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find(|&(x, y)| m.covered(x, y) && m.covered(x + 6, y) && flat(x, y) && flat(x + 6, y)).expect("a wide forest");
+    let (dx, dy) = (deep.0 as f32 + 0.5, deep.1 as f32 + 0.5);
+    assert!(!g.sees(dx, dy, dx + 6.0, dy, false), "among trees, 6 tiles: hidden");
     // Climbing is slow: up the hill takes longer than down it.
     let walk = |g: &mut Game, from: (f32, f32), to: (f32, f32)| {
         let u = g.spawn_unit(Kind::Spearman, 1, from.0, from.1);
