@@ -59,3 +59,5 @@
 1795111347	2026-11-19	e78c54ee96f91fb9bc49e422b4f8bb4053a7b069	Merge pull request #64 from Ariakenom/globe-icons
 1795111151	2026-11-19	02ed0fca1837ce6f85f5525c4a58cfe2e8cd4de7	Idle-workers button: find workers left idle outside the town square
 1795111353	2026-11-19	049fddeb69b44b327100133b5aef8d7c0e72a14a	Merge pull request #65 from Ariakenom/idle-workers
+1795111846	2026-11-19	5b30cc979f8b7c2c69d0980515655bff1a5a1e05	Map preview: draw the Globe at its own size
+1795112195	2026-11-19	ab7397bcb4206be2c326a82834118fb925727a13	Merge pull request #66 from Ariakenom/map-preview
