@@ -368,6 +368,31 @@ fn free_workers_go_to_work_by_themselves() {
 }
 
 #[test]
+fn the_idle_button_finds_workers_left_outside_the_square() {
+    let mut g = town(5, 1, 2);
+    g.local = 1;
+    run(&mut g, 5.0);
+    assert_eq!(g.count_stray_workers(), 0, "free workers in the square aren't strays");
+    assert_eq!(g.select_stray_workers(0), -1);
+    // Send a free worker off and leave it there: it stands idle, outside.
+    let w = g.ents.iter().find(|e| g.is_free_worker(e) && e.owner == 1).unwrap().id;
+    let (x, y) = spot(&g, Kind::LumberCamp);
+    g.apply(1, Command::Smart { ids: vec![w], x: x as f32 + 0.5, y: y as f32 + 0.5 }).unwrap();
+    run(&mut g, 30.0);
+    assert_eq!(g.ents[w as usize].order, Order::Idle);
+    assert_eq!(g.count_stray_workers(), 1);
+    assert_eq!(g.select_stray_workers(0), w as i32);
+    assert_eq!(g.select_stray_workers(1), w as i32, "counting round");
+    let sel: Vec<u32> = g.ents.iter().filter(|e| e.alive && e.selected).map(|e| e.id).collect();
+    assert_eq!(sel, [w], "only the stray is selected");
+    // Back in the square it's a free worker again, not a stray.
+    let (cx, cy) = g.campfire_of(g.capitols(1).next().unwrap());
+    g.apply(1, Command::Smart { ids: vec![w], x: cx, y: cy }).unwrap();
+    run(&mut g, 30.0);
+    assert_eq!(g.count_stray_workers(), 0);
+}
+
+#[test]
 fn moving_workers_away_pauses_a_producer() {
     let mut g = town(5, 1, 2);
     let (x, y) = spot(&g, Kind::LumberCamp);

@@ -2853,16 +2853,36 @@ impl Game {
         }
     }
 
-    /// Select every free worker at the local player's campfires. Returns one
-    /// of their ids, or -1 if there are none.
-    pub fn select_free_workers(&mut self) -> i32 {
-        let free: Vec<usize> = (0..self.ents.len()).filter(|&i| self.ents[i].owner == self.local && self.is_free_worker(&self.ents[i])).collect();
-        let Some(&first) = free.first() else { return -1 };
+    /// Is this a worker standing idle away from every town square: sent off
+    /// and left there, or unable to walk home? Free workers in a square find
+    /// work by themselves; these wait until the player does something.
+    pub fn is_stray_worker(&self, e: &Entity) -> bool {
+        e.alive && e.kind == Kind::Worker && e.order == Order::Idle && e.aboard == 0 && !self.is_free_worker(e)
+    }
+
+    /// The local player's idle workers outside the town squares, in id order.
+    fn stray_workers(&self) -> Vec<usize> {
+        (0..self.ents.len()).filter(|&i| self.ents[i].owner == self.local && self.is_stray_worker(&self.ents[i])).collect()
+    }
+
+    /// How many idle workers the local player has outside the town squares.
+    pub fn count_stray_workers(&self) -> u32 {
+        self.stray_workers().len() as u32
+    }
+
+    /// Select every idle worker of the local player outside the town
+    /// squares. Returns the id of the `n`th of them (counting round), for
+    /// the camera to look at, or -1 if there are none.
+    pub fn select_stray_workers(&mut self, n: u32) -> i32 {
+        let stray = self.stray_workers();
+        if stray.is_empty() {
+            return -1;
+        }
         self.clear_selection();
-        for i in free {
+        for &i in &stray {
             self.ents[i].selected = true;
         }
-        first as i32
+        stray[n as usize % stray.len()] as i32
     }
 
 }

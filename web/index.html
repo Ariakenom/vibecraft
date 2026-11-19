@@ -400,7 +400,7 @@ body.observing #hint { display: none; }
 }
 
 /* chat */
-/* free workers: a button at the bottom left of the view, with how many */
+/* idle workers outside the town squares: a button at the bottom left of the view, with how many */
 .idle-btn { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; align-items: center; gap: 6px; height: 40px; min-width: 76px; padding: 0 12px; background: #1b1610e6; border: 1px solid var(--bronze); border-radius: 3px; color: var(--ink); cursor: pointer; font: 700 16px var(--body); font-variant-numeric: tabular-nums; }
 .idle-btn svg { width: 20px; height: 20px; color: #d9c9a8; }
 .idle-btn:hover { background: #2a2218f0; }
@@ -533,7 +533,7 @@ body.observing #hint { display: none; }
     <div id="toasts" aria-live="polite"></div>
     <section id="buildList" hidden aria-label="Being built and trained"></section>
     <div id="hint" hidden></div>
-    <button id="idleBtn" class="idle-btn none" title="Free workers (.)" aria-label="Free workers: select them"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="4.5" r="2.8" fill="currentColor"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="currentColor"/></svg><span id="idleCount">0</span></button>
+    <button id="idleBtn" class="idle-btn none" title="Idle workers outside the town square (.)" aria-label="Idle workers outside the town square: select them"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="4.5" r="2.8" fill="currentColor"/><path d="M2.5 15c0-3.6 2.4-6 5.5-6s5.5 2.4 5.5 6z" fill="currentColor"/></svg><span id="idleCount">0</span></button>
     <div id="netWait" hidden></div>
     <div id="chat">
       <div id="chatLog" aria-live="polite" hidden></div>
@@ -651,7 +651,7 @@ body.observing #hint { display: none; }
           <div><dt>Right-click</dt><dd>Move, attack, build, work</dd></div>
           <div><dt>Double-click</dt><dd>Select all of that type on screen</dd></div>
           <div><dt><kbd class="k">Z</kbd> then click</dt><dd>Attack-move (<kbd class="k">X</kbd> stops)</dd></div>
-          <div><dt><kbd class="k">.</kbd></dt><dd>Next free worker</dd></div>
+          <div><dt><kbd class="k">.</kbd></dt><dd>Next idle worker outside the town square</dd></div>
           <div><dt><kbd class="k">H</kbd></dt><dd>Jump to your Town Square</dd></div>
           <div><dt><kbd class="k">Ctrl</kbd>/<kbd class="k">Shift</kbd> + <kbd class="k">1</kbd>–<kbd class="k">9</kbd></dt><dd>Make a group; <kbd class="k">1</kbd>–<kbd class="k">9</kbd> recalls</dd></div>
           <div><dt><kbd class="k">W</kbd><kbd class="k">A</kbd><kbd class="k">S</kbd><kbd class="k">D</kbd>, edges</dt><dd>Move the camera; wheel zooms</dd></div>

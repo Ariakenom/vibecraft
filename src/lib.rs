@@ -443,9 +443,16 @@ pub extern "C" fn select_ids(n: u32) {
         }
     })
 }
+/// Select the local player's idle workers outside the town squares; the id
+/// of the `n`th (counting round), or -1 if there are none.
 #[unsafe(no_mangle)]
-pub extern "C" fn free_workers() -> i32 {
-    game(|g| g.select_free_workers())
+pub extern "C" fn stray_workers(n: u32) -> i32 {
+    game(|g| g.select_stray_workers(n))
+}
+/// How many idle workers the local player has outside the town squares.
+#[unsafe(no_mangle)]
+pub extern "C" fn count_stray_workers() -> u32 {
+    game(|g| g.count_stray_workers())
 }
 
 /// Read `n` entity ids that JavaScript wrote into the scratch buffer.
