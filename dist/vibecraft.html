@@ -6087,6 +6087,9 @@ function iconRenderer() {
   const d = new THREE.DirectionalLight("#fff3dd", 2.2); d.position.set(-2, 4, 3); scene.add(d);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // Icons are drawn flat, Globe or not: without this the Globe's bend moves
+  // the model to where the main camera looks, out of the icon's view.
+  mat.userData.flat = true;
   iconR = { renderer, scene, cam, mat };
   return iconR;
 }
@@ -6097,9 +6100,11 @@ function icon(k, owner, px) {
   const mdl = cachedModel(k, owner);
   const g = new THREE.Group();
   const body = new THREE.Mesh(mdl.body, mat);
+  body.userData.noCull = true; // (culled by the flat world's rules: see intersectsObject)
   g.add(body);
   if (mdl.tool) {
     const t = new THREE.Mesh(mdl.tool, mat);
+    t.userData.noCull = true;
     t.position.set(...(mdl.rig ? mdl.rig.toolAt : mdl.pivot));
     t.rotation.z = mdl.rig ? (k === K.Spearman || k === K.Swordsman ? -0.25 : k === K.Worker ? -0.4 : 0) : -(mdl.toolTilt || 0);
     g.add(t);
@@ -6159,7 +6164,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "a1c2e4034d32", "base": "f5baae5773"};
+const BUILD_INFO = {"sim": "a1c2e4034d32", "base": "de78453a98"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
