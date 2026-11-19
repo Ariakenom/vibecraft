@@ -673,30 +673,41 @@ impl Game {
     }
 
     // -----------------------------------------------------------------------
-    // Hills and forests
+    // Hills, mountains and forests
     //
-    // - A unit on a hill sees twice as far and, if it shoots, reaches twice
-    //   as far. Going uphill it moves at half speed.
-    // - From lower ground you can't see onto a hill.
-    // - Trees hide what's among them: from outside a forest you can't see
-    //   in, and from inside you can't see out.
+    // - Height goes by level: the lowland 0, a hill's top 1, a mountain's 2
+    //   (a mountain is two hills high). It grows gradually as you climb,
+    //   over `RISE` tiles in from a hill's foot (and from a mountain's
+    //   edge), and falls as you come down (`Map::elevation`).
+    // - A unit sees and shoots one more time as far for each level of
+    //   height: twice as far on a hilltop, three times on a mountain, and in
+    //   between on the way up. Going uphill it moves at half speed.
+    // - From lower ground you can't see onto what's more than half a level
+    //   higher: from the lowland not onto a hill past its foot, from a
+    //   hilltop not onto a mountain.
+    // - Among trees sight reaches `FOREST_SIGHT` tiles, into a forest, out
+    //   of one and within one.
     // Right next to something (1.5 tiles) you always see it.
 
-    /// Is this unit standing on a hill? (Not boats, aircraft or buildings.)
-    pub fn on_hill(map: &Map, e: &Entity) -> bool {
-        !e.is_building() && !e.kind.is_air() && !e.kind.is_naval() && map.hill(e.x.floor() as i32, e.y.floor() as i32)
+    /// How high this unit stands, in levels (`Map::elevation`). Boats,
+    /// aircraft and buildings: 0.
+    pub fn elevation_of(map: &Map, e: &Entity) -> f32 {
+        if e.is_building() || e.kind.is_air() || e.kind.is_naval() {
+            return 0.0;
+        }
+        map.elevation(e.x, e.y)
     }
-    /// How far it sees: double on a hill.
+    /// How far it sees: one more time as far for each level of height.
     pub fn sight_on(map: &Map, e: &Entity) -> f32 {
-        e.kind.stats().sight * if Self::on_hill(map, e) { 2.0 } else { 1.0 }
+        e.kind.stats().sight * (1.0 + Self::elevation_of(map, e))
     }
     pub fn sight_of(&self, e: &Entity) -> f32 {
         Self::sight_on(&self.map, e)
     }
-    /// How far it shoots: double on a hill, for those that shoot.
+    /// How far it shoots, for those that shoot: as sight.
     pub fn range_of(&self, e: &Entity) -> f32 {
         let r = e.kind.stats().range;
-        if r > 1.5 && Self::on_hill(&self.map, e) { r * 2.0 } else { r }
+        if r > 1.5 { r * (1.0 + Self::elevation_of(&self.map, e)) } else { r }
     }
     /// Can someone at (fx, fy) see the point (tx, ty)? `air`: the one
     /// looking, or the one looked at, is in the air, where nothing hides.
@@ -712,7 +723,7 @@ impl Game {
         if (map.covered(a.0, a.1) || map.covered(b.0, b.1)) && d2 > FOREST_SIGHT * FOREST_SIGHT {
             return false;
         }
-        map.hill(a.0, a.1) || !map.hill(b.0, b.1)
+        map.elevation(fx, fy) + 0.5 >= map.elevation(tx, ty)
     }
     pub fn sees(&self, fx: f32, fy: f32, tx: f32, ty: f32, air: bool) -> bool {
         Self::sees_on(&self.map, fx, fy, tx, ty, air)
@@ -3026,6 +3037,7 @@ impl Game {
             }
         }
         self.map.relabel_land();
+        self.map.set_rise();
         self.craters.push((x, y));
         self.push_event(Ev::NukeDetonated, x, y, owner as f32);
     }

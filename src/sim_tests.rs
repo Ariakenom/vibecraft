@@ -2362,23 +2362,38 @@ fn hills_and_forests() {
     // Sheep stand on hills.
     let sheep: Vec<_> = g.deps.iter().filter(|d| d.kind == Dep::Hills).collect();
     assert!(!sheep.is_empty() && sheep.iter().all(|d| m.hill(d.tx, d.ty)));
-    // A hill tile next to low ground, both open.
-    let open = |x: i32, y: i32| m.passable(x, y) && !m.covered(x, y);
-    let (top, low) = (0..m.h)
-        .flat_map(|y| (0..m.w).map(move |x| (x, y)))
-        .find_map(|(x, y)| {
-            let below = (x + 3, y);
-            (m.hill(x, y) && open(x, y) && !m.hill(below.0, below.1) && open(below.0, below.1) && (x + 1..below.0).all(|xx| m.passable(xx, y))).then_some(((x, y), below))
+    // A hilltop (full height) with low ground a few tiles east, the way
+    // open. From the top you see down; from below not up; and the height
+    // and its advantage grow gradually on the way up.
+    let (mut hg, top, low) = (0..30u32)
+        .find_map(|seed| {
+            let hg = Game::new(seed, 1, 2);
+            let m = &hg.map;
+            let open = |x: i32, y: i32| m.passable(x, y) && !m.covered(x, y);
+            let found = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find_map(|(x, y)| {
+                (m.rise[m.idx(x, y)] == 100 && open(x, y))
+                    .then(|| (3..=10).map(|k| (x + k, y)).find(|&(lx, ly)| m.inside(lx, ly) && m.rise[m.idx(lx, ly)] == 0 && open(lx, ly) && (x..=lx).all(|xx| open(xx, y))).map(|low| ((x, y), low)))
+                    .flatten()
+            });
+            found.map(|(t, l)| (hg, t, l))
         })
-        .expect("a hill with low ground beside it");
+        .expect("a hilltop with low ground beside it");
     let (tx, ty, lx, ly) = (top.0 as f32 + 0.5, top.1 as f32 + 0.5, low.0 as f32 + 0.5, low.1 as f32 + 0.5);
-    assert!(g.sees(tx, ty, lx, ly, false), "from a hill you see down");
-    assert!(!g.sees(lx, ly, tx, ty, false), "from below you can't see up");
-    assert!(g.sees(lx, ly, tx, ty, true), "nothing hides from the air");
-    let archer = g.spawn_unit(Kind::Archer, 1, tx, ty);
+    assert!(hg.sees(tx, ty, lx, ly, false), "from a hill you see down");
+    assert!(!hg.sees(lx, ly, tx, ty, false), "from below you can't see up");
+    assert!(hg.sees(lx, ly, tx, ty, true), "nothing hides from the air");
+    let steps: Vec<f32> = (0..=20).map(|k| hg.map.elevation(lx + (tx - lx) * k as f32 / 20.0, ty)).collect();
+    assert!(steps.windows(2).all(|p| p[1] >= p[0] - 1e-6), "height only grows on the way up: {steps:?}");
+    assert!(steps.iter().filter(|&&e| e > 0.05 && e < 0.95).count() >= 4, "and gradually: {steps:?}");
+    let archer = hg.spawn_unit(Kind::Archer, 1, tx, ty);
     let st = Kind::Archer.stats();
-    let a = &g.ents[archer as usize];
-    assert_eq!((g.sight_of(a), g.range_of(a)), (st.sight * 2.0, st.range * 2.0));
+    let a = &hg.ents[archer as usize];
+    assert_eq!((hg.sight_of(a), hg.range_of(a)), (st.sight * 2.0, st.range * 2.0), "twice as far on the top");
+    let mid = steps.iter().position(|&e| e > 0.3 && e < 0.7).unwrap();
+    hg.ents[archer as usize].x = lx + (tx - lx) * mid as f32 / 20.0;
+    let a = &hg.ents[archer as usize];
+    let s = hg.sight_of(a) / st.sight;
+    assert!(s > 1.3 && s < 1.7, "halfway up, about half the advantage ({s})");
     // Forests: among trees, sight reaches FOREST_SIGHT (3) tiles, into a
     // forest, out of it and within it. 4 tiles away you can't see a spot
     // among trees, nor out of one; 2 tiles away you can, both ways.
@@ -2405,10 +2420,56 @@ fn hills_and_forests() {
         g.tick();
         t
     };
-    let (up, down) = (walk(&mut g, (lx, ly), (tx, ty)), walk(&mut g, (tx, ty), (lx, ly)));
+    let (up, down) = (walk(&mut hg, (lx, ly), (tx, ty)), walk(&mut hg, (tx, ty), (lx, ly)));
     assert!(up as f32 > down as f32 * 1.2, "up {up} ticks, down {down}");
     // Most of a forest's ground is walkable: no forest is a wall.
     let m = &g.map;
     let (trees, glades) = (0..(m.w * m.h) as usize).filter(|&i| m.cover[i]).fold((0, 0), |(t, o), i| if m.blocked[i] { (t + 1, o) } else { (t, o + 1) });
     assert!(glades > trees, "{trees} trees, {glades} open tiles among them");
+}
+
+/// Mountains: every map kind can have them, each stands in hills (no
+/// lowland right next to one), and they follow the height rules: from a
+/// mountain you see onto a hill, from a hill not onto a mountain, and on a
+/// mountain a unit sees and shoots three times as far.
+#[test]
+fn mountains_stand_in_hills_and_see_furthest() {
+    use crate::map::{Map, HILL, MOUNTAIN};
+    use crate::map_frontier::{generate_frontier, Size};
+    use crate::map_world::{generate_world, Shape};
+    let ringed = |m: &Map| {
+        (0..m.h).all(|y| (0..m.w).all(|x| m.terrain[m.idx(x, y)] != MOUNTAIN || (-1..=1).all(|dy| (-1..=1).all(|dx| matches!(m.terrain[m.idx(x + dx, y + dy)], HILL | MOUNTAIN)))))
+    };
+    let count = |m: &Map| m.terrain.iter().filter(|&&t| t == MOUNTAIN).count();
+    let mut found = [0usize; 3];
+    for seed in 0..6u32 {
+        let maps = [crate::map::generate(seed, 2).0, generate_frontier(seed, 2, Size::Small).0, generate_world(seed, 2, Shape::Globe).0];
+        for (k, m) in maps.iter().enumerate() {
+            assert!(ringed(m), "map kind {k} seed {seed}: a mountain beside the lowland");
+            found[k] += count(m);
+        }
+    }
+    assert!(found.iter().all(|&n| n > 0), "mountains on every kind of map: {found:?}");
+
+    // A mountain with a hill 3 tiles east, open ground between.
+    for seed in 0..40u32 {
+        let mut g = Game::new(seed, 1, 2);
+        let m = &g.map;
+        let open = |x: i32, y: i32| m.passable(x, y) && !m.covered(x, y);
+        let Some((top, low)) = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find_map(|(x, y)| {
+            let b = (x + 3, y);
+            (m.rise[m.idx(x, y)] == 200 && open(x, y) && m.inside(b.0, b.1) && m.rise[m.idx(b.0, b.1)] == 100 && open(b.0, b.1) && (x + 1..b.0).all(|xx| open(xx, y))).then_some(((x, y), b))
+        }) else {
+            continue;
+        };
+        let (tx, ty, lx, ly) = (top.0 as f32 + 0.5, top.1 as f32 + 0.5, low.0 as f32 + 0.5, low.1 as f32 + 0.5);
+        assert!(g.sees(tx, ty, lx, ly, false), "from a mountain you see onto a hill");
+        assert!(!g.sees(lx, ly, tx, ty, false), "from a hill you can't see onto a mountain");
+        let archer = g.spawn_unit(Kind::Archer, 1, tx, ty);
+        let st = Kind::Archer.stats();
+        let a = &g.ents[archer as usize];
+        assert_eq!((g.sight_of(a), g.range_of(a)), (st.sight * 3.0, st.range * 3.0));
+        return;
+    }
+    panic!("no skirmish map with a mountaintop beside a hilltop in 40 seeds");
 }
