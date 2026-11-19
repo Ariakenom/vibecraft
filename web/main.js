@@ -2773,13 +2773,15 @@ function renderMapPick() {
   const key = `${mapSeed}:${players}:${gameMode}`;
   if (key === previewKey) return;
   previewKey = key;
-  const w = W.map_preview(mapSeed, players, gameMode);
-  const px = new Uint8Array(W.memory.buffer, W.preview_ptr(), w * w);
+  // (Not always square: the Globe is wider than tall. The
+  // canvas keeps its square box and the map sits in it, sea round it.)
+  const w = W.map_preview(mapSeed, players, gameMode), h = W.preview_height();
+  const px = new Uint8Array(W.memory.buffer, W.preview_ptr(), w * h);
   const cv = $("mapPreview");
-  cv.width = cv.height = w;
-  const ctx = cv.getContext("2d"), img = ctx.createImageData(w, w);
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(w, h);
   const rgb = PREVIEW_COL.map(c => [1, 3, 5].map(k => parseInt(c.slice(k, k + 2), 16)));
-  for (let i = 0; i < w * w; i++) { const c = rgb[px[i]] || rgb[3]; img.data.set([c[0], c[1], c[2], 255], i * 4); }
+  for (let i = 0; i < w * h; i++) { const c = rgb[px[i]] || rgb[3]; img.data.set([c[0], c[1], c[2], 255], i * 4); }
   ctx.putImageData(img, 0, 0); // (town sites in white)
 }
 $("gameMode").onchange = () => {

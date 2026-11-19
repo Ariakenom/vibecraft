@@ -25,7 +25,7 @@ mod boat_tests;
 
 use defs::{Kind, Res, TRANSPORT_CAPACITY};
 use game::{Command, Game, Intent, Order};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// Floats per entity in the render buffer. Keep in sync with `ENT_STRIDE` in the JS.
 const ENT_STRIDE: usize = 18;
@@ -1328,12 +1328,14 @@ pub extern "C" fn player_units(p: u32, which: u32) -> u32 {
 
 thread_local! {
     static PREVIEW: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static PREVIEW_H: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Make the map of `seed` for `players` and keep a picture of it: a byte a
 /// tile, row by row (0 deep water, 1 shallows, 2 sand, 3 grass, 4 hills,
-/// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width; it's
-/// square. `preview_ptr` has the bytes.
+/// 5 forest, 6 a deposit, 7 a town site, 8 fish). Returns its width;
+/// `preview_height` has its height (the Globe is wider than tall) and
+/// `preview_ptr` the bytes.
 #[unsafe(no_mangle)]
 /// `mode`: 0 Skirmish, 1 Frontier Small, 2 Frontier Large, 3 the World map, 4 the Globe.
 pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
@@ -1371,7 +1373,13 @@ pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
     }
     let w = m.w as u32;
     PREVIEW.with(|p| *p.borrow_mut() = px);
+    PREVIEW_H.with(|h| h.set(m.h as u32));
     w
+}
+/// The height of the last `map_preview`, in tiles.
+#[unsafe(no_mangle)]
+pub extern "C" fn preview_height() -> u32 {
+    PREVIEW_H.with(|h| h.get())
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn preview_ptr() -> *const u8 {
