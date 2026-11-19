@@ -19,9 +19,11 @@ Status: November 2026, built. The rules are kept simple on purpose.
   join up, with one in ten more left out (`map::thin_forests`). Units walk
   in the gaps, so a crowd has to string out to get through. No slowdown
   beyond that.
-- Trees block sight: from outside a forest you can't see in, and from
-  inside you can't see out (`Map::cover`: tree tiles and open tiles with
-  two or more trees round them).
+- Trees block sight: among trees, at either end, sight reaches only
+  `FOREST_SIGHT` (3) tiles, the same looking into a forest, out of one and
+  within one (`Map::cover`: tree tiles and open tiles with two or more trees
+  round them). The first rule hid a forest completely from outside (and
+  showed all of it from inside), so its edge stayed unseen right up to it.
 
 ## Who the sight rules apply to
 
