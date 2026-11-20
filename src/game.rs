@@ -2845,8 +2845,17 @@ impl Game {
                 for dx in -ri..=ri {
                     // (Over a pole, on the far side: `Map::tile_on`.)
                     let (x, y) = if map.wrap { map.tile_on(cx + dx, cy + dy) } else { (cx + dx, cy + dy) };
-                    if map.inside(cx + dx, cy + dy) && ((dx * dx + dy * dy) as f32) <= r * r && Self::sees_on(map, e.x, e.y, (cx + dx) as f32 + 0.5, (cy + dy) as f32 + 0.5, free) {
-                        self.fog[(y * w + x) as usize] = 2;
+                    if !map.inside(cx + dx, cy + dy) || ((dx * dx + dy * dy) as f32) > r * r {
+                        continue;
+                    }
+                    let f = &mut self.fog[(y * w + x) as usize];
+                    if Self::sees_on(map, e.x, e.y, (cx + dx) as f32 + 0.5, (cy + dy) as f32 + 0.5, free) {
+                        *f = 2;
+                    } else if *f == 0 {
+                        // Hidden by trees or a hill, but within sight: the
+                        // ground is explored (its forests, its deposits, its
+                        // shape), only what's on it now is unseen.
+                        *f = 1;
                     }
                 }
             }

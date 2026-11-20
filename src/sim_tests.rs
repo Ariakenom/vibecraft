@@ -2520,3 +2520,22 @@ fn the_globe_goes_over_the_poles() {
     assert!(!g.alive(foe) || g.ents[foe as usize].hp < hp, "the archer shot over the pole");
 }
 
+
+/// Ground within a unit's sight is explored even where trees or a hill hide
+/// it: the forest's trees are found and drawn (fog 1), though what stands
+/// among them isn't seen (fog 2) from outside.
+#[test]
+fn forests_are_explored_from_outside() {
+    let mut g = Game::new(3, 1, 2);
+    g.local = 1;
+    let m = &g.map;
+    let flat = |x: i32, y: i32| m.level(x, y) == 0;
+    // A spot among trees with open lowland 5 tiles east.
+    let (ix, iy) = (0..m.h).flat_map(|y| (0..m.w).map(move |x| (x, y))).find(|&(x, y)| m.covered(x, y) && flat(x, y) && !m.covered(x + 5, y) && m.passable(x + 5, y) && flat(x + 5, y)).expect("a forest's edge");
+    let scout = g.spawn_unit(Kind::Archer, 1, ix as f32 + 5.5, iy as f32 + 0.5);
+    assert!(Game::sight_on(&g.map, &g.ents[scout as usize]) > 5.5, "the archer can see that far");
+    g.update_fog();
+    let f = g.fog[g.map.idx(ix, iy)];
+    assert_eq!(f, 1, "the trees 5 tiles in are explored (drawn) but not in sight");
+    assert_eq!(g.fog[g.map.idx(ix + 4, iy)], 2, "next to the archer, in sight");
+}

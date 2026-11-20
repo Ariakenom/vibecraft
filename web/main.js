@@ -1615,7 +1615,7 @@ view.addEventListener("pointerdown", e => {
   if (!running) return;
   view.setPointerCapture(e.pointerId);
   const p = localPos(e); mouse.x = p.x; mouse.y = p.y; mouse.inside = true;
-  if (e.pointerType === "touch") { touch = { x0: p.x, y0: p.y, cx: cam.x, cy: cam.y, moved: false }; return; }
+  if (e.pointerType === "touch") { touch = { x0: p.x, y0: p.y, cx: cam.x, cy: cam.y, yaw: cam.yaw, moved: false }; return; }
   if (e.button === 1) { orbit = { x0: p.x, y0: p.y, yaw: cam.yaw, pitch: cam.pitch }; e.preventDefault(); return; }
   if (e.button === 2) {
     if (placing != null || amode) { placing = null; setAmode(false); return; }
@@ -1639,9 +1639,10 @@ view.addEventListener("pointermove", e => {
     if (Math.hypot(p.x - touch.x0, p.y - touch.y0) > 10) touch.moved = true;
     if (touch.moved) {
       // Drag the map under your finger.
-      const k = cam.dist / view._h * 1.6, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
+      // (From where the drag began, the view turned as it was then.)
+      const k = cam.dist / view._h * 1.6, c = Math.cos(touch.yaw), s = Math.sin(touch.yaw);
       const dx = -(p.x - touch.x0) * k, dy = -(p.y - touch.y0) * k;
-      cam.x = touch.cx + dx * c + dy * s; cam.y = touch.cy - dx * s + dy * c; clampCam();
+      cam.x = touch.cx; cam.y = touch.cy; cam.yaw = touch.yaw; panCam(dx * c + dy * s, -dx * s + dy * c);
     }
     return;
   }
@@ -1849,8 +1850,21 @@ function scrollCamera(dt) {
   }
   if (!dx && !dy) return;
   const v = cam.dist * 1.1 * dt, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
-  cam.x += (dx * c + dy * s) * v;
-  cam.y += (-dx * s + dy * c) * v;
+  panCam((dx * c + dy * s) * v, (-dx * s + dy * c) * v);
+}
+// Move the camera east and south (map tiles, as on the equator). On the
+// Globe toward the poles a tile east is narrower than a tile south (the
+// polar bands), so east goes as much further, to move as far either way;
+// and the camera keeps facing the same way over the ground, not round the
+// pole, as it goes east or west (its yaw turns with the meridians there).
+function panCam(east, south) {
+  if (typeof GLOBE !== "undefined" && GLOBE.on) {
+    globeLat(cam.y);
+    const wide = Math.min(12, GLOBE.k / Math.max(1e-3, GLOBE.c)), dx = east * wide;
+    cam.x += dx;
+    cam.yaw -= dx / MW * 2 * Math.PI * GLOBE.s;
+  } else cam.x += east;
+  cam.y += south;
   clampCam();
 }
 
