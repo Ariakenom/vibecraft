@@ -69,3 +69,5 @@
 1795119569	2026-11-19	1a67b6ae0f083165f89b8bc7f1224c577c77f69b	Merge pull request #69 from Ariakenom/poles
 1795121286	2026-11-19	e86813ee4fd45c2087db8925d99f0c2819197a3d	Begin shows it's making the world; the Globe's map 3x quicker; ragged ice
 1795122630	2026-11-19	1f52cf6a8283a754f33ab6ced1f1a548abe7a73a	Merge pull request #70 from Ariakenom/globe-load
+1795129683	2026-11-20	0bdadde3c2e1b2932b4c1f03d0252fc56f26de38	The Globe's poles: things keep their shape, the camera pans evenly
+1795198112	2026-11-20	613bdc8a43045b0c592e9d673020f7da7cbc0c83	Merge pull request #71 from Ariakenom/explore-trees
