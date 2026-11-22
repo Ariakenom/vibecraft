@@ -574,8 +574,8 @@ versions don't play together.
   it's gone. Lose a producer and you hold more than you make: your newest
   units that need it lose health until it fits again.
 - **People are workers you can see.** A hut gets 2 beds for each
-  different food it receives (up to 3 kinds); bigger houses get 3 for each
-  good past the third (a tower block with 13 goods has 36). While there's a free bed, a
+  different food it receives (up to 3 kinds); bigger houses get 2 for each
+  good too (a tower block with 13 goods has 26). While there's a free bed, a
   newcomer appears in a town square (the one of the Capitol nearest that
   bed's house; faster as the town grows). Workers idle in the town square are free; they walk off
   by themselves to build foundations, work producers and become soldiers.

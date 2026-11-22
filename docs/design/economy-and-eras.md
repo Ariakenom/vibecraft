@@ -88,9 +88,8 @@ person is a **Worker** (or a soldier trained from one). Houses only count
 beds; nobody sits inside them.
 
 - **Houses** give beds. A house's **capacity** is 2 beds for each different
-  house good it receives, and one more for every good past the third (see
-  *House goods*): bigger houses grow more people per good, so people grow
-  more plentiful later rather than scarcer. Total beds = the sum over all
+  house good it receives (see *House goods*): bigger houses use more kinds
+  of goods, so people grow more plentiful later rather than scarcer. Total beds = the sum over all
   houses. Everyone alive holds a bed: workers + soldiers ≤ beds.
 - **The campfire.** Each Capitol has a campfire in front of it with a
   marked circle around it (radius 3) where nothing can be built. (Since
@@ -165,9 +164,10 @@ so on. Each good has an era.
   already had before taking new ones, and takes the newest era's goods
   first (a cottage takes bread before grain, leaving grain to huts). In a
   shortage the furthest houses lose their last good first.
-- Capacity = 2 × goods used, plus 1 for each good past the third
-  (`beds_for`). A hut with 3 goods holds 6 people, a tower block with 13
-  holds 36.
+- Capacity = 2 × goods used (`beds_for`). (Until Nov 2026 also 1 more
+  for each good past the third, which left a third of every town idle.)
+  A hut with 3 goods holds 6 people, a tower block with 13
+  holds 26.
 
 | Tier | House | Max goods | Max residents | Goods that unlock in this era |
 |---|---|---|---|---|

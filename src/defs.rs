@@ -590,12 +590,13 @@ pub fn growth_interval(beds: u32) -> f32 {
 }
 /// Beds a house gives for each different good it gets.
 pub const BEDS_PER_GOOD: u8 = 2;
-/// Beds in a house with this many different goods: `BEDS_PER_GOOD` each,
-/// and one more for every good past the third, so bigger houses grow more
-/// people per good (playtest: people ran short late in the game). A hut
-/// with 3 goods has 6, a cottage with 5 has 12, a tower block with 13, 36.
+/// Beds in a house with this many different goods: `BEDS_PER_GOOD` each.
+/// A hut with 3 goods has 6, a cottage with 5 has 10, a tower block with
+/// 13, 26. (Bigger houses used to get one more bed per good past the third,
+/// 36 in a tower block, but a third of every town then stood idle from the
+/// Medieval era on: Nov 2026, `ai_pace` prints the idle share by era.)
 pub fn beds_for(goods: u32) -> u8 {
-    (goods * BEDS_PER_GOOD as u32 + goods.saturating_sub(3)).min(u8::MAX as u32) as u8
+    (goods * BEDS_PER_GOOD as u32).min(u8::MAX as u32) as u8
 }
 /// How many different goods a house of this tier can use (3 for a hut).
 pub fn house_max_goods(tier: u8) -> u8 {

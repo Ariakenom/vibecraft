@@ -1289,8 +1289,8 @@ fn your_own_units_can_be_disbanded() {
 #[test]
 fn beds_grow_faster_with_more_goods() {
     assert_eq!(beds_for(3), 6);
-    assert_eq!(beds_for(5), 12);
-    assert_eq!(beds_for(13), 36);
+    assert_eq!(beds_for(5), 10);
+    assert_eq!(beds_for(13), 26);
 }
 
 #[test]
@@ -1490,10 +1490,17 @@ fn ai_pace() {
             a.next_attack = 1.0e9;
         }
         let mut at = [[f32::NAN; 6]; 3];
+        // Idle workers and people, summed over each minute spent in each era.
+        let mut idle = [[0u32; 2]; 6];
         for s in 0..minutes * 6 {
             run(&mut g, 10.0);
             for p in 1..=2usize {
                 let e = g.players[p].era as usize;
+                if s % 6 == 5 {
+                    let n = g.own(p as u8).filter(|w| w.kind == Kind::Worker && w.order == Order::Idle && w.aboard == 0).count() as u32;
+                    idle[e][0] += n;
+                    idle[e][1] += g.players[p].people;
+                }
                 for k in 1..=e {
                     if at[p][k].is_nan() {
                         at[p][k] = (s + 1) as f32 / 6.0;
@@ -1501,7 +1508,7 @@ fn ai_pace() {
                 }
             }
         }
-        (seed, at, [g.players[1].people, g.players[2].people])
+        (seed, at, [g.players[1].people, g.players[2].people], idle)
     };
     let mut results = Vec::new();
     let all: Vec<u32> = (first..first + seeds).collect();
@@ -1511,7 +1518,14 @@ fn ai_pace() {
     }
     let mut score = 0.0;
     let mut times: Vec<Vec<f32>> = vec![Vec::new(); 6];
-    for (seed, at, people) in &results {
+    let mut idle = [[0u32; 2]; 6];
+    for (_, _, _, i) in &results {
+        for e in 0..6 {
+            idle[e][0] += i[e][0];
+            idle[e][1] += i[e][1];
+        }
+    }
+    for (seed, at, people, _) in &results {
         let f = |p: usize| (1..=5).map(|e| if at[p][e].is_nan() { "  -  ".to_string() } else { format!("{:5.1}", at[p][e]) }).collect::<Vec<_>>().join(" ");
         println!("seed {seed:2}: P1 {} ({} people) | P2 {} ({} people)", f(1), people[0], f(2), people[1]);
         for p in 1..=2 {
@@ -1531,6 +1545,9 @@ fn ai_pace() {
         let med = if v.is_empty() { f32::NAN } else { v[v.len() / 2] };
         println!("era {e}: {:2} of {n} reached it, median {med:.1} min", v.len());
     }
+    // Share of the people standing idle (not at work, not soldiers), by era.
+    let share = |e: usize| if idle[e][1] == 0 { "-".to_string() } else { format!("{:.0}%", 100.0 * idle[e][0] as f32 / idle[e][1] as f32) };
+    println!("idle by era: {}", (0..6).map(share).collect::<Vec<_>>().join(" "));
     println!("score {score:.0} (lower is better)");
 }
 
