@@ -52,7 +52,7 @@ const NAMES = { [K.Worker]: "Worker", [K.Hut]: "Hut", [K.Spearman]: "Spearman", 
   [K.Galleon]: "Galleon", [K.Ironclad]: "Ironclad", [K.Destroyer]: "Destroyer", [K.Submarine]: "Submarine", [K.NuclearSub]: "Nuclear Submarine", [K.Carrier]: "Aircraft Carrier", [K.Whaler]: "Whaler" };
 const DESC = {
   [K.Worker]: "Works at producers, builds (and then works at what they built, if it needs a crew), or waits in the town square. Free workers go where they're needed by themselves; training a soldier turns one into the soldier. Workers fight badly and fall quickly: keep them out of battles.",
-  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses get 3 beds for each good past the third.",
+  [K.Hut]: "A home. It gets 2 beds for each different food it receives, up to 3 kinds (6 people). Full, with all 3, you can upgrade it to a Cottage (1 more wood and 1 stone). Bigger houses use more kinds of goods.",
   [K.Cottage]: "A bigger home, grown from a full hut with 3 goods. It can use up to 5 goods, Medieval ones too (12 people). Ten cottages bring the Medieval era. Full, with 5 goods, you can upgrade it to a Townhouse from the Medieval era (1 more stone and 2 brick).",
   [K.Townhouse]: "A brick townhouse, grown from a full cottage with 5 goods. It uses up to 7 goods, Gunpowder ones too (18 people). Ten bring the Gunpowder era. Full, with 7 goods, you can upgrade it to a Tenement from the Gunpowder era (2 more brick).",
   [K.Tenement]: "A tall tenement block, grown from a full townhouse with 7 goods. It uses up to 9 goods, Industrial ones too (24 people). Ten bring the Industrial era. Full, with 9 goods, you can upgrade it to an Apartment Block from the Industrial era (2 steel).",
@@ -963,7 +963,7 @@ function renderPeopleTip(tip) {
   html += line("Beds", beds);
   html += all < beds
     ? `<p>There are free beds: someone new turns up in the town square every ${W.people(5) ? `few` : ""} seconds, sooner in a bigger town.</p>`
-    : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of goods: each kind is 2 more beds in every house that gets it (3 past the third).</p>`;
+    : `<p class="bad">Every bed is taken. Build a Hut and give your houses more kinds of goods: each kind is 2 more beds in every house that gets it.</p>`;
   html += `<p class="note">Free workers go to work, build and enlist by themselves. Training a soldier takes one from the town square.</p>`;
   tip.innerHTML = html;
   const chip = topBar.pop.getBoundingClientRect(), app = $("app").getBoundingClientRect();
