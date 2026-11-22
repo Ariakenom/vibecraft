@@ -71,3 +71,5 @@
 1795122630	2026-11-19	1f52cf6a8283a754f33ab6ced1f1a548abe7a73a	Merge pull request #70 from Ariakenom/globe-load
 1795129683	2026-11-20	0bdadde3c2e1b2932b4c1f03d0252fc56f26de38	The Globe's poles: things keep their shape, the camera pans evenly
 1795198112	2026-11-20	613bdc8a43045b0c592e9d673020f7da7cbc0c83	Merge pull request #71 from Ariakenom/explore-trees
+1795374965	2026-11-22	bec978ca075f73fa2970c94bb020c875b4ad3f27	Houses get 2 beds per good, no extra past the third
+1795377248	2026-11-22	680700d5e147f18cfef82cc82f6a151c333aba5a	Merge pull request #72 from Ariakenom/fewer-beds
