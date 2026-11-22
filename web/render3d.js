@@ -3098,12 +3098,11 @@ function updateNukes(now, alpha = 0) {
     // over a straight line from the silo's ground to the target's: following
     // the ground under it made it shake over every hill.
     const p = Math.max(0, W.nuke_info(k, 4) - (1 - alpha) * TICK_S / NUKE_FLIGHT_S);
-    const g0 = groundAt(sx, sy), g1 = groundAt(tx, ty);
-    const H = 10, at = q => [sx + (tx - sx) * q, sy + (ty - sy) * q, g0 + (g1 - g0) * q + 4 * H * q * (1 - q)];
-    const [x, y, h] = at(p), [x2, y2, h2] = at(Math.min(1, p + 0.01));
+    const at = nukePath(sx, sy, tx, ty);
+    const [x, y, h] = at(p), next = at(Math.min(1, p + 0.01));
     mesh.position.set(x, h, y);
     // Point it along its flight.
-    const dir = new THREE.Vector3(x2 - x, h2 - h, y2 - y).normalize();
+    const dir = flightDir([x, y, h], next, new THREE.Vector3());
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
     ring.position.set(tx, groundAt(tx, ty) + 0.08, ty);
     ring.material.opacity = 0.45 + 0.35 * Math.sin(now * 0.012);
@@ -3120,7 +3119,8 @@ function updateNukes(now, alpha = 0) {
       R3.shotAt.set(`${tx},${ty}`, hit);
       // Fast off the rail, a little bowed upward.
       const v = u * (0.6 + 0.4 * u);
-      const mp = q => [ax + (hit[0] - ax) * q, ay + (hit[1] - ay) * q, a0 + (hit[2] - a0) * q + 2 * q * (1 - q)];
+      const hx = ax + wrapDX(hit[0] - ax);
+      const mp = q => [ax + (hx - ax) * q, ay + (hit[1] - ay) * q, a0 + (hit[2] - a0) * q + 2 * q * (1 - q)];
       const [mx, my, mh] = mp(v), [mx2, my2, mh2] = mp(Math.min(1, v + 0.02));
       im.visible = true;
       im.position.set(mx, mh, my);
@@ -3161,6 +3161,60 @@ function updateNukes(now, alpha = 0) {
     return true;
   });
 }
+// A nuke's flight from the silo at (sx, sy) to (tx, ty): where it is `q`
+// of the way, as flat [x, z, height]. A straight line on the flat maps (over
+// a straight line from the silo's ground to the target's: following the
+// ground under it made it shake over every hill), arcing `H` high. On the
+// Globe it flies the great circle, the shortest way round the ball (over a
+// pole or across the 180° seam where that's shorter), and the arc is `H`
+// high as drawn at any latitude (a flat height is drawn `G.k` times as tall).
+function nukePath(sx, sy, tx, ty) {
+  const g0 = groundAt(sx, sy), g1 = groundAt(tx, ty), H = 10;
+  const lift = q => g0 + (g1 - g0) * q;
+  if (!GLOBE.on) return q => [sx + (tx - sx) * q, sy + (ty - sy) * q, lift(q) + 4 * H * q * (1 - q)];
+  const a = globeUnit(sx, sy), b = globeUnit(tx, ty);
+  const w = Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+  // Higher for a longer flight, as a real one is (10 for a short hop, about
+  // 30 across half the world).
+  const top = H + 20 * w / Math.PI;
+  return q => {
+    const [x, z] = w < 1e-5 ? [sx + wrapDX(tx - sx) * q, sy + (ty - sy) * q] : globeSlerp(a, b, w, q);
+    globeLat(z);
+    return [x, z, lift(q) + 4 * top * q * (1 - q) / Math.max(0.2, GLOBE.k)];
+  };
+}
+// The unit vector of flat (x, z) on the ball (as `globeBend`'s d).
+function globeUnit(x, z) {
+  const lon = (x / MW - 0.5) * 2 * Math.PI, lat = globeLatOf(z);
+  return [Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon)];
+}
+// `q` of the way from unit vector a to b (`w` radians apart) round the ball,
+// back to flat [x, z].
+function globeSlerp(a, b, w, q) {
+  const sw = Math.sin(w), fa = Math.sin((1 - q) * w) / sw, fb = Math.sin(q * w) / sw;
+  const dx = a[0] * fa + b[0] * fb, dy = a[1] * fa + b[1] * fb, dz = a[2] * fa + b[2] * fb;
+  const lat = Math.asin(Math.max(-1, Math.min(1, dy / Math.hypot(dx, dy, dz))));
+  const x = ((Math.atan2(dx, dz) / (2 * Math.PI) + 0.5) * MW + MW) % MW;
+  return [x, globeZOf(lat)];
+}
+// Which way something flying from flat [x, z, h] to [x2, z2, h2] heads, as
+// a direction in the flat world's east, up and south at the first point
+// (into `out`). On the Globe, worked out on the ball: a flat difference
+// points wrong in the polar bands, where columns narrow faster than rows,
+// and over a pole, where x jumps half the world.
+function flightDir([x, z, h], [x2, z2, h2], out) {
+  if (!GLOBE.on) return out.set(x2 - x, h2 - h, z2 - z).normalize();
+  const G = GLOBE, on = (x, z, h) => { globeLat(z); const u = globeUnit(x, z), r = G.R + h * G.k; return [u[0] * r, u[1] * r, u[2] * r]; };
+  const b = on(x2, z2, h2), a = on(x, z, h);
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const lon = (x / MW - 0.5) * 2 * Math.PI, c = G.c, s = G.s, sl = Math.sin(lon), cl = Math.cos(lon);
+  return out.set(d[0] * cl - d[2] * sl, d[0] * c * sl + d[1] * s + d[2] * c * cl, d[0] * s * sl - d[1] * c + d[2] * s * cl).normalize();
+}
+// An east-west difference the short way round on the Globe.
+function wrapDX(d) {
+  return GLOBE.on && Math.abs(d) > MW / 2 ? d - Math.sign(d) * MW : d;
+}
+
 // Aiming a nuke: a ring under the pointer as wide as the blast, and the
 // cover of every enemy air defense in sight (a nuke falling inside one is
 // shot down). A selected air defense of your own shows its cover too.

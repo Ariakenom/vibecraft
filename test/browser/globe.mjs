@@ -52,6 +52,35 @@ const picks = await pg.evaluate(() => {
   return { worst, n };
 });
 check(picks.n > 150 && picks.worst < 0.05, `the pointer picks where it points (${picks.n} spots, worst ${picks.worst.toFixed(3)} tiles off)`);
+// A nuke flies the great circle, the shortest way round the ball: 150
+// columns east of its silo at the same latitude, it never goes further
+// round than that (nor the long way over the seam), and halfway it's
+// nearer the pole than either end.
+const nuke = await pg.evaluate(() => {
+  newGame(3, 0, 2, 4); $("startScreen").hidden = true; running = false;
+  W.debug_set_era(5); readWorld();
+  let hx = 0, hy = 0;
+  for (let i = 0; i < entCount; i++) if (E(i, F.kind) === K.Capitol && E(i, F.owner) === ME) { hx = E(i, F.x); hy = E(i, F.y); }
+  const id = W.debug_spawn(K.MissileSilo, (hx | 0) + 6, (hy | 0) + 6);
+  W.debug_set_nuke(id, 2); readWorld();
+  const sx = (hx | 0) + 7.5, sy = (hy | 0) + 7.5, tx = (sx + 150) % MW;
+  aimSilo = [id]; amode = true; launchAt({ x: tx, y: sy });
+  const lat = z => Math.abs(globeLatOf(z)), out = { flew: 0, furthest: 0, mid: 0, ends: lat(sy), finite: true };
+  for (let t = 0; t < 30 * 20 && W.nuke_count(); t++) {
+    W.tick(); handleEvents(); readWorld(); updateNukes(performance.now(), 1);
+    if (!W.nuke_count()) break;
+    const m = R3.nukeMesh[0].position, q = W.nuke_info(0, 4);
+    if (![m.x, m.y, m.z].every(Number.isFinite)) out.finite = false;
+    let d = m.x - sx; d -= Math.round(d / MW) * MW;
+    out.furthest = Math.max(out.furthest, Math.abs(d));
+    if (Math.abs(q - 0.5) < 0.01) out.mid = lat(m.z);
+    out.flew++;
+  }
+  return out;
+});
+check(nuke.flew > 100 && nuke.finite, `a nuke flies on the Globe (${nuke.flew} ticks)`);
+check(nuke.furthest <= 150.5, `it goes no further round than its target (${nuke.furthest.toFixed(1)} columns)`);
+check(nuke.mid > nuke.ends + 0.02, `halfway it's nearer the pole: a great circle (${(nuke.mid * 57.3).toFixed(1)}° against ${(nuke.ends * 57.3).toFixed(1)}° at the ends)`);
 check(pg.errors.length === 0, "no page errors");
 await b.close();
 process.exit(failed() ? 1 : 0);
