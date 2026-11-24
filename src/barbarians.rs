@@ -268,7 +268,8 @@ mod perf {
     #[ignore]
     fn diag_frontier_time() {
         let env = |k: &str, d: u32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
-        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, 2, crate::map_frontier::Size::Large);
+        let size = crate::map_frontier::Size::of_mode(env("VC_MODE", 2)).unwrap_or(crate::map_frontier::Size::Large);
+        let mut g = Game::new_frontier(env("VC_SEED", 7), 1, 2, size);
         for p in g.seat_ids() {
             g.set_ai(p, true);
         }

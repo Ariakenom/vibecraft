@@ -1369,7 +1369,12 @@ impl Game {
         for (radius, n) in [(24.0f32, 10), (33.0, 14)] {
             for k in 0..n {
                 let a = k as f32 / n as f32 * std::f32::consts::TAU;
-                legs.push((if self.map.wrap { crate::map::wrap_x(c.home.0 + a.cos() * radius) } else { (c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0) }, (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0)));
+                legs.push(if self.map.wrap {
+                    let (x, y, _) = crate::map::travel(c.home.0, c.home.1, a.cos() * radius, a.sin() * radius);
+                    (x, y)
+                } else {
+                    ((c.home.0 + a.cos() * radius).clamp(4.0, w - 5.0), (c.home.1 + a.sin() * radius).clamp(4.0, h - 5.0))
+                });
             }
         }
         let ai = &self.ais[me as usize];
@@ -1508,7 +1513,7 @@ impl Game {
                     self.order_attack_move(id, tx, ty);
                 }
                 // First gather a third of the way there, then go together.
-                let (gx, gy) = { let (dx, dy) = delta(bx, by, tx, ty); let (x, y, _) = crate::map::wrap_pos(bx + dx * 0.3, by + dy * 0.3); (x, y) };
+                let (gx, gy) = { let (dx, dy) = delta(bx, by, tx, ty); let (x, y, _) = crate::map::travel(bx, by, dx * 0.3, dy * 0.3); (x, y) };
                 let spots = formation_around(c.army.len(), gx, gy);
                 for (&id, &(x, y)) in c.army.iter().zip(&spots) {
                     self.order_move(id, x, y);

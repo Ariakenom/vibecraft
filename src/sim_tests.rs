@@ -2317,56 +2317,96 @@ fn the_whole_town_square_is_walkable() {
     }
 }
 
-/// The Globe goes round: walking, sailing and shooting all go across the
-/// line where the map's east and west edges meet, the short way, and
-/// nothing jumps when it does.
+/// The Globe is a cube's faces (cube.rs): walking goes across every seam
+/// the short way, in either direction, and nothing jumps when it does; an
+/// archer shoots across one; and units pushed together across one are
+/// pushed apart.
 #[test]
-fn the_globe_goes_round() {
-    use crate::map::{wx, GRASS, WATER};
+fn the_globe_cube_seams() {
+    use crate::cube::{self, N};
+    use crate::map::{pdist, wrap_pos, GRASS};
     let mut g = Game::new_frontier(3, 1, 2, crate::map_frontier::Size::Globe);
     assert!(g.map.wrap);
-    let w = g.map.w;
-    // A row of land across the line, and one of open sea (any seed: the
-    // Bering Strait's two shores and the Pacific).
-    let across = |g: &Game, t: u8| (2..g.map.h - 2).find(|&y| (-6..6).all(|x| g.map.terrain[g.map.idx(x, y)] == t && g.map.bld_at[g.map.idx(x, y)] < 0 && g.map.dep_at[g.map.idx(x, y)] < 0));
-    let land = across(&g, GRASS).expect("no land across the line");
-    let sea = across(&g, WATER).expect("no sea across the line");
     for p in g.seat_ids() {
         g.set_ai(p, false);
     }
-    let wf = w as f32;
-
-    // A worker walks from just west of the line to just east of it.
-    let walker = g.spawn_unit(Kind::Worker, 1, wf - 4.5, land as f32 + 0.5);
-    g.order_move(walker, 3.5, land as f32 + 0.5);
-    // A galley sails the other way.
-    let boat = g.spawn_unit(Kind::Galley, 1, 4.5, sea as f32 + 0.5);
-    g.order_move(boat, wf - 3.5, sea as f32 + 0.5);
-    let mut last = [(g.ents[walker as usize].x, 0.0f32), (g.ents[boat as usize].x, 0.0)];
-    for _ in 0..(8.0 * 20.0) as u32 {
-        g.tick();
-        g.events.clear();
-        for (k, id) in [walker, boat].into_iter().enumerate() {
-            let x = g.ents[id as usize].x;
-            assert!((0.0..wf).contains(&x), "x {x} off the map");
-            assert!(wx(x - last[k].0).abs() < 0.3, "a jump from {} to {x}", last[k].0);
-            last[k] = (x, last[k].1 + wx(x - last[k].0));
+    // Open grass everywhere but under buildings.
+    for i in 0..g.map.terrain.len() {
+        if g.map.real(i) {
+            g.map.terrain[i] = GRASS;
+            g.map.blocked[i] = g.map.bld_at[i] >= 0;
         }
     }
-    let (e, b) = (&g.ents[walker as usize], &g.ents[boat as usize]);
-    assert!(wx(e.x - 3.5).abs() < 0.6, "the walker is at {} (east {:.1})", e.x, last[0].1);
-    assert!(last[0].1 > 7.0 && last[0].1 < 9.0, "the walker went {:.1} east, not 8 the short way", last[0].1);
-    assert!(wx(b.x - (wf - 3.5)).abs() < 0.6, "the boat is at {} (east {:.1})", b.x, last[1].1);
-    assert!(last[1].1 < -7.0 && last[1].1 > -9.0, "the boat went {:.1} east, not 8 west the short way", last[1].1);
+    g.map.relabel_land();
+    let clear = |g: &Game, x: f32, y: f32| (-3..=3).all(|dy| (-3..=3).all(|dx| g.map.bld_at[g.map.idx(x as i32 + dx, y as i32 + dy)] < 0));
+    let mut crossed = 0;
+    for face in 0..6 {
+        let (fx, fy) = ((face % 3) as f32 * N as f32, if face < 3 { 0.0 } else { (N + cube::GAP) as f32 });
+        for side in 0..4 {
+            for along in [0.5f32, 0.2] {
+                // Six tiles in from the side, and six past it.
+                let a = along * N as f32;
+                let (ix, iy, ox, oy) = match side {
+                    0 => (fx + 6.5, fy + a, fx - 5.5, fy + a),
+                    1 => (fx + N as f32 - 6.5, fy + a, fx + N as f32 + 5.5, fy + a),
+                    2 => (fx + a, fy + 6.5, fx + a, fy - 5.5),
+                    _ => (fx + a, fy + N as f32 - 6.5, fx + a, fy + N as f32 + 5.5),
+                };
+                let (tx, ty, _) = wrap_pos(ox, oy);
+                // (Only the seams: sides the atlas joins are plain ground.)
+                if cube::face_of(tx, ty) == cube::face_of(ox.clamp(0.0, 479.0), oy) || !clear(&g, ix, iy) || !clear(&g, tx, ty) {
+                    continue;
+                }
+                assert!((pdist(ix, iy, tx, ty) - 12.0).abs() < 0.01, "face {face} side {side}: {} apart", pdist(ix, iy, tx, ty));
+                let walker = g.spawn_unit(Kind::Worker, 1, ix, iy);
+                g.order_move(walker, tx, ty);
+                let (mut was, mut walked) = ((ix, iy), 0.0);
+                for _ in 0..(12.0 * 20.0) as u32 {
+                    g.tick();
+                    g.events.clear();
+                    let e = &g.ents[walker as usize];
+                    assert!(cube::face_of(e.x, e.y).is_some(), "off the faces at {}, {}", e.x, e.y);
+                    let step = pdist(was.0, was.1, e.x, e.y);
+                    assert!(step < 0.3, "face {face} side {side}: a jump from {was:?} to {}, {}", e.x, e.y);
+                    walked += step;
+                    was = (e.x, e.y);
+                }
+                let e = &g.ents[walker as usize];
+                assert!(pdist(e.x, e.y, tx, ty) < 0.8, "face {face} side {side}: the walker is at {}, {} not {tx}, {ty}", e.x, e.y);
+                assert!(walked < 14.0, "face {face} side {side}: walked {walked:.1} tiles, not 12 over the seam");
+                g.ents[walker as usize].hp = 0.0;
+                g.tick();
+                crossed += 1;
+            }
+        }
+    }
+    // 8 seams, each from both its faces, at two places along it.
+    assert_eq!(crossed, 32, "seams crossed");
 
-    // An archer shoots a spearman across the line, four tiles off.
-    let archer = g.spawn_unit(Kind::Archer, 1, wf - 1.5, land as f32 + 0.5);
-    let foe = g.spawn_unit(Kind::Spearman, 2, 2.5, land as f32 + 0.5);
+    // An archer shoots a spearman across the seam above face 0, five
+    // tiles off.
+    let (ax, ay) = (80.5, 2.5);
+    let (sx, sy, _) = wrap_pos(80.5, -2.5);
+    let archer = g.spawn_unit(Kind::Archer, 1, ax, ay);
+    let foe = g.spawn_unit(Kind::Spearman, 2, sx, sy);
     let hp = g.ents[foe as usize].hp;
     g.ents[foe as usize].order = crate::game::Order::Idle;
     run(&mut g, 4.0);
-    assert!(g.ents[foe as usize].hp < hp || !g.ents[foe as usize].alive, "no shot across the line");
+    assert!(g.ents[foe as usize].hp < hp || !g.ents[foe as usize].alive, "no shot across the seam");
     assert!(g.ents[archer as usize].alive);
+    g.ents[archer as usize].hp = 0.0;
+    g.ents[foe as usize].hp = 0.0;
+    g.tick();
+
+    // Two workers standing on the same spot, either side of the seam to
+    // the left of face 1's strip end: they're pushed apart, both ways.
+    let (bx, by, _) = wrap_pos(-0.05, 60.5);
+    let a = g.spawn_unit(Kind::Worker, 1, 0.05, 60.5);
+    let b = g.spawn_unit(Kind::Worker, 1, bx, by);
+    run(&mut g, 1.0);
+    let (ea, eb) = (&g.ents[a as usize], &g.ents[b as usize]);
+    let d = pdist(ea.x, ea.y, eb.x, eb.y);
+    assert!(d > 0.3 && d < 3.0, "pushed {d} apart");
 }
 
 /// Hills and forests: sheep graze on hills; on a hill a unit sees and
@@ -2455,7 +2495,7 @@ fn mountains_stand_in_hills_and_see_furthest() {
     use crate::map_frontier::{generate_frontier, Size};
     use crate::map_world::{generate_world, Shape};
     let ringed = |m: &Map| {
-        (0..m.h).all(|y| (0..m.w).all(|x| m.terrain[m.idx(x, y)] != MOUNTAIN || (-1..=1).all(|dy| (-1..=1).all(|dx| matches!(m.terrain[m.idx(x + dx, y + dy)], HILL | MOUNTAIN)))))
+        (0..m.h).all(|y| (0..m.w).all(|x| !m.real(m.idx(x, y)) || (y * m.w + x) as usize != m.idx(x, y) || m.terrain[m.idx(x, y)] != MOUNTAIN || (-1..=1).all(|dy| (-1..=1).all(|dx| matches!(m.terrain[m.idx(x + dx, y + dy)], HILL | MOUNTAIN)))))
     };
     let count = |m: &Map| m.terrain.iter().filter(|&&t| t == MOUNTAIN).count();
     let mut found = [0usize; 3];
@@ -2490,53 +2530,6 @@ fn mountains_stand_in_hills_and_see_furthest() {
     }
     panic!("no skirmish map with a mountaintop beside a hilltop in 40 seeds");
 }
-
-/// Over the North Pole on the Globe: a worker sent from one side of the
-/// pole to the other, half the world round, walks over the top (a short
-/// way, not round the world), never leaves the map, and arrives; and an
-/// archer by the pole shoots a spearman on the far side of it.
-#[test]
-fn the_globe_goes_over_the_poles() {
-    use crate::map::{pdist, ICE};
-    let mut g = Game::new_frontier(3, 1, 2, crate::map_frontier::Size::Globe);
-    for p in g.seat_ids() {
-        g.set_ai(p, false);
-    }
-    let (w, h) = (g.map.w as f32, g.map.h as f32);
-    assert_eq!(g.map.terrain[g.map.idx(10, 1)], ICE, "ice by the North Pole");
-    // Ten rows from the pole, and the same row half the world round.
-    let (x0, y0) = (100.5, 10.5);
-    let (x1, y1) = (x0 + w / 2.0, 10.5);
-    assert!((pdist(x0, y0, x1, y1) - 21.0).abs() < 0.01, "over the pole it's 21 tiles");
-    let walker = g.spawn_unit(Kind::Worker, 1, x0, y0);
-    g.order_move(walker, x1, y1);
-    let (mut was, mut walked, mut crossed) = ((x0, y0), 0.0, false);
-    for _ in 0..(40.0 * 20.0) as u32 {
-        g.tick();
-        g.events.clear();
-        let e = &g.ents[walker as usize];
-        assert!((0.0..w).contains(&e.x) && (0.0..=h).contains(&e.y), "off the map at {}, {}", e.x, e.y);
-        let step = pdist(was.0, was.1, e.x, e.y);
-        assert!(step < 0.3, "a jump from {was:?} to {}, {}", e.x, e.y);
-        walked += step;
-        crossed |= (e.x - x1).abs() < 40.0;
-        was = (e.x, e.y);
-    }
-    let e = &g.ents[walker as usize];
-    assert!(crossed && pdist(e.x, e.y, x1, y1) < 0.8, "the walker is at {}, {}", e.x, e.y);
-    assert!(walked < 30.0, "it walked {walked:.1} tiles, not over the pole");
-
-    // An archer three tiles from the pole shoots a spearman three tiles past it.
-    let archer = g.spawn_unit(Kind::Archer, 1, 200.5, 3.0);
-    let foe = g.spawn_unit(Kind::Spearman, 2, 200.5 + w / 2.0, 3.0);
-    let hp = g.ents[foe as usize].hp;
-    for _ in 0..(6.0 * 20.0) as u32 {
-        g.tick();
-        g.events.clear();
-    }
-    assert!(!g.alive(foe) || g.ents[foe as usize].hp < hp, "the archer shot over the pole");
-}
-
 
 /// Ground within a unit's sight is explored even where trees or a hill hide
 /// it: the forest's trees are found and drawn (fog 1), though what stands

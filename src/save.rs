@@ -418,6 +418,11 @@ impl Game {
         if !(8..=MAX_SIDE).contains(&mw) || !(8..=MAX_SIDE).contains(&mh) {
             return None;
         }
+        // (The Globe was a Mercator map 640 by 492 until Nov 2026, now a
+        // cube's faces: its old saves can't be played on the new one.)
+        if (mw, mh) == (640, 492) {
+            return None;
+        }
         let n = (mw * mh) as usize;
         let terrain = r.take(n)?.to_vec();
         let shade = r.take(n)?.to_vec();

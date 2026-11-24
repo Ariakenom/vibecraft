@@ -134,8 +134,7 @@ impl Pathfinder {
         let stamp = self.generation;
         self.heap.clear();
         let w = map.w;
-        let sx = if map.wrap { map.tile_x(sx.floor() as i32) } else { (sx.floor() as i32).clamp(0, w - 1) };
-        let sy = (sy.floor() as i32).clamp(0, map.h - 1);
+        let (sx, sy) = if map.wrap { map.tile_on(sx.floor() as i32, sy.floor() as i32) } else { ((sx.floor() as i32).clamp(0, w - 1), (sy.floor() as i32).clamp(0, map.h - 1)) };
         let start = map.idx(sx, sy) as u32;
         let center = |x: i32, y: i32| (x as f32 + 0.5, y as f32 + 0.5);
         let h_of = |x: i32, y: i32| {
