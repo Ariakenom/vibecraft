@@ -23,7 +23,7 @@
 
 use crate::defs::*;
 use crate::game::*;
-use crate::map::{delta, pdist, wx};
+use crate::map::{delta, pdist};
 
 /// Half the side of the town square round a Capitol's statue (tiles): it
 /// covers the 5x5 tiles centred on the Capitol, and nothing else may be
@@ -37,7 +37,8 @@ pub const AT_WORK: f32 = 1.0;
 
 /// Is (x, y) within `r` of (cx, cy) along both x and y?
 pub fn within_square(x: f32, y: f32, cx: f32, cy: f32, r: f32) -> bool {
-    wx(x - cx).abs() <= r && (y - cy).abs() <= r
+    let (dx, dy) = delta(cx, cy, x, y);
+    dx.abs() <= r && dy.abs() <= r
 }
 
 /// Who's waiting for people at a building, worked out for `recruit`.
@@ -509,7 +510,15 @@ impl Game {
     /// `houses_by_distance`.
     fn by_distance(&self, houses: &[usize], caps: &[usize]) -> Vec<usize> {
         let caps: Vec<(i32, i32)> = caps.iter().map(|&c| (self.ents[c].tx, self.ents[c].ty)).collect();
-        let near = |e: &Entity| caps.iter().map(|&(cx, cy)| (wx((e.tx - cx) as f32) as i32).pow(2) + (e.ty - cy).pow(2)).min().unwrap_or(0);
+        let near = |e: &Entity| {
+            caps.iter()
+                .map(|&(cx, cy)| {
+                    let (dx, dy) = delta(cx as f32, cy as f32, e.tx as f32, e.ty as f32);
+                    (dx.round() as i32).pow(2) + (dy.round() as i32).pow(2)
+                })
+                .min()
+                .unwrap_or(0)
+        };
         let mut hs: Vec<(i32, usize)> = houses.iter().map(|&i| (near(&self.ents[i]), i)).collect();
         hs.sort();
         hs.into_iter().map(|(_, i)| i).collect()

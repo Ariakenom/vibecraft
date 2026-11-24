@@ -6,7 +6,7 @@
 
 use crate::ai::Ai;
 use crate::defs::*;
-use crate::map::{self, delta, pdist, wrap_pos, wx, Deposit, Map};
+use crate::map::{self, delta, delta_turn, pdist, wrap_pos, Deposit, Map};
 use crate::path::{Goal, Pathfinder};
 use crate::people::*;
 
@@ -213,6 +213,12 @@ pub struct Entity {
     pub fuel: f32,
     /// Aircraft: shots left (see `air_ammo`). Saved.
     pub ammo: u8,
+}
+
+/// A heading after `k` quarter turns (over a seam of the Globe: `wrap_pos`).
+#[inline]
+pub fn turned(facing: f32, k: crate::cube::Turn) -> f32 {
+    if k == 0 { facing } else { facing + k as f32 * std::f32::consts::FRAC_PI_2 }
 }
 
 /// A nuke in flight, from the silo at (sx, sy) to (x, y). Everyone sees it.
@@ -951,7 +957,9 @@ impl Game {
                     let d = pdist(px, py, cx, cy).powi(2);
                     if d < bd {
                         bd = d;
-                        best = Some((self.map.tile_x(x) as f32 + 0.5, cy));
+                        let (bx, by) = self.map.tile_on(x, y);
+                        best = Some((bx as f32 + 0.5, by as f32 + 0.5));
+                        let _ = cy;
                     }
                 }
             }
@@ -1100,37 +1108,25 @@ impl Game {
         }
     }
 
-    /// Calls `f` for every unit id in grid cells overlapping a circle. (Near
-    /// a pole, the circle's part past it is looked up over it, on the far
-    /// side: `map::wrap_pos`.)
+    /// Calls `f` for every unit id in grid cells overlapping a circle. (On
+    /// the Globe, the circle's part past a seam is looked up on the face
+    /// beyond: `cube::seam_images`. A unit may come twice.)
     fn units_near(&self, x: f32, y: f32, r: f32, mut f: impl FnMut(u32)) {
         self.units_near_cells(x, y, r, &mut f);
         if self.map.wrap {
-            let (w, h) = (self.map.w as f32, self.map.h as f32);
-            if y - r < 0.0 {
-                self.units_near_cells(map::wrap_x(x + w * 0.5), -y, r, &mut f);
-            }
-            if y + r > h {
-                self.units_near_cells(map::wrap_x(x + w * 0.5), 2.0 * h - y, r, &mut f);
+            for (ix, iy) in crate::cube::seam_images(x, y, r) {
+                self.units_near_cells(ix, iy, r, &mut f);
             }
         }
     }
     fn units_near_cells(&self, x: f32, y: f32, r: f32, f: &mut impl FnMut(u32)) {
         let cw = self.map.w / CELL + 1;
         let ch = self.map.h / CELL + 1;
-        // (Round the world: the cells past an edge are those at the other.)
-        let wrap = self.map.wrap && self.map.w % CELL == 0;
-        let (c0x, c1x) = if wrap {
-            ((x - r).floor() as i32).div_euclid(CELL)..=((x + r).floor() as i32).div_euclid(CELL)
-        } else {
-            (((x - r) as i32) / CELL).clamp(0, cw - 1)..=(((x + r) as i32) / CELL).clamp(0, cw - 1)
-        }
-        .into_inner();
-        let c0y = (((y - r) as i32) / CELL).clamp(0, ch - 1);
-        let c1y = (((y + r) as i32) / CELL).clamp(0, ch - 1);
+        let cell = |v: f32, n: i32| ((v.floor() as i32).div_euclid(CELL)).clamp(0, n - 1);
+        let (c0x, c1x) = (cell(x - r, cw), cell(x + r, cw));
+        let (c0y, c1y) = (cell(y - r, ch), cell(y + r, ch));
         for cy in c0y..=c1y {
-            for cx in c0x..=if wrap { c1x.min(c0x + cw - 2) } else { c1x } {
-                let cx = if wrap { cx.rem_euclid(cw - 1) } else { cx };
+            for cx in c0x..=c1x {
                 for &id in &self.grid[(cy * cw + cx) as usize] {
                     f(id);
                 }
@@ -1186,7 +1182,8 @@ impl Game {
         let (cx, cy) = (x.floor() as i32, y.floor() as i32);
         let mut near: Vec<u32> = Vec::new();
         let (x0, x1) = if self.map.wrap { (cx - r, cx + r) } else { ((cx - r).max(0), (cx + r).min(self.map.w - 1)) };
-        for ty in (cy - r).max(0)..=(cy + r).min(self.map.h - 1) {
+        let (y0, y1) = if self.map.wrap { (cy - r, cy + r) } else { ((cy - r).max(0), (cy + r).min(self.map.h - 1)) };
+        for ty in y0..=y1 {
             for tx in x0..=x1 {
                 let b = self.map.bld_at[self.map.idx(tx, ty)];
                 if b >= 0 && near.last() != Some(&(b as u32)) {
@@ -1311,21 +1308,18 @@ impl Game {
             self.frontier_tick();
         }
         self.check_victory();
-        // Round the world and over the poles: everything back onto the map,
-        // whichever way it went over an edge this tick. (Over a pole, a
-        // heading north turns into one south: `wrap_pos`.)
+        // On the Globe: everything back onto a face, whichever way it went
+        // over a seam this tick. (A heading turns with the ground: `wrap_pos`.)
         if self.map.wrap {
             for e in self.ents.iter_mut().filter(|e| e.alive) {
-                let (x, y, over) = wrap_pos(e.x, e.y);
+                let (x, y, k) = wrap_pos(e.x, e.y);
                 (e.x, e.y) = (x, y);
-                if over {
-                    e.facing = -e.facing;
-                }
+                e.facing = turned(e.facing, k);
             }
             for p in self.proj.iter_mut() {
-                let (x, y, over) = wrap_pos(p.x, p.y);
+                let (x, y, k) = wrap_pos(p.x, p.y);
                 (p.x, p.y) = (x, y);
-                if over {
+                if k != 0 || (x, y) != (p.x, p.y) {
                     (p.px, p.py) = (x, y);
                 }
             }
@@ -1562,7 +1556,8 @@ impl Game {
         // entity, keeps the AI's searches cheap.)
         let pad = SQUARE_HALF.ceil() as i32 + Kind::Capitol.stats().size;
         let (px0, px1) = if self.map.wrap { (tx - pad, tx + s + pad) } else { ((tx - pad).max(0), (tx + s + pad).min(self.map.w)) };
-        for y in (ty - pad).max(0)..(ty + s + pad).min(self.map.h) {
+        let (py0, py1) = if self.map.wrap { (ty - pad, ty + s + pad) } else { ((ty - pad).max(0), (ty + s + pad).min(self.map.h)) };
+        for y in py0..py1 {
             for x in px0..px1 {
                 let b = self.map.bld_at[self.map.idx(x, y)];
                 if b < 0 {
@@ -1573,7 +1568,9 @@ impl Game {
                     continue;
                 }
                 let (cx, cy) = self.campfire_of(b as usize);
-                let cx = (x0 + x1) * 0.5 + wx(cx - (x0 + x1) * 0.5);
+                let (mx, my) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+                let (dx, dy) = delta(mx, my, cx, cy);
+                let (cx, cy) = (mx + dx, my + dy);
                 let (nx, ny) = (cx.clamp(x0, x1), cy.clamp(y0, y1));
                 if (nx - cx).abs() < SQUARE_HALF && (ny - cy).abs() < SQUARE_HALF {
                     return false;
@@ -1590,8 +1587,9 @@ impl Game {
         for e in self.own(owner) {
             if e.is_building() && e.id as i32 != except && !self.staked(e) {
                 let es = e.kind.stats().size;
-                let etx = tx + wx((e.tx - tx) as f32) as i32;
-                if etx < tx + s + margin && tx - margin < etx + es && e.ty < ty + s + margin && ty - margin < e.ty + es {
+                let (dx, dy) = delta(tx as f32, ty as f32, e.tx as f32, e.ty as f32);
+                let (etx, ety) = (tx + dx.round() as i32, ty + dy.round() as i32);
+                if etx < tx + s + margin && tx - margin < etx + es && ety < ty + s + margin && ty - margin < ety + es {
                     return false;
                 }
             }
@@ -1600,7 +1598,7 @@ impl Game {
     }
 
     pub fn place(&mut self, owner: u8, kind: Kind, tx: i32, ty: i32, builders: &[u32]) -> Result<u32, CmdError> {
-        let tx = self.map.tile_x(tx);
+        let (tx, ty) = self.map.tile_on(tx, ty);
         if !kind.is_building() || !self.spot_free(kind, tx, ty, owner, 0) {
             return Err(CmdError::BadSpot);
         }
@@ -2684,11 +2682,9 @@ impl Game {
         let s = (e.kind.stats().speed * slow * DT).min(d);
         e.facing = dy.atan2(dx);
         if self.map.wrap {
-            let (x, y, over) = wrap_pos(e.x + dx / d * s, e.y + dy / d * s);
+            let (x, y, k) = wrap_pos(e.x + dx / d * s, e.y + dy / d * s);
             (e.x, e.y) = (x, y);
-            if over {
-                e.facing = -e.facing;
-            }
+            e.facing = turned(e.facing, k);
         } else {
             e.x = (e.x + dx / d * s).clamp(0.5, self.map.w as f32 - 0.5);
             e.y = (e.y + dy / d * s).clamp(0.5, self.map.h as f32 - 0.5);
@@ -2720,9 +2716,9 @@ impl Game {
         };
         let (ox, oy) = (e.x, e.y);
         let e = &mut self.ents[i];
-        let (x, y, over) = wrap_pos(fx, fy);
+        let (x, y, k) = wrap_pos(fx, fy);
         (e.x, e.y) = (x, y);
-        e.facing = if over { -dy.atan2(dx) } else { dy.atan2(dx) };
+        e.facing = turned(dy.atan2(dx), k);
         ((fx - ox).powi(2) + (fy - oy).powi(2)).sqrt()
     }
 
@@ -2747,10 +2743,9 @@ impl Game {
                 if b.kind.is_air() || b.kind.is_naval() != a_naval {
                     return;
                 }
-                let (dx, dy) = delta(ax, ay, b.x, b.y);
-                // (Over a pole from a: b's own north and south are turned
-                // round, so its push is too.)
-                let flip = if (dy - (b.y - ay)).abs() > 1e-3 { -1.0 } else { 1.0 };
+                // (Over a seam from a, b's own east and south are turned:
+                // so is its push.)
+                let (dx, dy, k) = delta_turn(ax, ay, b.x, b.y);
                 let d2 = dx * dx + dy * dy;
                 let min = ar + b.kind.radius();
                 if d2 >= min * min {
@@ -2766,7 +2761,8 @@ impl Game {
                     _ => (0.5, 0.5),
                 };
                 pushes.push((i, -nx * overlap * wa * 2.0, -ny * overlap * wa * 2.0));
-                pushes.push((j, nx * overlap * wb * 2.0, flip * ny * overlap * wb * 2.0));
+                let (bx, by) = crate::cube::turn(k, nx * overlap * wb * 2.0, ny * overlap * wb * 2.0);
+                pushes.push((j, bx, by));
             });
         }
         for (i, dx, dy) in pushes {
@@ -2795,7 +2791,7 @@ impl Game {
             let bit = 1u8 << e.owner;
             for dy in -ri..=ri {
                 for dx in -ri..=ri {
-                    let (x, y) = (map.tile_x(cx + dx), cy + dy);
+                    let (x, y) = map.tile_on(cx + dx, cy + dy);
                     if x >= 0 && y >= 0 && x < w && y < h && ((dx * dx + dy * dy) as f32) <= r * r {
                         self.explored[(y * w + x) as usize] |= bit;
                     }
@@ -2843,8 +2839,8 @@ impl Game {
             let free = e.is_building() || e.kind.is_air();
             for dy in -ri..=ri {
                 for dx in -ri..=ri {
-                    // (Over a pole, on the far side: `Map::tile_on`.)
-                    let (x, y) = if map.wrap { map.tile_on(cx + dx, cy + dy) } else { (cx + dx, cy + dy) };
+                    // (Over a seam, on the face beyond: `Map::tile_on`.)
+                    let (x, y) = map.tile_on(cx + dx, cy + dy);
                     if !map.inside(cx + dx, cy + dy) || ((dx * dx + dy * dy) as f32) > r * r {
                         continue;
                     }
@@ -2882,13 +2878,15 @@ impl Game {
         if !add {
             self.clear_selection();
         }
-        // (Across the seam, round the world: the box is measured from its
-        // middle, the short way.)
-        let (half, mid) = (wx(x1 - x0).abs() * 0.5, x0 + wx(x1 - x0) * 0.5);
-        let (ly, hy) = (y0.min(y1), y0.max(y1));
+        // (Measured from the box's middle, the short way: on the Globe
+        // the box may lie over a seam.)
+        let (bx, by) = delta(x0, y0, x1, y1);
+        let (mx, my, _) = map::travel(x0, y0, bx * 0.5, by * 0.5);
+        let (hx, hy) = (bx.abs() * 0.5, by.abs() * 0.5);
         let inside = |e: &Entity| {
             let r = if e.is_building() { 0.0 } else { e.kind.radius() };
-            wx(e.x - mid).abs() <= half + r && e.y + r >= ly && e.y - r <= hy
+            let (dx, dy) = delta(mx, my, e.x, e.y);
+            dx.abs() <= hx + r && dy.abs() <= hy + r
         };
         let me = self.local;
         let ok = |e: &Entity| e.alive && e.owner == me && e.aboard == 0 && (filter < 0 || e.kind as i32 == filter);

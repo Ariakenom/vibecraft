@@ -1,108 +1,75 @@
 //! The tile map: terrain, which tiles are blocked, and where deposits sit.
 //! Also the procedural map generator.
 
+use crate::cube::{self, Turn};
 use crate::defs::Dep;
 use std::cell::Cell;
 
 // ---------------------------------------------------------------------------
-// Going round the world. On the Globe's map (map_world.rs, `Shape::Globe`)
-// the east and west edges are one: walk off the right and you're at the
-// left. Tiles do it in `Map::idx` and `Map::inside`; distances in `wx`,
-// which everything that measures how far apart two things are runs its
-// east-west difference through. Positions are brought back onto the map
-// at the end of every tick (`Game::tick`), so they stay in 0..w.
+// Going round the world. The Globe's map (map_world.rs, `Shape::Globe`) is
+// the six faces of a cube laid out in an atlas (cube.rs): walk off a face
+// and you are on the next, perhaps turned. Tiles do it in `Map::idx` and
+// `Map::inside`; points in `wrap_pos`, and how far apart two points are in
+// `delta` and `pdist`, which everything that measures runs through.
+// Positions are brought back onto the faces at the end of every tick
+// (`Game::tick`) and after every step.
 
 thread_local! {
-    /// The width and height of a world that wraps (the Globe), or (0, 0)
-    /// (every other map). Set from the map whenever one is made
-    /// (`Map::new`) and at the start of every tick and command, so it
+    /// Is the game being run on the Globe? Set from the map whenever one is
+    /// made (`Map::new`) and at the start of every tick and command, so it
     /// always belongs to the game being run.
-    static WRAP: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
+    static WRAP: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Make `m`'s wrapping the one `wx`, `wrap_x`, `wrap_pos` and `delta` use.
+/// Make `m`'s wrapping the one `wrap_pos`, `delta` and `pdist` use.
 pub fn use_wrap(m: &Map) {
-    WRAP.with(|w| w.set(if m.wrap { (m.w as f32, m.h as f32) } else { (0.0, 0.0) }));
+    WRAP.with(|w| w.set(m.wrap));
 }
 
-/// The shortest way east (+) or west (-) from one x to another, given their
-/// plain difference: on a wrapping map, the other way round may be shorter.
 #[inline]
-pub fn wx(dx: f32) -> f32 {
-    let w = WRAP.with(|w| w.get().0);
-    if w > 0.0 && dx.abs() > w * 0.5 {
-        dx - w * (dx / w).round()
-    } else {
-        dx
-    }
+fn wrapping() -> bool {
+    WRAP.with(|w| w.get())
 }
 
-/// An x brought back onto the map (0..w) on a wrapping map.
+/// A point brought back onto the map: onto a face of the Globe if it went
+/// over a seam. The turn is how many quarter turns its heading picked up
+/// (a heading `a` becomes `a + turn * π/2`, `cube::turn` for vectors).
 #[inline]
-pub fn wrap_x(x: f32) -> f32 {
-    let w = WRAP.with(|w| w.get().0);
-    if w > 0.0 && !(0.0..w).contains(&x) {
-        let r = x.rem_euclid(w);
-        if r >= w { 0.0 } else { r }
-    } else {
-        x
+pub fn wrap_pos(x: f32, y: f32) -> (f32, f32, Turn) {
+    if !wrapping() {
+        return (x, y, 0);
     }
+    cube::resolve(x, y)
 }
 
-// Over the poles. The Globe's top edge is the North Pole and its bottom
-// edge the South Pole (map_world.rs). Walk north off the top at some x and
-// you come back on at the top, half the world round (x + w/2), walking
-// south: the ground just past the edge is the ground just inside it, on the
-// far side. So a point past the top edge, (x, -y), is (x + w/2, y), and
-// past the bottom, (x, h + y) is (x + w/2, h - y). Tiles do it in
-// `Map::idx` and `Map::inside`; distances between two points in `delta`
-// and `pdist`, which try the far point's mirror images over each pole as
-// well; positions in `wrap_pos`.
-
-/// A point brought back onto the map: round the world, and over a pole if
-/// it went past one. The flag says it crossed a pole: its way north and
-/// south has turned round (a heading `a` becomes `-a`).
-#[inline]
-pub fn wrap_pos(x: f32, y: f32) -> (f32, f32, bool) {
-    let (w, h) = WRAP.with(|w| w.get());
-    if w == 0.0 {
-        return (x, y, false);
-    }
-    if y < 0.0 {
-        (wrap_x(x + w * 0.5), (-y).min(h), true)
-    } else if y > h {
-        (wrap_x(x + w * 0.5), (2.0 * h - y).max(0.0), true)
-    } else {
-        (wrap_x(x), y, false)
-    }
-}
-
-/// The shortest way from a to b, as (east, south): round the world, and
-/// over a pole where that's shorter (then it's the way to b's mirror image
-/// past that pole, as seen from a).
+/// The shortest way from a to b, as (east, south) as a sees them: on the
+/// Globe over seams where that's shorter.
 #[inline]
 pub fn delta(ax: f32, ay: f32, bx: f32, by: f32) -> (f32, f32) {
-    let (w, h) = WRAP.with(|w| w.get());
-    let direct = (wx(bx - ax), by - ay);
-    if w == 0.0 {
-        return direct;
+    if !wrapping() {
+        return (bx - ax, by - ay);
     }
-    let mut best = direct;
-    let mut d2 = direct.0 * direct.0 + direct.1 * direct.1;
-    // (Over a pole the way is at least as long as to it and back.)
-    let north = ay + by;
-    let south = 2.0 * h - ay - by;
-    if north * north < d2 || south * south < d2 {
-        let ex = wx(bx + w * 0.5 - ax);
-        for dy in [-north, south] {
-            let c = ex * ex + dy * dy;
-            if c < d2 {
-                d2 = c;
-                best = (ex, dy);
-            }
-        }
+    let (dx, dy, _) = cube::delta_turn(ax, ay, bx, by);
+    (dx, dy)
+}
+
+/// `delta`, and the quarter turns taking a vector as a sees it into one
+/// as b does (0 off the Globe).
+#[inline]
+pub fn delta_turn(ax: f32, ay: f32, bx: f32, by: f32) -> (f32, f32, Turn) {
+    if !wrapping() {
+        return (bx - ax, by - ay, 0);
     }
-    best
+    cube::delta_turn(ax, ay, bx, by)
+}
+
+/// From a, `(dx, dy)` along the ground: on the Globe over seams, however
+/// far. Where it ends (on the map) and the turns picked up.
+pub fn travel(ax: f32, ay: f32, dx: f32, dy: f32) -> (f32, f32, Turn) {
+    if !wrapping() {
+        return (ax + dx, ay + dy, 0);
+    }
+    cube::travel(ax, ay, dx, dy)
 }
 
 /// How far apart two points are, the shortest way (`delta`).
@@ -213,7 +180,7 @@ pub const RISE: i32 = 3;
 
 impl Map {
     pub fn new(w: i32, h: i32, terrain: Vec<u8>, shade: Vec<u8>, blocked: Vec<bool>, dep_at: Vec<i32>, bld_at: Vec<i32>) -> Map {
-        let wrap = (w, h) == (crate::map_world::GLOBE_W, crate::map_world::GLOBE_H);
+        let wrap = (w, h) == (cube::W, cube::H);
         let mut m = Map { w, h, terrain, shade, blocked, dep_at, bld_at, land: Vec::new(), cover: Vec::new(), wrap, rise: Vec::new() };
         use_wrap(&m);
         m.relabel_land();
@@ -231,7 +198,17 @@ impl Map {
         let mut rise = vec![0u32; n];
         for level in 1..=2u8 {
             let mut d: Vec<i32> = (0..n).map(|i| if self.level((i as i32) % w, (i as i32) / w) < level { 0 } else { full }).collect();
-            let at = |d: &Vec<i32>, x: i32, y: i32| if x >= 0 && y >= 0 && x < w && y < h { d[(y * w + x) as usize] } else { full };
+            let wrap = self.wrap;
+            let at = |d: &Vec<i32>, x: i32, y: i32| {
+                if wrap {
+                    // (Over a seam: the face beyond. The passes below then
+                    // run a second time, since the faces beyond a seam may
+                    // be met in the other order.)
+                    return d[self.idx(x, y)];
+                }
+                if x >= 0 && y >= 0 && x < w && y < h { d[(y * w + x) as usize] } else { full }
+            };
+            for _ in 0..if wrap { 2 } else { 1 } {
             for y in 0..h {
                 for x in 0..w {
                     let i = (y * w + x) as usize;
@@ -245,6 +222,7 @@ impl Map {
                     let v = d[i].min(at(&d, x + 1, y) + 2).min(at(&d, x, y + 1) + 2).min(at(&d, x + 1, y + 1) + 3).min(at(&d, x - 1, y + 1) + 3);
                     d[i] = v;
                 }
+            }
             }
             for i in 0..n {
                 rise[i] += (d[i].min(full) * 100 / full) as u32;
@@ -264,8 +242,8 @@ impl Map {
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
         let r = |x: i32, y: i32| {
             if self.wrap {
-                // (Round the world and over the poles.)
-                return self.rise[self.idx(x, y.clamp(-self.h, 2 * self.h - 1))] as f32;
+                // (Over a seam: on the face beyond.)
+                return self.rise[self.idx(x, y)] as f32;
             }
             self.rise[(y.clamp(0, self.h - 1) * self.w + x.clamp(0, self.w - 1)) as usize] as f32
         };
@@ -283,7 +261,7 @@ impl Map {
         let mut next = 0;
         let mut stack = Vec::new();
         for s in 0..n {
-            if self.land[s] != 0 || !ground(self.terrain[s]) {
+            if self.land[s] != 0 || !ground(self.terrain[s]) || !self.real(s) {
                 continue;
             }
             next += 1;
@@ -343,13 +321,14 @@ impl Map {
     /// The ground's height at a point, in `shade`'s units, smoothly between
     /// the tiles' middles (for "uphill").
     pub fn height_at(&self, x: f32, y: f32) -> f32 {
-        let (fx, fy) = (x - 0.5, (y - 0.5).clamp(0.0, (self.h - 1) as f32));
+        let (fx, fy) = (x - 0.5, if self.wrap { y - 0.5 } else { (y - 0.5).clamp(0.0, (self.h - 1) as f32) });
         let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
         let (ax, ay) = (fx - x0 as f32, fy - y0 as f32);
         let at = |x: i32, y: i32| {
-            let y = y.clamp(0, self.h - 1);
-            let x = if self.wrap { x } else { x.clamp(0, self.w - 1) };
-            self.shade[self.idx(x, y)] as f32
+            if self.wrap {
+                return self.shade[self.idx(x, y)] as f32;
+            }
+            self.shade[self.idx(x.clamp(0, self.w - 1), y.clamp(0, self.h - 1))] as f32
         };
         let top = at(x0, y0) * (1.0 - ax) + at(x0 + 1, y0) * ax;
         let bottom = at(x0, y0 + 1) * (1.0 - ax) + at(x0 + 1, y0 + 1) * ax;
@@ -377,39 +356,23 @@ impl Map {
 
     #[inline]
     pub fn idx(&self, x: i32, y: i32) -> usize {
-        // (Over a pole: a row past the edge is the row inside it, half the
-        // world round. See `wrap_pos`.)
-        let (x, y) = if self.wrap && !(0..self.h).contains(&y) {
-            if y < 0 { (x + self.w / 2, -1 - y) } else { (x + self.w / 2, 2 * self.h - 1 - y) }
-        } else {
-            (x, y)
-        };
-        // (Round the world: at most one width off either way, in practice;
-        // a division on every lookup made the Globe's ticks half as fast.)
-        let x = if self.wrap && !(0..self.w).contains(&x) {
-            if x < 0 && x >= -self.w { x + self.w } else if x >= self.w && x < 2 * self.w { x - self.w } else { x.rem_euclid(self.w) }
-        } else {
-            x
-        };
+        // (On the Globe a tile past a face's edge is on the face beyond it.)
+        let (x, y) = if self.wrap && !cube::real_tile(x, y) { cube::resolve_tile(x, y) } else { (x, y) };
         (y * self.w + x) as usize
     }
-    /// (Any x is on a wrapping map: it's somewhere round the world; and a
-    /// row up to one map's height past a pole is over it, on the far side.)
+    /// (On the Globe every tile is somewhere on the ball.)
     pub fn inside(&self, x: i32, y: i32) -> bool {
-        if self.wrap {
-            y >= -self.h && y < 2 * self.h
-        } else {
-            x >= 0 && x < self.w && y >= 0 && y < self.h
-        }
+        self.wrap || (x >= 0 && x < self.w && y >= 0 && y < self.h)
     }
-    /// A tile brought back onto the map: round the world, and over a pole.
+    /// A tile brought back onto the map: onto a face of the Globe.
     pub fn tile_on(&self, x: i32, y: i32) -> (i32, i32) {
-        let i = self.idx(x, y) as i32;
-        (i % self.w, i / self.w)
+        if self.wrap { cube::resolve_tile(x, y) } else { (x, y) }
     }
-    /// A tile's x brought back onto the map (0..w) on a wrapping map.
-    pub fn tile_x(&self, x: i32) -> i32 {
-        if self.wrap { x.rem_euclid(self.w) } else { x }
+    /// Is an index of the map's arrays a tile on the ground? (Not on the
+    /// Globe's gap between its strips of faces.)
+    #[inline]
+    pub fn real(&self, i: usize) -> bool {
+        !self.wrap || cube::real_tile(i as i32 % self.w, i as i32 / self.w)
     }
     pub fn passable(&self, x: i32, y: i32) -> bool {
         self.inside(x, y) && !self.blocked[self.idx(x, y)]
@@ -479,6 +442,28 @@ pub(crate) fn fbm(x: f32, y: f32, seed: u32) -> f32 {
     let (mut sum, mut amp, mut freq, mut norm) = (0.0, 0.5, 1.0, 0.0);
     for o in 0..4 {
         sum += value_noise(x * freq, y * freq, seed.wrapping_add(o * 101)) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    sum / norm
+}
+
+/// `fbm` in three dimensions: for the Globe, noise read at a point's place
+/// on the ball (in tiles from its middle), so it joins up across seams.
+pub(crate) fn fbm3(p: [f32; 3], seed: u32) -> f32 {
+    let noise = |p: [f32; 3], seed: u32| {
+        let i = p.map(|v| v.floor() as i32);
+        let s = |t: f32| t * t * (3.0 - 2.0 * t);
+        let f = [0, 1, 2].map(|k| s(p[k] - p[k].floor()));
+        let at = |dx: i32, dy: i32, dz: i32| hash(i[0] + dx, i[1] + dy, seed ^ ((i[2] + dz) as u32).wrapping_mul(0x9E37_79B9));
+        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+        let plane = |dz: i32| lerp(lerp(at(0, 0, dz), at(1, 0, dz), f[0]), lerp(at(0, 1, dz), at(1, 1, dz), f[0]), f[1]);
+        lerp(plane(0), plane(1), f[2])
+    };
+    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 0.5, 1.0, 0.0);
+    for o in 0..4 {
+        sum += noise(p.map(|v| v * freq), seed.wrapping_add(o * 101)) * amp;
         norm += amp;
         amp *= 0.5;
         freq *= 2.0;

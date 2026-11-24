@@ -15,6 +15,7 @@ mod map_frontier;
 mod map_world;
 mod prof;
 mod barbarians;
+mod cube;
 mod path;
 mod people;
 mod save;
@@ -135,20 +136,36 @@ pub extern "C" fn map_round() -> u32 {
     game(|g| (g.map.terrain.first() == Some(&map::EDGE)) as u32 * map_world::RADIUS as u32)
 }
 
-/// 1 if this map is the Globe's: the page wraps it round a ball
+/// 1 if this map is the Globe's: the page bends it round a ball
 /// (`map_world::Shape::Globe`; told by its size, which no other map has).
-/// The Globe's rows (`map_world::GlobeProj`), for the page to draw with
-/// the same latitudes: 0 the ball's radius, 1 the north band's rows, 2 its
-/// radians a row, 3 Mercator's y where it starts, 4 the row the south band
-/// starts at, 5 its radians a row.
-#[unsafe(no_mangle)]
-pub extern "C" fn globe_proj(which: u32) -> f32 {
-    let p = map_world::GlobeProj::new();
-    [p.r, p.yn, p.hn, p.top, p.ys, p.hs].get(which as usize).copied().unwrap_or(0.0)
-}
 #[unsafe(no_mangle)]
 pub extern "C" fn map_globe() -> u32 {
-    game(|g| (g.map.w == map_world::GLOBE_W && g.map.h == map_world::GLOBE_H) as u32)
+    game(|g| g.map.wrap as u32)
+}
+/// The Globe's cube (cube.rs), for the page to draw and move the camera
+/// with the same faces and seams. `which` 0: tiles along a face, 1: rows of
+/// the gap between the strips. Face `f`'s numbers (`cube::face_numbers`):
+/// 0-8 its middle and its x and y directions, 9-10 its corner in the atlas.
+/// Seam numbers for face `f`, side `s` (left, right, top, bottom): the
+/// move past it, 0 its quarter turns (-1: the atlas joins it), 1-2 its shift.
+#[unsafe(no_mangle)]
+pub extern "C" fn cube_size(which: u32) -> i32 {
+    if which == 0 { cube::N } else { cube::GAP }
+}
+/// How the Globe's cube is turned in the world (`map_world::TURN`), row by
+/// row: for the minimap's world map.
+#[unsafe(no_mangle)]
+pub extern "C" fn globe_turn(i: u32) -> f32 {
+    let i = (i as usize).min(8);
+    map_world::TURN[i / 3][i % 3]
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn cube_face(f: u32, i: u32) -> i32 {
+    cube::face_numbers((f as usize).min(5)).get(i as usize).copied().unwrap_or(0)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn cube_seam(f: u32, side: u32, i: u32) -> i32 {
+    cube::seam_numbers((f as usize).min(5), (side as usize).min(3)).get(i as usize).copied().unwrap_or(0)
 }
 
 /// Is `owner` a barbarian (Frontier)? 1 or 0.
