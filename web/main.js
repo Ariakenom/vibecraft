@@ -408,14 +408,20 @@ window.addEventListener("resize", resizeView);
 function clampCam() {
   // (The Globe goes all the way round, and can be seen whole.)
   const globe = typeof GLOBE !== "undefined" && GLOBE.on;
-  // (Over a pole: on the far side, half the world round, looking back the
-  // way it came, so the way ahead is still ahead. map.rs `wrap_pos`.)
-  if (globe && (cam.y < 0 || cam.y > MH)) {
-    cam.y = cam.y < 0 ? Math.min(MH, -cam.y) : Math.max(0, 2 * MH - cam.y);
-    cam.x += MW / 2; cam.yaw += Math.PI;
+  // (Over a seam: onto the face beyond, still looking the same way over
+  // the ground: the way it looked on the ball, in that face's east and
+  // south, which are turned and, by the cube's corners, a little skewed.)
+  if (globe && cubeFaceOf(cam.x, cam.y) < 0) {
+    globeAt(cam.x, cam.y);
+    const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw);
+    const look = GLOBE.east.map((v, i) => v * s + GLOBE.south[i] * c);
+    [cam.x, cam.y] = cubeResolve(cam.x, cam.y);
+    globeAt(cam.x, cam.y);
+    const dot = a => a[0] * look[0] + a[1] * look[1] + a[2] * look[2];
+    cam.yaw = Math.atan2(dot(GLOBE.east), dot(GLOBE.south));
   }
-  cam.x = globe ? ((cam.x % MW) + MW) % MW : Math.max(0, Math.min(MW, cam.x));
-  cam.y = Math.max(0, Math.min(MH, cam.y));
+  if (!globe) cam.x = Math.max(0, Math.min(MW, cam.x));
+  if (!globe) cam.y = Math.max(0, Math.min(MH, cam.y));
   cam.dist = Math.max(9, Math.min(globe ? 420 : 48, cam.dist));
   cam.pitch = Math.max(0.6, Math.min(1.35, cam.pitch));
 }
@@ -496,11 +502,12 @@ function bakeTerrain() {
   // `beach`: paint the sand in. The 3D view draws its own crisp beaches in
   // the ground shader (render3d.js), so only the minimap wants it.
   const colourAt = (x, y, beach = true) => {
+    // (On the Globe a point in the gap between the strips of faces is
+    // painted as what's past the seam there: the texture's smoothing at a
+    // strip's edge then blends in that ground, not the gap.)
+    if (globe && cubeFaceOf(x, y) < 0) [x, y] = cubeResolve(x, y);
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
-    // (On the Globe the patches join up where the east and west edges
-    // meet: the last tiles fade into what the first ones have.)
-    const seam = globe ? Math.max(0, Math.min(1, (x - (MW - 24)) / 24)) : 0;
-    const nz = (f, sd) => { const v = vnoise(x * f, y * f, sd); return seam > 0 ? v + (vnoise((x - MW) * f, y * f, sd) - v) * seam : v; };
+    const nz = (f, sd) => vnoise(x * f, y * f, sd);
     const n1 = nz(1 / 9, 3), n2 = nz(1 / 3.5, 11), n3 = nz(1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
     c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
@@ -510,9 +517,8 @@ function bakeTerrain() {
     c = mixc(c, [c[0] * 1.08, c[1] * 1.05, c[2] * 0.95], Math.max(0, Math.min(1, ht - 0.8))); // sunnier up high
     if (t === 7) c = mixc(mixc(c, ROCK, 0.55), SNOW, Math.max(0, Math.min(1, (ht - 2.2) * 1.5 + (n2 - 0.5)))); // mountains: rock, and snow on the tops
     // Beaches follow the (smooth) height near the water, not the square tiles.
-    // Polar ice: snow-white, faintly blue in patches (the patches fade out
-    // by the poles, where every row meets and they'd pinch into streaks).
-    if (t === 8) return mixc(SNOW, mixc(ICE, SNOW, nz(1 / 6, 41)), globe ? Math.min(1, Math.min(y, MH - y) / 30) : 1);
+    // Polar ice: snow-white, faintly blue in patches.
+    if (t === 8) return mixc(SNOW, mixc(ICE, SNOW, nz(1 / 6, 41)), 1);
     if (beach) c = mixc(c, SAND, Math.max(0, Math.min(1, (0.2 - ht) / 0.14)) * 0.9);
     if (t === 1 || t === 5 || t === 6) c = mixc(SAND, SEABED, Math.min(1, -ht));
     const k = 0.98 + n3 * 0.04;
@@ -1479,8 +1485,8 @@ const mpHooks = {
       if (isBld(E(i, F.kind))) continue;
       const id = E(i, F.id), o = R3.objs.get(id);
       if (!o || o.x === undefined) continue;
-      const dx = o.x - lerpX(E(i, F.px), E(i, F.x), alpha);
-      const dy = o.y - (E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha);
+      const [lx, ly] = lerpXY(E(i, F.px), E(i, F.py), E(i, F.x), E(i, F.y), alpha);
+      const dx = o.x - lx, dy = o.y - ly;
       if (Math.abs(dx) + Math.abs(dy) > 0.01 && Math.abs(dx) + Math.abs(dy) < 4) R3.nudges.set(id, { dx, dy, t });
     }
     setSelection(kept.map(k => k[0]));
@@ -1852,19 +1858,19 @@ function scrollCamera(dt) {
   const v = cam.dist * 1.1 * dt, c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
   panCam((dx * c + dy * s) * v, (-dx * s + dy * c) * v);
 }
-// Move the camera east and south (map tiles, as on the equator). On the
-// Globe toward the poles a tile east is narrower than a tile south (the
-// polar bands), so east goes as much further, to move as far either way;
-// and the camera keeps facing the same way over the ground, not round the
-// pole, as it goes east or west (its yaw turns with the meridians there).
+// Move the camera east and south (map tiles, as at a face's middle on the
+// Globe). Toward a face's edge tiles are drawn smaller, so there it goes as
+// many more, to move as far on the ball.
 function panCam(east, south) {
   if (typeof GLOBE !== "undefined" && GLOBE.on) {
-    globeLat(cam.y);
-    const wide = Math.min(12, GLOBE.k / Math.max(1e-3, GLOBE.c)), dx = east * wide;
-    cam.x += dx;
-    cam.yaw -= dx / MW * 2 * Math.PI * GLOBE.s;
-  } else cam.x += east;
-  cam.y += south;
+    globeAt(cam.x, cam.y);
+    const ls = Math.hypot(...GLOBE.es) * GLOBE.R, lt = Math.hypot(...GLOBE.et) * GLOBE.R;
+    cam.x += east / Math.max(0.5, ls);
+    cam.y += south / Math.max(0.5, lt);
+  } else {
+    cam.x += east;
+    cam.y += south;
+  }
   clampCam();
 }
 

@@ -34,75 +34,95 @@ const R3 = {
 // what you can't see. three.js lets us patch its built-in shaders with
 // `onBeforeCompile`, so we keep normal lighting and shadows for free.
 // --- The Globe -------------------------------------------------------------------
-// On the Globe map the game is as flat as on any other: a Mercator map of the
-// world (map_world.rs). Only the last step of drawing differs: every vertex,
-// once it has its place in the flat world, is moved onto a ball before the
-// camera sees it (`globeBend`, in the `project_vertex` chunk every built-in
-// material uses). The ball is turned so the spot the camera looks at sits on
-// top, exactly where it is in the flat world, with east, north and up as
-// there: close up the game looks as it always does, and the world curves
-// away from the middle of the screen. Everything else (fog of war, shadows,
-// waves, heights) is worked out in the flat world as before. Mercator keeps
-// shapes, so things only get smaller toward the poles, never squashed; in
-// the polar bands past 66° north and 56° south the rows run evenly to the
-// pole (map_world.rs `GlobeProj`), and things there are drawn narrower and
-// narrower toward the pole itself. The top and bottom edges are the poles.
-//   uGlobe: the ball's radius (0: flat), the map's width and height, and
-//   Mercator's y where its rows start. uGlobeB: the rows the north band
-//   ends at, its radians a row, the row the south band starts at, and its
-//   radians a row. uGlobeAt: the camera's spot on the flat ground.
-//   uGlobeRot: turns the ball so that spot is on top.
+// On the Globe map the game is as flat as on any other: the six faces of a
+// cube laid out in an atlas (cube.rs), two strips of three with a gap
+// between. Only the last step of drawing differs: every vertex, once it has
+// its place in the flat world, is moved onto a ball before the camera sees
+// it (`globeBend`, in the `project_vertex` chunk every built-in material
+// uses). Each face goes onto the ball with equal angles per tile, so a tile
+// is drawn 0.67 to 1.15 times its size anywhere. The ball is turned so the
+// spot the camera looks at sits on top, exactly where it is in the flat
+// world, with east, south and up as there: close up the game looks as it
+// always does, and the world curves away from the middle of the screen.
+// Everything else (fog of war, shadows, waves, heights) is worked out in the
+// flat world as before.
+//   uGlobe.x: the ball's radius in tiles (0: flat). uGlobeAt: the camera's
+//   spot on the flat ground. uGlobeRot: turns the ball so that spot is on top.
+// The faces (cube.rs `FACES`): each one's middle, its x ("east") and y
+// ("south") directions, and its corner in the atlas. Checked against the
+// game's own at load (`cubeCheck`).
+const CUBE_N = 160, CUBE_GAP = 96, CUBE_B0 = CUBE_N + CUBE_GAP;
+const CUBE_FACES = [
+  { c: [1, 0, 0], u: [0, 0, 1], v: [0, 1, 0], at: [0, 0] },
+  { c: [0, 0, 1], u: [-1, 0, 0], v: [0, 1, 0], at: [CUBE_N, 0] },
+  { c: [-1, 0, 0], u: [0, 0, -1], v: [0, 1, 0], at: [2 * CUBE_N, 0] },
+  { c: [0, 1, 0], u: [0, 0, -1], v: [1, 0, 0], at: [0, CUBE_B0] },
+  { c: [0, 0, -1], u: [0, -1, 0], v: [1, 0, 0], at: [CUBE_N, CUBE_B0] },
+  { c: [0, -1, 0], u: [0, 0, 1], v: [1, 0, 0], at: [2 * CUBE_N, CUBE_B0] },
+];
 const GLOBE = {
-  on: false, R: 0, top: 0, yn: 0, hn: 0, ys: 0, hs: 0, c: 1, s: 0, k: 1, cosLimit: -1,
+  on: false, R: 2 * CUBE_N / Math.PI, k: 1, cosLimit: -1,
+  // The frame at the last point asked about (`globeAt`): up, and the ball's
+  // east and south there per tile (not unit, nor quite square by the
+  // corners), and how big a tile is drawn there against a face's middle.
+  up: [0, 1, 0], es: [1, 0, 0], et: [0, 0, 1], east: [1, 0, 0], south: [0, 0, 1],
   e0: new THREE.Vector3(1, 0, 0), u0: new THREE.Vector3(0, 1, 0), n0: new THREE.Vector3(0, 0, -1), seen: new THREE.Vector3(0, 1, 0),
-  u: { uGlobe: { value: new THREE.Vector4(0, 1, 1, 0) }, uGlobeB: { value: new THREE.Vector4(0, 0, 1, 0) }, uGlobeAt: { value: new THREE.Vector3() }, uGlobeRot: { value: new THREE.Matrix3() } },
+  // Past each face's side: the face beyond and the move there (from the game).
+  seams: null,
+  u: { uGlobe: { value: new THREE.Vector4(0, 1, 1, 0) }, uGlobeAt: { value: new THREE.Vector3() }, uGlobeRot: { value: new THREE.Matrix3() } },
 };
+const v3s = a => `vec3(${a.map(x => x.toFixed(1)).join(", ")})`;
 const GLOBE_GLSL = `
   #ifndef GLOBE_GLSL_IN
   #define GLOBE_GLSL_IN
-  uniform vec4 uGlobe; uniform vec4 uGlobeB; uniform vec3 uGlobeAt; uniform mat3 uGlobeRot;
-  // Patterns drawn from the flat world's position (noise in the sea, the
-  // sand, cloud shadows) don't join up where the Globe's east and west
-  // edges meet. Over the last GLOBE_SEAM tiles before the east edge they
-  // fade into the same pattern taken from one width further west (what the
-  // west edge has), so at the edge itself they match: mix(f(p), f(p -
-  // (width, 0)), globeSeam(p.x)).
-  #define GLOBE_SEAM 24.0
-  float globeSeam(float x) { return uGlobe.x > 0.0 ? smoothstep(uGlobe.y - GLOBE_SEAM, uGlobe.y, x) : 0.0; }
-  vec2 globeWest(vec2 p) { return p - vec2(uGlobe.y, 0.0); }
-  // The latitude of flat z (radians), as map_world.rs GlobeProj::lat. (Past
-  // the poles, the edges, it stays at the pole.)
-  float globeLatOf(float z) {
-    z = clamp(z, 0.0, uGlobe.z);
-    if (z < uGlobeB.x) return 1.5707963 - z * uGlobeB.y;
-    float m = uGlobe.w - (min(z, uGlobeB.z) - uGlobeB.x) / uGlobe.x;
-    float a = 2.0 * atan(exp(m)) - 1.5707963;
-    return z < uGlobeB.z ? a : a - (z - uGlobeB.z) * uGlobeB.w;
+  uniform vec4 uGlobe; uniform vec3 uGlobeAt; uniform mat3 uGlobeRot;
+  #define CUBE_N ${CUBE_N.toFixed(1)}
+  #define CUBE_GAP ${CUBE_GAP.toFixed(1)}
+  // (Patterns drawn from the flat world's position, like the noise in the
+  // sea and the sand, don't join up at the cube's seams: they're faint.)
+  float globeSeam(float x) { return 0.0; }
+  vec2 globeWest(vec2 p) { return p; }
+  // The direction through flat point p (x, z) from the ball's middle, and
+  // the ball's change east and south per tile there (on a ball of radius 1).
+  // A point on a face's edge belongs to it, so every face's meshes reach
+  // their own edges.
+  vec3 cubeDir(vec2 p, out vec3 es, out vec3 et) {
+    vec3 FC[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.c)).join(", ")});
+    vec3 FU[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.u)).join(", ")});
+    vec3 FV[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.v)).join(", ")});
+    float col = clamp(floor(p.x / CUBE_N), 0.0, 2.0);
+    bool b = p.y >= CUBE_N + CUBE_GAP * 0.5;
+    int f = int(col) + (b ? 3 : 0);
+    vec2 st = vec2(p.x - col * CUBE_N, p.y - (b ? CUBE_N + CUBE_GAP : 0.0));
+    vec2 ta = tan((st * (2.0 / CUBE_N) - 1.0) * 0.785398163);
+    float q = 3.14159265 / (2.0 * CUBE_N);
+    vec3 n = FC[f] + ta.x * FU[f] + ta.y * FV[f];
+    vec3 ns = FU[f] * (1.0 + ta.x * ta.x) * q, nt = FV[f] * (1.0 + ta.y * ta.y) * q;
+    float L = length(n);
+    vec3 d = n / L;
+    es = (ns - d * dot(d, ns)) / L;
+    et = (nt - d * dot(d, nt)) / L;
+    return d;
   }
   vec3 globeBend(vec3 p) {
     float R = uGlobe.x;
-    float lon = (p.x / uGlobe.y - 0.5) * 6.2831853;   // (round the world: past one edge is the other)
-    float lat = globeLatOf(p.z), c = cos(lat), s = sin(lat);
-    // (Heights scale as the ground does north and south: Mercator's cos,
-    // a band's own row height.)
-    float k = p.z < uGlobeB.x ? uGlobeB.y * R : p.z > uGlobeB.z ? uGlobeB.w * R : c;
-    vec3 d = vec3(c * sin(lon), s, c * cos(lon));
+    vec3 es, et;
+    vec3 d = cubeDir(p.xz, es, et);
+    // (Heights scale as the ground does there.)
+    float k = sqrt(length(es) * length(et)) * R;
     return uGlobeAt + uGlobeRot * (d * (R + p.y * k)) - vec3(0.0, R, 0.0);
   }
   // A thing standing on the ground (a unit, a building, a tree), anchored
   // at flat point a: its anchor goes where the ground is bent to, and the
   // rest of it is laid out round that spot by the ground's east, up and
-  // south there, all at one scale. So it keeps its shape anywhere; bent
-  // point by point it was squeezed thin toward the poles, where the map's
-  // columns narrow.
+  // south there, all at one scale. So it keeps its shape anywhere.
   vec3 globeRigid(vec3 p, vec3 a) {
     float R = uGlobe.x;
-    float lon = (a.x / uGlobe.y - 0.5) * 6.2831853;
-    float lat = globeLatOf(a.z), c = cos(lat), s = sin(lat);
-    float k = a.z < uGlobeB.x ? uGlobeB.y * R : a.z > uGlobeB.z ? uGlobeB.w * R : c;
-    vec3 up = vec3(c * sin(lon), s, c * cos(lon));
-    vec3 east = vec3(cos(lon), 0.0, -sin(lon));
-    vec3 south = vec3(s * sin(lon), -c, s * cos(lon));
+    vec3 es, et;
+    vec3 up = cubeDir(a.xz, es, et);
+    float k = sqrt(length(es) * length(et)) * R;
+    vec3 east = normalize(es);
+    vec3 south = normalize(et - east * dot(et, east));
     vec3 o = (p - a) * k;
     return uGlobeAt + uGlobeRot * (up * (R + a.y * k + o.y) + east * o.x + south * o.z) - vec3(0.0, R, 0.0);
   }
@@ -151,54 +171,131 @@ THREE.Material.prototype.onBeforeCompile = function (sh) {
     }
     if (ball.radius > 150) return true;
     const x = ball.center.x, h = ball.center.y, z = ball.center.z;
-    globeLat(z);
-    // (Its size on the ball: Mercator's tiles shrink toward the poles.)
+    globeAt(x, z);
+    // (Its size on the ball: tiles are drawn smaller toward a face's edges.)
     if (!globeSees(x, z, ball.radius * GLOBE.k / GLOBE.R + 0.03)) return false;
     ball.radius *= Math.min(1, GLOBE.k + 0.1);
     globeBendPoint(x, h, z, ball.center);
     return this.intersectsSphere(ball);
   };
 }
-// Between a previous and a current x, `a` of the way: on the Globe the
-// short way round, so a unit crossing the seam steps over it instead of
-// sweeping back across the whole map.
-function lerpX(px, x, a) {
-  let d = x - px;
-  // (Half the world round in one tick: it went over a pole. It jumps.)
-  if (GLOBE.on && Math.abs(Math.abs(d) - MW / 2) < 2) return x;
-  if (GLOBE.on && Math.abs(d) > MW / 2) d -= Math.sign(d) * MW;
-  return px + d * a;
+// The Globe's seams from the game (`cube_seam`): past face f's side s, the
+// quarter turns and shift of the move onto the face beyond, or null where
+// the atlas joins the faces already. And a check that the faces here are
+// the game's.
+function cubeLoad() {
+  if (GLOBE.seams) return;
+  GLOBE.seams = CUBE_FACES.map((_, f) => [0, 1, 2, 3].map(side => {
+    const k = W.cube_seam(f, side, 0);
+    return k < 0 ? null : { k, tx: W.cube_seam(f, side, 1), ty: W.cube_seam(f, side, 2) };
+  }));
+  const same = W.cube_size(0) === CUBE_N && W.cube_size(1) === CUBE_GAP && CUBE_FACES.every((f, i) => [...f.c, ...f.u, ...f.v, ...f.at].every((v, j) => W.cube_face(i, j) === v));
+  if (!same) console.error("render3d.js CUBE_FACES differ from cube.rs: the Globe will be drawn wrong");
 }
-// The latitude (radians) of flat z, as map_world.rs GlobeProj::lat and the
-// shader's globeLatOf.
-function globeLatOf(z) {
+// A vector turned by k quarter turns (as cube.rs `turn`).
+function cubeTurn(k, x, y) {
+  switch (k & 3) { case 0: return [x, y]; case 1: return [-y, x]; case 2: return [-x, -y]; default: return [y, -x]; }
+}
+// The face a real point is on, or -1 (as cube.rs `face_of`).
+function cubeFaceOf(x, z) {
+  if (!(x >= 0 && x < 3 * CUBE_N)) return -1;
+  const col = Math.min(2, Math.floor(x / CUBE_N));
+  if (z >= 0 && z < CUBE_N) return col;
+  if (z >= CUBE_B0 && z < CUBE_B0 + CUBE_N) return 3 + col;
+  return -1;
+}
+// A point brought onto a face, and the quarter turns a heading picks up on
+// the way (as cube.rs `resolve`).
+function cubeResolve(x, z) {
+  let k = 0;
+  for (let n = 0; n < 8; n++) {
+    if (cubeFaceOf(x, z) >= 0) return [x, z, k & 3];
+    const strip = z < CUBE_N + CUBE_GAP / 2 ? 0 : 3, lz = z - (strip ? CUBE_B0 : 0);
+    let f, side;
+    if (x < 0) { f = strip; side = 0; }
+    else if (x >= 3 * CUBE_N) { f = strip + 2; side = 1; }
+    else { f = strip + Math.min(2, Math.floor(x / CUBE_N)); side = lz < 0 ? 2 : 3; }
+    const m = GLOBE.seams && GLOBE.seams[f][side];
+    if (!m) break;
+    [x, z] = cubeTurn(m.k, x, z); x += m.tx; z += m.ty; k += m.k;
+  }
+  x = Math.max(0, Math.min(3 * CUBE_N - 1e-3, x));
+  z = z < CUBE_N + CUBE_GAP / 2 ? Math.max(0, Math.min(CUBE_N - 1e-3, z)) : Math.max(CUBE_B0, Math.min(CUBE_B0 + CUBE_N - 1e-3, z));
+  return [x, z, k & 3];
+}
+// A tile brought onto a face (whole tiles, by their middles).
+function cubeResolveTile(x, z) {
+  if (cubeFaceOf(x + 0.5, z + 0.5) >= 0) return [x, z];
+  const [rx, rz] = cubeResolve(x + 0.5, z + 0.5);
+  return [Math.floor(rx), Math.floor(rz)];
+}
+// From a to b the short way, in a's frame (only near: over one seam at most,
+// enough for anything drawn between two ticks or round the camera).
+function cubeDelta(ax, az, bx, bz) {
+  const fa = cubeFaceOf(ax, az), fb = cubeFaceOf(bx, bz);
+  if (fa === fb) return [bx - ax, bz - az];
+  let best = [bx - ax, bz - az], d2 = best[0] ** 2 + best[1] ** 2;
+  if (fa < 0 || !GLOBE.seams) return best;
+  // b seen past each of a's seams: undo that seam's move.
+  for (const m of GLOBE.seams[fa]) {
+    if (!m) continue;
+    const k = (4 - m.k) & 3, [x, z] = cubeTurn(k, bx - m.tx, bz - m.ty);
+    const e = (x - ax) ** 2 + (z - az) ** 2;
+    if (e < d2) { d2 = e; best = [x - ax, z - az]; }
+  }
+  return best;
+}
+// Between a previous and a current position, `a` of the way: on the Globe
+// over a seam the short way, so a unit crossing one steps over it.
+function lerpXY(px, py, x, y, a) {
+  if (!GLOBE.on) return [px + (x - px) * a, py + (y - py) * a];
+  const [dx, dy] = cubeDelta(x, y, px, py);
+  if (dx * dx + dy * dy > 4) return [x, y];
+  // (From the current point back: a point a little short of it is on its
+  // face or just past it, as the bending wants.)
+  return [x + dx * (1 - a), y + dy * (1 - a)];
+}
+// The direction through flat (x, z) from the ball's middle, as the shader's
+// cubeDir: into GLOBE.up, with the ball's change per tile east and south
+// (GLOBE.es, .et), unit east and south (GLOBE.east, .south) and how big a
+// tile is drawn there against a face's middle (GLOBE.k). Points off the
+// faces are brought onto one first.
+function globeAt(x, z) {
   const G = GLOBE;
-  z = Math.max(0, Math.min(MH, z));
-  if (z < G.yn) return Math.PI / 2 - z * G.hn;
-  const a = 2 * Math.atan(Math.exp(G.top - (Math.min(z, G.ys) - G.yn) / G.R)) - Math.PI / 2;
-  return z < G.ys ? a : a - (z - G.ys) * G.hs;
+  // (A point a little past a face's edge is that face continued, as the
+  // shader has it: a heading there is measured as on the face it came
+  // from. Only one well past is brought onto the face it's on.)
+  const out = Math.max(-x, x - 3 * CUBE_N, -z, z >= CUBE_N + CUBE_GAP / 2 ? Math.max(CUBE_B0 - z, z - CUBE_B0 - CUBE_N) : z - CUBE_N);
+  if (out > 8) [x, z] = cubeResolve(x, z);
+  const col = Math.max(0, Math.min(2, Math.floor(x / CUBE_N))), b = z >= CUBE_N + CUBE_GAP / 2, F = CUBE_FACES[col + (b ? 3 : 0)];
+  const s = x - col * CUBE_N, t = z - (b ? CUBE_B0 : 0), q = Math.PI / (2 * CUBE_N);
+  const ta = Math.tan((s * 2 / CUBE_N - 1) * Math.PI / 4), tb = Math.tan((t * 2 / CUBE_N - 1) * Math.PI / 4);
+  const n = [0, 1, 2].map(i => F.c[i] + ta * F.u[i] + tb * F.v[i]), L = Math.hypot(n[0], n[1], n[2]);
+  const d = n.map(v => v / L);
+  const tangent = (w, sec2) => { const ns = w.map(v => v * sec2 * q), dn = d[0] * ns[0] + d[1] * ns[1] + d[2] * ns[2]; return ns.map((v, i) => (v - d[i] * dn) / L); };
+  const es = tangent(F.u, 1 + ta * ta), et = tangent(F.v, 1 + tb * tb);
+  const ls = Math.hypot(...es), lt = Math.hypot(...et);
+  const east = es.map(v => v / ls), ed = et[0] * east[0] + et[1] * east[1] + et[2] * east[2];
+  const so = et.map((v, i) => v - east[i] * ed), lso = Math.hypot(...so);
+  G.up = d; G.es = es; G.et = et; G.east = east; G.south = so.map(v => v / lso);
+  G.k = Math.sqrt(ls * lt) * G.R;
+  return d;
 }
-// And back: the flat z of a latitude.
-function globeZOf(lat) {
-  const G = GLOBE, latS = globeLatOf(G.ys);
-  if (lat > Math.PI / 2 - G.yn * G.hn) return (Math.PI / 2 - lat) / G.hn;
-  if (lat > latS) return G.yn + (G.top - Math.log(Math.tan(Math.PI / 4 + lat / 2))) * G.R;
-  return G.ys + (latS - lat) / G.hs;
-}
-// Cos and sin of the latitude of flat z into GLOBE.c and .s, and in .k how
-// big things are drawn there against the equator (north and south: in the
-// polar bands each band's row height, in between Mercator's cos).
-function globeLat(z) {
-  const G = GLOBE, lat = globeLatOf(z);
-  G.c = Math.cos(lat); G.s = Math.sin(lat);
-  G.k = z < G.yn ? G.hn * G.R : z > G.ys ? G.hs * G.R : G.c;
+// The flat point a direction (from the ball's middle) is drawn at (as
+// cube.rs `at_dir`).
+function cubeAtDir(d) {
+  let f = 0, best = -2;
+  for (let i = 0; i < 6; i++) { const c = CUBE_FACES[i].c, e = d[0] * c[0] + d[1] * c[1] + d[2] * c[2]; if (e > best) { best = e; f = i; } }
+  const F = CUBE_FACES[f], dot = v => d[0] * v[0] + d[1] * v[1] + d[2] * v[2];
+  const dc = dot(F.c), lim = v => Math.max(0, Math.min(CUBE_N - 1e-3, v));
+  const s = lim((Math.atan(dot(F.u) / dc) / (Math.PI / 4) + 1) * 0.5 * CUBE_N), t = lim((Math.atan(dot(F.v) / dc) / (Math.PI / 4) + 1) * 0.5 * CUBE_N);
+  return [F.at[0] + s, F.at[1] + t];
 }
 // Start of a frame: turn the ball to the camera's spot.
 function globeFocus(x, z, camHeight, camOut, yaw) {
-  const G = GLOBE, lon = (x / MW - 0.5) * 2 * Math.PI;
-  globeLat(z);
-  const c = G.c, s = G.s, sl = Math.sin(lon), cl = Math.cos(lon);
-  G.e0.set(cl, 0, -sl); G.u0.set(c * sl, s, c * cl); G.n0.set(-s * sl, c, -s * cl);
+  const G = GLOBE;
+  globeAt(x, z);
+  G.e0.set(...G.east); G.u0.set(...G.up); G.n0.set(-G.south[0], -G.south[1], -G.south[2]);
   G.u.uGlobeRot.value.set(G.e0.x, G.e0.y, G.e0.z, G.u0.x, G.u0.y, G.u0.z, -G.n0.x, -G.n0.y, -G.n0.z);
   G.u.uGlobeAt.value.set(x, 0, z);
   // What the camera sees of the ball: as far round as its horizon, from
@@ -211,18 +308,15 @@ function globeFocus(x, z, camHeight, camOut, yaw) {
 }
 // Is flat (x, z) on the side of the ball the camera sees? `more`: radians of slack.
 function globeSees(x, z, more = 0) {
-  const G = GLOBE, lon = (x / MW - 0.5) * 2 * Math.PI;
-  globeLat(z);
-  const d = G.c * Math.sin(lon) * G.seen.x + G.s * G.seen.y + G.c * Math.cos(lon) * G.seen.z;
-  return d >= (more ? Math.cos(Math.min(Math.PI, Math.acos(G.cosLimit) + more)) : G.cosLimit);
+  const G = GLOBE, d = globeAt(x, z);
+  const e = d[0] * G.seen.x + d[1] * G.seen.y + d[2] * G.seen.z;
+  return e >= (more ? Math.cos(Math.min(Math.PI, Math.acos(G.cosLimit) + more)) : G.cosLimit);
 }
 // A flat-world point moved onto the ball, as the shader does (into `out`).
 const _gb = new THREE.Vector3();
 function globeBendPoint(x, h, z, out) {
-  const G = GLOBE, lon = (x / MW - 0.5) * 2 * Math.PI;
-  globeLat(z);
-  const r = G.R + h * G.k;
-  _gb.set(G.c * Math.sin(lon) * r, G.s * r, G.c * Math.cos(lon) * r);
+  const G = GLOBE, d = globeAt(x, z), r = G.R + h * G.k;
+  _gb.set(d[0] * r, d[1] * r, d[2] * r);
   return out.set(x0g() + _gb.dot(G.e0), _gb.dot(G.u0) - G.R, z0g() - _gb.dot(G.n0));
 }
 const x0g = () => GLOBE.u.uGlobeAt.value.x, z0g = () => GLOBE.u.uGlobeAt.value.z;
@@ -241,17 +335,17 @@ function globeRay(ray) {
   const miss = () => { ray.origin.set(0, 1e5, 0); ray.direction.set(0, 1, 0); return false; };
   if (disc < 0 || -b - Math.sqrt(disc) < 0) return miss();
   const t = -b - Math.sqrt(disc);
-  const hx = _go.x + _gd.x * t, hy = _go.y + _gd.y * t, hz = _go.z + _gd.z * t;
-  const s = Math.max(-0.999999, Math.min(0.999999, hy / R)), c = Math.sqrt(1 - s * s), lon = Math.atan2(hx, hz);
-  const fz = globeZOf(Math.asin(s)), fx = (lon / (2 * Math.PI) + 0.5) * MW;
-  // The way it comes in, by the east, up and north of the spot it meets.
-  const sl = Math.sin(lon), cl = Math.cos(lon);
-  const de = _gd.x * cl - _gd.z * sl, du = (_gd.x * hx + _gd.y * hy + _gd.z * hz) / R, dn = -_gd.x * s * sl + _gd.y * c - _gd.z * s * cl;
-  // (Into the flat world's units there: a tile is drawn G.c wide and G.k
-  // long and high. The same in Mercator's rows; in the polar bands it
-  // narrows toward the pole.)
-  globeLat(fz);
-  ray.direction.set(de / Math.max(0.02, G.c), du / G.k, -dn / G.k).normalize();
+  const hit = [(_go.x + _gd.x * t) / R, (_go.y + _gd.y * t) / R, (_go.z + _gd.z * t) / R];
+  const [fx, fz] = cubeAtDir(hit);
+  // The way it comes in, in the flat world's units there: its part along
+  // the ground solved against the ball's east and south per tile (not
+  // square by the corners), and up by how tall a tile is drawn.
+  globeAt(fx, fz);
+  const g = [_gd.x, _gd.y, _gd.z], dot = (a, c) => a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+  const es = G.es.map(v => v * R), et = G.et.map(v => v * R);
+  const ss = dot(es, es), st = dot(es, et), tt = dot(et, et), gs = dot(g, es), gt = dot(g, et), det = ss * tt - st * st;
+  const a = (gs * tt - gt * st) / det, c = (gt * ss - gs * st) / det;
+  ray.direction.set(a, dot(g, G.up) / G.k, c).normalize();
   ray.origin.set(fx - ray.direction.x * 80, -ray.direction.y * 80, fz - ray.direction.z * 80);
   return true;
 }
@@ -1677,10 +1771,17 @@ function elevOf(ht) {
 // Heights live on tile CORNERS: (MW+1) × (MH+1) of them. Called before the
 // terrain texture is painted, so the painter can colour slopes as rock.
 function computeHeights() {
-  // (The Globe's east and west edges are one: corners there take tiles from
-  // both sides, and the last column of corners is the first.)
-  const wrapX = !!(W.map_globe && W.map_globe());
-  const wrapT = x => wrapX ? (x + MW) % MW : x;
+  // (On the Globe a corner on a seam takes its tiles from both faces, and
+  // the blur reaches over seams: the faces' edges meet at one height.)
+  const globe = !!(W.map_globe && W.map_globe());
+  if (globe) cubeLoad();
+  const tileAt = (x, y) => globe ? cubeResolveTile(x, y) : [x, y];
+  // A corner past a face's edge: the same corner of the face beyond.
+  const cornerAt = (x, y) => {
+    if (!globe || (x >= 0 && x <= MW && cubeFaceOf(Math.min(x, MW - 0.5), y < CUBE_N + CUBE_GAP / 2 ? Math.min(y, CUBE_N - 0.5) : Math.max(Math.min(y, CUBE_B0 + CUBE_N - 0.5), CUBE_B0)) >= 0 && (y <= CUBE_N || y >= CUBE_B0) && y >= 0 && y <= MH)) return [x, y];
+    const [rx, rz] = cubeResolve(x, y);
+    return [Math.round(rx), Math.round(rz)];
+  };
   const ter = u8(W.terrain_ptr(), MW * MH), shade = u8(W.shade_ptr(), MW * MH);
   const cw = MW + 1, ch = MH + 1;
   let h = new Float32Array(cw * ch);
@@ -1694,7 +1795,7 @@ function computeHeights() {
   for (let cy = 0; cy <= MH; cy++) for (let cx = 0; cx <= MW; cx++) {
     let sum = 0, n = 0, land = 0, shallow = 0;
     for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
-      const tx = wrapT(cx + dx), ty = cy + dy;
+      const [tx, ty] = tileAt(cx + dx, cy + dy);
       if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) continue;
       sum += elevOf(shade[ty * MW + tx] / 255); n++;
       const t = ter[ty * MW + tx];
@@ -1716,14 +1817,13 @@ function computeHeights() {
       const me = kind(cy * cw + cx);
       let sum = 0, n = 0;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const x = wrapX ? (cx + dx + MW) % MW : cx + dx, y = cy + dy;
+        const [x, y] = cornerAt(cx + dx, cy + dy);
         if (x < 0 || y < 0 || x >= cw || y >= ch || (me !== 2 && kind(y * cw + x) !== me)) continue;
         const wgt = dx || dy ? 1 : 2;
         sum += h[y * cw + x] * wgt; n += wgt;
       }
       o[cy * cw + cx] = sum / n;
     }
-    if (wrapX) for (let cy = 0; cy < ch; cy++) o[cy * cw + MW] = o[cy * cw];
     h = o;
   }
   // Keep water below the surface and land above it. A corner on the shore
@@ -1783,6 +1883,8 @@ function buildWorld() {
   const mat = withFow(new THREE.MeshLambertMaterial({ map: tex }), groundPatch);
   const terrain = new THREE.Group();
   for (let by = 0; by < MH; by += BLOCK) for (let bx = 0; bx < MW; bx += BLOCK) {
+    // (Nothing to draw between the Globe's strips of faces.)
+    if (globeGap(by)) continue;
     const w = Math.min(BLOCK, MW - bx), d = Math.min(BLOCK, MH - by);
     const g = new THREE.PlaneGeometry(w, d, w, d);
     g.rotateX(-Math.PI / 2);
@@ -1796,7 +1898,8 @@ function buildWorld() {
   R3.terrain = terrain;
   terrainToBlocks(0, 0, MW, MH);
 
-  buildShore();
+  // (The Globe has no edge for a shore to go round.)
+  if (!globeMap()) buildShore();
   buildWater();
   // The rally flag wears this player's colour.
   if (R3.rallyFor !== ME) {
@@ -1819,19 +1922,14 @@ function buildWorld() {
   const wasGlobe = GLOBE.on;
   GLOBE.on = !!(W.map_globe && W.map_globe());
   if (GLOBE.on !== wasGlobe) for (const r of fowMats) { const m = r.deref(); if (m) m.needsUpdate = true; }
-  GLOBE.R = MW / (2 * Math.PI);
-  if (GLOBE.on) { const p = i => W.globe_proj(i); GLOBE.R = p(0); GLOBE.yn = p(1); GLOBE.hn = p(2); GLOBE.top = p(3); GLOBE.ys = p(4); GLOBE.hs = p(5); }
-  GLOBE.u.uGlobe.value.set(GLOBE.on ? GLOBE.R : 0, MW, MH, GLOBE.top);
-  GLOBE.u.uGlobeB.value.set(GLOBE.yn, GLOBE.hn, GLOBE.ys, GLOBE.hs);
+  if (GLOBE.on) cubeLoad();
+  GLOBE.u.uGlobe.value.set(GLOBE.on ? GLOBE.R : 0, 0, 0, 0);
   R3.camera.far = GLOBE.on ? 1500 : 400; R3.camera.updateProjectionMatrix();
   if (R3.globeBall) { disposeTree(R3.globeBall); R3.globeBall = null; }
   if (GLOBE.on) {
-    // (Sea, under the seams. The map reaches both poles, which are ice.)
+    // (Deep sea, under the seams.)
     const g = new THREE.SphereGeometry(GLOBE.R - 0.45, 96, 64), col = new Float32Array(g.attributes.position.count * 3);
-    for (let i = 0; i < g.attributes.position.count; i++) {
-      const sy = g.attributes.position.getY(i) / (GLOBE.R - 0.45), ice = Math.abs(sy) > 0.995;
-      col.set(ice ? [0.86, 0.9, 0.93] : [0.02, 0.1, 0.22], i * 3);
-    }
+    for (let i = 0; i < g.attributes.position.count; i++) col.set([0.02, 0.1, 0.22], i * 3);
     g.setAttribute("color", new THREE.BufferAttribute(col, 3));
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, fog: false });
     mat.userData.flat = true;
@@ -1945,6 +2043,15 @@ function buildShore() {
 // over 5 million triangles on a large Frontier map, at any zoom.)
 const BLOCK = 32;
 
+// Is this the Globe's map? (Before the first frame: from the game.)
+function globeMap() {
+  return !!(W.map_globe && W.map_globe());
+}
+// Does a block starting at row z lie in the gap between the Globe's strips?
+function globeGap(z) {
+  return globeMap() && z >= CUBE_N && z < CUBE_B0;
+}
+
 // Remove something from the scene and free its geometry, its children's too.
 function disposeTree(o) {
   if (o.parent) o.parent.remove(o);
@@ -1955,10 +2062,13 @@ function buildWater() {
   // One point per tile: the swell is 0.018 high and several tiles long,
   // and ripples, foam and shine are worked out per pixel anyway. (Two per
   // tile drew 2.6 million triangles of water.)
-  const pad = 40;
+  // (Past the map's edge, sea to the horizon; on the Globe, none: it has
+  // no edge, only seams, and nothing between its strips of faces.)
+  const pad = globeMap() ? 0 : 40;
   const water = new THREE.Group();
   const blocks = [];
   for (let bz = -pad; bz < MH + pad; bz += BLOCK) for (let bx = -pad; bx < MW + pad; bx += BLOCK) {
+    if (globeGap(bz)) continue;
     const w = Math.min(BLOCK, MW + pad - bx), d = Math.min(BLOCK, MH + pad - bz);
     const geo = new THREE.PlaneGeometry(w, d, w, d);
     geo.rotateX(-Math.PI / 2);
@@ -2365,6 +2475,13 @@ function updateFowTexture() {
   if (!R3.fowData) return;
   const fog = u8(W.fog_ptr(), MW * MH), d = R3.fowData;
   for (let i = 0; i < MW * MH; i++) d[i * 4] = fog[i] === 2 ? 255 : fog[i] === 1 ? 105 : 0;
+  // (On the Globe, the gap's rows next to each strip of faces hold what's
+  // past the seam there, so the smoothing at a strip's edge blends in the
+  // ground beyond, not the gap.)
+  if (GLOBE.on) for (const z of [CUBE_N, CUBE_B0 - 1]) for (let x = 0; x < MW; x++) {
+    const [tx, tz] = cubeResolveTile(x, z);
+    d[(z * MW + x) * 4] = d[(tz * MW + tx) * 4];
+  }
   R3.fowTex.needsUpdate = true;
 }
 
@@ -2385,16 +2502,16 @@ function placeCamera() {
   const gy = Math.max(0, hAt(cam.x, cam.y));
   let horiz = Math.cos(cam.pitch) * cam.dist, up = Math.sin(cam.pitch) * cam.dist, lookY = gy;
   if (GLOBE.on) {
-    // Things are smaller toward the poles (Mercator), so the camera comes
+    // Things are drawn smaller toward a face's edges, so the camera comes
     // as much closer: close up, the game looks the same size anywhere.
     // From far off it keeps its distance instead, or the ball would swell
-    // and shrink as it turns north and south.
-    globeLat(cam.y);
+    // and shrink as the camera moves over it.
+    globeAt(cam.x, cam.y);
     const far = Math.max(0, Math.min(1, (cam.dist - 50) / 120)), k = GLOBE.k + (1 - GLOBE.k) * far * far * (3 - 2 * far);
     horiz *= k; up *= k; lookY = gy * GLOBE.k;
     globeFocus(cam.x, cam.y, lookY + up, horiz, cam.yaw);
     if (R3.globeBall) {
-      // The ball under it all: sea in the seams, ice at the poles.
+      // The ball under it all: deep sea, under the seams.
       R3.globeBall.position.set(cam.x, -GLOBE.R, cam.y);
       R3.globeBall.matrix.makeBasis(_gbx.set(GLOBE.e0.x, GLOBE.u0.x, -GLOBE.n0.x), _gby.set(GLOBE.e0.y, GLOBE.u0.y, -GLOBE.n0.y), _gbz.set(GLOBE.e0.z, GLOBE.u0.z, -GLOBE.n0.z)).setPosition(cam.x, -GLOBE.R, cam.y);
       R3.globeBall.matrixWorld.copy(R3.globeBall.matrix);
@@ -2928,8 +3045,7 @@ function render3d(alpha, now, dt) {
       setRing(o, !!(flags & 1), kind === K.Capitol ? 1.2 : stat(kind, 6) * 0.78);
       continue;
     }
-    let x = lerpX(E(i, F.px), E(i, F.x), alpha);
-    let y = E(i, F.py) + (E(i, F.y) - E(i, F.py)) * alpha;
+    let [x, y] = lerpXY(E(i, F.px), E(i, F.py), E(i, F.x), E(i, F.y), alpha);
     // Multiplayer: a correction moved this unit; slide there instead of jumping.
     const nudge = R3.nudges.get(id);
     if (nudge) {
@@ -2968,7 +3084,7 @@ function render3d(alpha, now, dt) {
       // Out of sight (with room for a shadow falling into it): no walk
       // cycle, which was the most garbage the page made after three.js.
       _sph.center.copy(o.root.position); _sph.radius = 3;
-      if (GLOBE.on ? o.root.visible && Math.hypot(Math.min(Math.abs(o.x - cam.x), MW - Math.abs(o.x - cam.x)), o.y - cam.y) < cam.dist * 1.8 + 15 : _frustum.intersectsSphere(_sph)) animateRig(o, kind, anim, t, dt, !!(flags & 8));
+      if (GLOBE.on ? o.root.visible && Math.hypot(...cubeDelta(cam.x, cam.y, o.x, o.y)) < cam.dist * 1.8 + 15 : _frustum.intersectsSphere(_sph)) animateRig(o, kind, anim, t, dt, !!(flags & 8));
       else { o.rs.prevX = o.x; o.rs.prevY = o.y; }
     }
     else if (isNaval(kind)) {
@@ -3119,8 +3235,8 @@ function updateNukes(now, alpha = 0) {
       R3.shotAt.set(`${tx},${ty}`, hit);
       // Fast off the rail, a little bowed upward.
       const v = u * (0.6 + 0.4 * u);
-      const hx = ax + wrapDX(hit[0] - ax);
-      const mp = q => [ax + (hx - ax) * q, ay + (hit[1] - ay) * q, a0 + (hit[2] - a0) * q + 2 * q * (1 - q)];
+      const [hdx, hdy] = wrapDXY(ax, ay, hit[0], hit[1]), hx = ax + hdx, hy = ay + hdy;
+      const mp = q => [ax + (hx - ax) * q, ay + (hy - ay) * q, a0 + (hit[2] - a0) * q + 2 * q * (1 - q)];
       const [mx, my, mh] = mp(v), [mx2, my2, mh2] = mp(Math.min(1, v + 0.02));
       im.visible = true;
       im.position.set(mx, mh, my);
@@ -3165,9 +3281,9 @@ function updateNukes(now, alpha = 0) {
 // of the way, as flat [x, z, height]. A straight line on the flat maps (over
 // a straight line from the silo's ground to the target's: following the
 // ground under it made it shake over every hill), arcing `H` high. On the
-// Globe it flies the great circle, the shortest way round the ball (over a
-// pole or across the 180° seam where that's shorter), and the arc is `H`
-// high as drawn at any latitude (a flat height is drawn `G.k` times as tall).
+// Globe it flies the great circle, the shortest way round the ball, over
+// seams as it goes, and the arc is `H` high as drawn anywhere (a flat
+// height is drawn `G.k` times as tall).
 function nukePath(sx, sy, tx, ty) {
   const g0 = groundAt(sx, sy), g1 = groundAt(tx, ty), H = 10;
   const lift = q => g0 + (g1 - g0) * q;
@@ -3178,41 +3294,38 @@ function nukePath(sx, sy, tx, ty) {
   // 30 across half the world).
   const top = H + 20 * w / Math.PI;
   return q => {
-    const [x, z] = w < 1e-5 ? [sx + wrapDX(tx - sx) * q, sy + (ty - sy) * q] : globeSlerp(a, b, w, q);
-    globeLat(z);
+    const [x, z] = w < 1e-5 ? [sx, sy] : globeSlerp(a, b, w, q);
+    globeAt(x, z);
     return [x, z, lift(q) + 4 * top * q * (1 - q) / Math.max(0.2, GLOBE.k)];
   };
 }
 // The unit vector of flat (x, z) on the ball (as `globeBend`'s d).
 function globeUnit(x, z) {
-  const lon = (x / MW - 0.5) * 2 * Math.PI, lat = globeLatOf(z);
-  return [Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon)];
+  return globeAt(x, z).slice();
 }
 // `q` of the way from unit vector a to b (`w` radians apart) round the ball,
 // back to flat [x, z].
 function globeSlerp(a, b, w, q) {
   const sw = Math.sin(w), fa = Math.sin((1 - q) * w) / sw, fb = Math.sin(q * w) / sw;
-  const dx = a[0] * fa + b[0] * fb, dy = a[1] * fa + b[1] * fb, dz = a[2] * fa + b[2] * fb;
-  const lat = Math.asin(Math.max(-1, Math.min(1, dy / Math.hypot(dx, dy, dz))));
-  const x = ((Math.atan2(dx, dz) / (2 * Math.PI) + 0.5) * MW + MW) % MW;
-  return [x, globeZOf(lat)];
+  const d = [0, 1, 2].map(i => a[i] * fa + b[i] * fb), l = Math.hypot(...d);
+  return cubeAtDir(d.map(v => v / l));
 }
 // Which way something flying from flat [x, z, h] to [x2, z2, h2] heads, as
 // a direction in the flat world's east, up and south at the first point
-// (into `out`). On the Globe, worked out on the ball: a flat difference
-// points wrong in the polar bands, where columns narrow faster than rows,
-// and over a pole, where x jumps half the world.
+// (into `out`). On the Globe, worked out on the ball: over a seam a flat
+// difference points anywhere.
 function flightDir([x, z, h], [x2, z2, h2], out) {
   if (!GLOBE.on) return out.set(x2 - x, h2 - h, z2 - z).normalize();
-  const G = GLOBE, on = (x, z, h) => { globeLat(z); const u = globeUnit(x, z), r = G.R + h * G.k; return [u[0] * r, u[1] * r, u[2] * r]; };
+  const G = GLOBE, on = (x, z, h) => { const u = globeAt(x, z), r = G.R + h * G.k; return [u[0] * r, u[1] * r, u[2] * r]; };
+  // (The first point last: its frame is the one left in GLOBE.)
   const b = on(x2, z2, h2), a = on(x, z, h);
-  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-  const lon = (x / MW - 0.5) * 2 * Math.PI, c = G.c, s = G.s, sl = Math.sin(lon), cl = Math.cos(lon);
-  return out.set(d[0] * cl - d[2] * sl, d[0] * c * sl + d[1] * s + d[2] * c * cl, d[0] * s * sl - d[1] * c + d[2] * s * cl).normalize();
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], dot = v => v[0] * d[0] + v[1] * d[1] + v[2] * d[2];
+  return out.set(dot(G.east), dot(G.up), dot(G.south)).normalize();
 }
-// An east-west difference the short way round on the Globe.
-function wrapDX(d) {
-  return GLOBE.on && Math.abs(d) > MW / 2 ? d - Math.sign(d) * MW : d;
+// An east-west difference to draw across: on the Globe the short way, over
+// a seam if one lies between (from a to b).
+function wrapDXY(ax, az, bx, bz) {
+  return GLOBE.on ? cubeDelta(ax, az, bx, bz) : [bx - ax, bz - az];
 }
 
 // Aiming a nuke: a ring under the pointer as wide as the blast, and the
@@ -3686,9 +3799,9 @@ function updateArrows(alpha) {
     const b = i * S, x = projBuf[b], y = projBuf[b + 1], px = projBuf[b + 2], py = projBuf[b + 3];
     const sx = projBuf[b + 4], sy = projBuf[b + 5], shooter = projBuf[b + 6], atBuilding = projBuf[b + 7];
     const tx = projBuf[b + 8], ty = projBuf[b + 9];
-    const ix = lerpX(px, x, alpha), iy = py + (y - py) * alpha;
-    // Which way it flies: towards the target.
-    let dx = tx - ix, dy = ty - iy, d = Math.hypot(dx, dy);
+    const [ix, iy] = lerpXY(px, py, x, y, alpha);
+    // Which way it flies: towards the target (over a seam the short way).
+    let [dx, dy] = GLOBE.on ? cubeDelta(ix, iy, tx, ty) : [tx - ix, ty - iy], d = Math.hypot(dx, dy);
     if (d < 1e-3) { dx = x - px; dy = y - py; d = Math.hypot(dx, dy) || 1; }
     dx /= d; dy /= d;
     // The bow: ahead of the shooter, at the height it holds it.
