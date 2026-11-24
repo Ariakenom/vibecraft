@@ -79,3 +79,5 @@
 1795553395	2026-11-24	d228bde745cf9931583ea8cd8fd0d61a14a13e62	Merge pull request #74 from Ariakenom/cube-globe
 1795554305	2026-11-24	ef656f11186fb72a8c9bb7c8b06f783cce8389d0	The Globe's map preview is a world map
 1795554316	2026-11-24	0139522be9923780f878df7d488dcb37d7f7eb3f	Merge pull request #75 from Ariakenom/globe-preview
+1795555742	2026-11-24	7a142e09b5e1a8fa15308ac71d7fb67defc8f4f0	Globe: no view jumps when scrolling, no lines at seams
+1795555753	2026-11-24	2b48ddf93bcabee32cee195a52081ca2dcd56da4	Merge pull request #76 from Ariakenom/w-scroll
