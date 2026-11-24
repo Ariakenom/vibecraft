@@ -71,7 +71,8 @@ at 66°) and was squeezed thin past them (to 9% across at 85°).
   (render3d.js `cubeDir`, `globeAt`), and the camera goes over a seam onto
   the face beyond, still looking the same way on the ball (main.js
   `clampCam`), in steps of a few tiles so a long step can't land far past
-  a seam. The minimap and the start screen's preview are world maps, north
+  a seam, keeping the way it faces on the ball over every step (where two
+  faces meet, even inside a strip, their grids are at an angle). The minimap and the start screen's preview are world maps, north
   up (main.js `WorldMap`, lib.rs `map_preview`).
 - Seams don't show: a corner on a seam is drawn by both faces with the
   same height and light (render3d.js `globeSeamTwins`); patterns drawn

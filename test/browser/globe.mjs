@@ -142,6 +142,26 @@ const spin = await pg.evaluate(() => {
   return worst;
 });
 check(spin < 45, `scrolling over seams in big steps doesn't spin the view (${spin.toFixed(1)}° at most)`);
+// Nor across the edges between faces inside a strip: their grids meet at
+// an angle too, up to 57° by a corner, and the view snapped round by that
+// much there (playtest). Each frame, the camera's facing on the ball turns
+// a fraction of a degree at most.
+const edges = await pg.evaluate(() => {
+  newGame(3, 0, 2, 4); $("startScreen").hidden = true; running = true; paused = true; readWorld();
+  const look = () => { globeAt(cam.x, cam.y); const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw); return GLOBE.east.map((v, i) => v * s + GLOBE.south[i] * c); };
+  let worst = 0;
+  for (const [x, y, yaw] of [[150, 4, -Math.PI / 2], [310, 155, -Math.PI / 2], [170, 262, Math.PI / 2]]) {
+    cam.x = x; cam.y = y; cam.yaw = yaw; cam.pitch = 0.95; cam.dist = 24; clampCam(); placeCamera();
+    keys.clear(); keys.add("KeyW");
+    for (let f = 0; f < 300; f++) {
+      const l0 = look(); scrollCamera(1 / 60); const l1 = look();
+      worst = Math.max(worst, Math.acos(Math.min(1, l0[0] * l1[0] + l0[1] * l1[1] + l0[2] * l1[2])) * 180 / Math.PI);
+    }
+  }
+  keys.clear(); running = false;
+  return worst;
+});
+check(edges < 2, `scrolling across the edges between faces by a corner doesn't turn the view (${edges.toFixed(2)}° a frame at most)`);
 // The minimap is a world map: a town is drawn where it is in the world
 // (Stockholm-ish towns north, Sydney's south), and a click there brings
 // the camera back to it.
@@ -158,6 +178,39 @@ const mm = await pg.evaluate(() => {
   return out;
 });
 check(mm.on && mm.northUp && mm.trips.every(d => d < 0.5), `the minimap is a world map, north up, and a click comes back where it was (${mm.trips.map(d => d.toFixed(2))} tiles)`);
-check(pg.errors.length === 0, "no page errors");
+check(pg.errors.length === 0, "no page errors" + (pg.errors.length ? ": " + pg.errors.slice(0, 2).join(" / ") : ""));
+// Lakes have water in them, drawn (a stale test once threw away every
+// drop of water on the Globe, and its lakes stood empty, dry sand): looking
+// straight down on the middle of the lake nearest the start, it's blue.
+const pd = await open(b, "", { draw: true, w: 400, h: 300 });
+const px = await pd.evaluate(() => {
+  newGame(3, 0, 2, 4); $("startScreen").hidden = true; running = true; paused = true; W.set_view(ME, 1); readWorld();
+  const ter = u8(W.terrain_ptr(), MW * MH);
+  let hx = 0, hy = 0;
+  for (let i = 0; i < entCount; i++) if (E(i, F.kind) === K.Capitol && E(i, F.owner) === ME) { hx = E(i, F.x); hy = E(i, F.y); }
+  // A lake tile with lake all round it.
+  let best = null, bd = 1e9;
+  for (let y = 2; y < MH - 2; y++) for (let x = 2; x < MW - 2; x++) {
+    if (ter[y * MW + x] !== 5 || ![-1, 0, 1].every(dy => [-1, 0, 1].every(dx => ter[(y + dy) * MW + x + dx] === 5))) continue;
+    const d = Math.hypot(...cubeDelta(hx, hy, x, y));
+    if (d < bd) { bd = d; best = [x + 0.5, y + 0.5]; }
+  }
+  cam.x = best[0]; cam.y = best[1]; cam.dist = 12; cam.pitch = 1.35; cam.yaw = 0; placeCamera();
+  // (Read in the frame it's drawn, from the game's own loop.)
+  const cv = R3.renderer.domElement, sm = document.createElement("canvas"); sm.width = sm.height = 1;
+  // (Read right after the game's own drawing, in the same task: by the
+  // next frame the canvas is cleared.)
+  const real = window.render3d;
+  return new Promise(r => {
+    let n = 0;
+    window.render3d = (...a) => {
+      const out = real(...a);
+      if (++n === 3) { window.render3d = real; sm.getContext("2d").drawImage(cv, cv.width / 2, cv.height / 2, 1, 1, 0, 0, 1, 1); r(Array.from(sm.getContext("2d").getImageData(0, 0, 1, 1).data.slice(0, 3))); }
+      return out;
+    };
+  });
+});
+check(px[2] > px[0] + 30 && px[2] > px[1] - 10, `a lake on the Globe has water in it (the middle is ${px})`);
+check(pd.errors.length === 0, "no page errors drawing" + (pd.errors.length ? ": " + pd.errors.slice(0, 2).join(" / ") : ""));
 await b.close();
 process.exit(failed() ? 1 : 0);
