@@ -77,3 +77,5 @@
 1795377296	2026-11-22	c8fd9e556f99bf09ffcdcfac05d7787bbfd3ec0b	Merge pull request #73 from Ariakenom/nuke-great-circle
 1795553387	2026-11-24	e1d760e217f5d75b29d875695cdf79ee96483166	The Globe's minimap is a world map
 1795553395	2026-11-24	d228bde745cf9931583ea8cd8fd0d61a14a13e62	Merge pull request #74 from Ariakenom/cube-globe
+1795554305	2026-11-24	ef656f11186fb72a8c9bb7c8b06f783cce8389d0	The Globe's map preview is a world map
+1795554316	2026-11-24	0139522be9923780f878df7d488dcb37d7f7eb3f	Merge pull request #75 from Ariakenom/globe-preview
