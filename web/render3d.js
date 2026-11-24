@@ -281,6 +281,15 @@ function globeAt(x, z) {
   G.k = Math.sqrt(ls * lt) * G.R;
   return d;
 }
+// The direction through flat (x, z) from the ball's middle, and nothing
+// else (cheaper than `globeAt`; it leaves GLOBE's frame alone).
+function cubeUnit(x, z) {
+  if (cubeFaceOf(x, z) < 0) [x, z] = cubeResolve(x, z);
+  const col = Math.min(2, Math.floor(x / CUBE_N)), b = z >= CUBE_B0, F = CUBE_FACES[col + (b ? 3 : 0)];
+  const ta = Math.tan(((x - col * CUBE_N) * 2 / CUBE_N - 1) * Math.PI / 4), tb = Math.tan(((z - (b ? CUBE_B0 : 0)) * 2 / CUBE_N - 1) * Math.PI / 4);
+  const n0 = F.c[0] + ta * F.u[0] + tb * F.v[0], n1 = F.c[1] + ta * F.u[1] + tb * F.v[1], n2 = F.c[2] + ta * F.u[2] + tb * F.v[2], L = Math.hypot(n0, n1, n2);
+  return [n0 / L, n1 / L, n2 / L];
+}
 // The flat point a direction (from the ball's middle) is drawn at (as
 // cube.rs `at_dir`).
 function cubeAtDir(d) {

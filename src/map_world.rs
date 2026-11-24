@@ -40,7 +40,7 @@ const SOUTH: f32 = -58.0;
 /// turn putting every corner furthest from land: all are 4.5° or more out
 /// at sea (Norwegian Sea, off Brazil, Arabian Sea, South Atlantic, North
 /// and East Pacific, Arafura Sea, Ross Sea).
-const TURN: [[f32; 3]; 3] = [
+pub const TURN: [[f32; 3]; 3] = [
     [-0.103_653_767, 0.729_875_374, -0.675_675_836],
     [-0.284_759_872, -0.672_675_043, -0.682_949_56],
     [-0.952_978_337, 0.121_615_07, 0.277_564_52],

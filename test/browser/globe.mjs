@@ -102,6 +102,22 @@ const nuke = await pg.evaluate(() => {
 });
 check(nuke.flew > 100 && nuke.finite, `a nuke flies on the Globe (${nuke.flew} ticks)`);
 check(nuke.off < 0.5 && nuke.faces >= 2, `on the great circle, over ${nuke.faces} faces (${nuke.off.toFixed(2)} tiles off it at most)`);
+// The minimap is a world map: a town is drawn where it is in the world
+// (Stockholm-ish towns north, Sydney's south), and a click there brings
+// the camera back to it.
+const mm = await pg.evaluate(() => {
+  newGame(3, 0, 2, 4); $("startScreen").hidden = true; running = false; readWorld();
+  const out = { on: WorldMap.on, trips: [], order: [] };
+  for (const [x, y] of [[100.5, 50.5], [300.5, 140.5], [470.5, 300.5], [20.5, 400.5]]) {
+    const [mx, my] = WorldMap.of(x, y), [bx, by] = WorldMap.toMap(mx, my);
+    out.trips.push(Math.hypot(...cubeDelta(x, y, bx, by)));
+  }
+  // North is up: the North Pole's pixel row is the top of the map.
+  out.northUp = WorldMap.of(...WorldMap.toMap(75, WorldMap.y0 + 1))[1] < WorldMap.y0 + 3;
+  drawMinimap();
+  return out;
+});
+check(mm.on && mm.northUp && mm.trips.every(d => d < 0.5), `the minimap is a world map, north up, and a click comes back where it was (${mm.trips.map(d => d.toFixed(2))} tiles)`);
 check(pg.errors.length === 0, "no page errors");
 await b.close();
 process.exit(failed() ? 1 : 0);

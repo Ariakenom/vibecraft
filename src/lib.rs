@@ -152,6 +152,13 @@ pub extern "C" fn map_globe() -> u32 {
 pub extern "C" fn cube_size(which: u32) -> i32 {
     if which == 0 { cube::N } else { cube::GAP }
 }
+/// How the Globe's cube is turned in the world (`map_world::TURN`), row by
+/// row: for the minimap's world map.
+#[unsafe(no_mangle)]
+pub extern "C" fn globe_turn(i: u32) -> f32 {
+    let i = (i as usize).min(8);
+    map_world::TURN[i / 3][i % 3]
+}
 #[unsafe(no_mangle)]
 pub extern "C" fn cube_face(f: u32, i: u32) -> i32 {
     cube::face_numbers((f as usize).min(5)).get(i as usize).copied().unwrap_or(0)

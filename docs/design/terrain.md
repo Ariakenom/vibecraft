@@ -70,7 +70,8 @@ at 66°) and was squeezed thin past them (to 9% across at 85°).
 - The page bends each face round the ball as the game does
   (render3d.js `cubeDir`, `globeAt`), and the camera goes over a seam onto
   the face beyond, still looking the same way on the ball (main.js
-  `clampCam`). The minimap shows the atlas, gap and all. Patterns drawn
+  `clampCam`). The minimap is a world map, north up (main.js `WorldMap`),
+  with the camera's view traced on it. Patterns drawn
   from the flat position (the sea's and the sand's noise, cloud shadows)
   don't join at seams; they're faint.
 

@@ -535,6 +535,7 @@ function bakeTerrain() {
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   sc.putImageData(img, 0, 0);
+  WorldMap.setup(img.data);
 
   // The 3D texture is one canvas of TILE px per tile, which the GPU takes as
   // one texture: on Frontier's big maps that would be 13,000 px and more
@@ -583,8 +584,61 @@ function updateFog() {
     d[i * 4 + 3] = fog[i] === 0 ? 255 : fog[i] === 1 ? 120 : 0;
   }
   fogCtx.putImageData(fogImg, 0, 0);
+  if (WorldMap.on) WorldMap.fog(fog);
   updateFowTexture();
 }
+
+// The Globe's minimap: a world map, north up, from 180° west to 180° east
+// (letterboxed: it's twice as wide as it's tall). The game's atlas of cube
+// faces (cube.rs) makes no sense to look at; a world map does. Every point
+// goes to it by its latitude and longitude (the cube's direction, turned as
+// the world has it: `globe_turn`), and a click comes back the same way.
+const WorldMap = {
+  on: false, w: 0, h: 0, y0: 0, turn: null, look: null, canvas: null, fogCanvas: null, fogCtx: null, fogImg: null,
+  // Paint the map from the small ground image, and remember which tile
+  // each pixel shows (for the fog).
+  setup(groundImg) {
+    this.on = !!(W.map_globe && W.map_globe());
+    if (!this.on) return;
+    cubeLoad();
+    this.turn = Array.from({ length: 9 }, (_, i) => W.globe_turn(i));
+    this.w = mini.width; this.h = Math.round(mini.width / 2); this.y0 = Math.round((mini.height - this.h) / 2);
+    this.look = new Int32Array(this.w * this.h);
+    this.canvas = document.createElement("canvas"); this.canvas.width = this.w; this.canvas.height = this.h;
+    const ctx = this.canvas.getContext("2d"), img = ctx.createImageData(this.w, this.h);
+    for (let py = 0; py < this.h; py++) for (let px = 0; px < this.w; px++) {
+      const [x, y] = this.toMap(px + 0.5, this.y0 + py + 0.5), i = Math.floor(y) * MW + Math.floor(x), p = py * this.w + px;
+      this.look[p] = i;
+      img.data.set([groundImg[i * 4], groundImg[i * 4 + 1], groundImg[i * 4 + 2], 255], p * 4);
+    }
+    ctx.putImageData(img, 0, 0);
+    this.fogCanvas = document.createElement("canvas"); this.fogCanvas.width = this.w; this.fogCanvas.height = this.h;
+    this.fogCtx = this.fogCanvas.getContext("2d"); this.fogImg = this.fogCtx.createImageData(this.w, this.h);
+  },
+  fog(fog) {
+    const d = this.fogImg.data;
+    for (let p = 0; p < this.look.length; p++) {
+      const f = fog[this.look[p]];
+      d[p * 4] = 10; d[p * 4 + 1] = 9; d[p * 4 + 2] = 7; d[p * 4 + 3] = f === 0 ? 255 : f === 1 ? 120 : 0;
+    }
+    this.fogCtx.putImageData(this.fogImg, 0, 0);
+  },
+  // A map point (the game's atlas) to the minimap's pixels.
+  of(x, y) {
+    const d = cubeUnit(x, y), T = this.turn;
+    const e0 = T[0] * d[0] + T[1] * d[1] + T[2] * d[2], e1 = T[3] * d[0] + T[4] * d[1] + T[5] * d[2], e2 = T[6] * d[0] + T[7] * d[1] + T[8] * d[2];
+    const lat = Math.asin(Math.max(-1, Math.min(1, e1))), lon = Math.atan2(e0, e2);
+    return [(lon / Math.PI + 1) * 0.5 * this.w, this.y0 + (0.5 - lat / Math.PI) * this.h];
+  },
+  // And back: a minimap pixel to the map (the bars above and below are the
+  // poles).
+  toMap(mx, my) {
+    const lon = (mx / this.w * 2 - 1) * Math.PI, lat = (0.5 - Math.max(0, Math.min(this.h, my - this.y0)) / this.h) * Math.PI;
+    const e = [Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon)], T = this.turn;
+    // (TURN's transpose takes the world's directions to the cube's.)
+    return cubeAtDir([0, 1, 2].map(j => T[j] * e[0] + T[3 + j] * e[1] + T[6 + j] * e[2]));
+  },
+};
 
 // ===========================================================================
 // Reading the world from wasm memory
@@ -695,9 +749,14 @@ function drawOverlay() {
 }
 
 function drawMinimap() {
-  const s = mini.width / MW;
+  // (On the Globe, a world map: `WorldMap`. Points go there by `at`.)
+  const G = WorldMap.on, s = G ? WorldMap.w / (4 * CUBE_N) : mini.width / MW;
+  const at = G ? (x, y) => WorldMap.of(x, y) : (x, y) => [x * s, y * s];
   mctx.imageSmoothingEnabled = true;
-  mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
+  if (G) {
+    mctx.fillStyle = "#0b1a2c"; mctx.fillRect(0, 0, mini.width, mini.height);
+    mctx.drawImage(WorldMap.canvas, 0, WorldMap.y0);
+  } else mctx.drawImage(terrainSmall, 0, 0, mini.width, mini.height);
   // One colour at a time (setting the colour for every dot is slow and makes garbage).
   // Deposit kinds (defs::Dep), every era's: fruit bushes, forest, stone,
   // horses, game, (5, water, has no dots), iron ore, clay, sheep hills,
@@ -706,20 +765,21 @@ function drawMinimap() {
   for (let kd = 0; kd < RES_DOT.length; kd++) {
     if (!RES_DOT[kd]) continue;
     mctx.fillStyle = RES_DOT[kd];
-    for (let i = 0; i < resCount; i++) if (resBuf[i * 5 + 2] === kd) mctx.fillRect(resBuf[i * 5] * s, resBuf[i * 5 + 1] * s, dot, dot);
+    for (let i = 0; i < resCount; i++) if (resBuf[i * 5 + 2] === kd) { const [x, y] = at(resBuf[i * 5] + 0.5, resBuf[i * 5 + 1] + 0.5); mctx.fillRect(x - dot / 2, y - dot / 2, dot, dot); }
   }
-  mctx.drawImage(fogCanvas, 0, 0, mini.width, mini.height);
+  if (G) mctx.drawImage(WorldMap.fogCanvas, 0, WorldMap.y0);
+  else mctx.drawImage(fogCanvas, 0, 0, mini.width, mini.height);
   for (let i = 0; i < entCount; i++) {
-    const k = E(i, F.kind), o = E(i, F.owner);
+    const k = E(i, F.kind), o = E(i, F.owner), [x, y] = at(E(i, F.x), E(i, F.y));
     mctx.fillStyle = (E(i, F.flags) & 1) ? "#fff" : PLIGHT[o];
-    if (isBld(k)) { const z = groundSize(k) * s; mctx.fillRect(E(i, F.x) * s - z / 2, E(i, F.y) * s - z / 2, z, z); }
-    else mctx.fillRect(E(i, F.x) * s - 1.5, E(i, F.y) * s - 1.5, 3, 3);
+    if (isBld(k)) { const z = Math.max(2, groundSize(k) * s); mctx.fillRect(x - z / 2, y - z / 2, z, z); }
+    else mctx.fillRect(x - 1.5, y - 1.5, 3, 3);
   }
   // Warnings: a red ring that pulses for the first seconds, then fades.
   const now = performance.now();
   alertMarks = alertMarks.filter(m => now - m.t < ALERT_MS);
   for (const m of alertMarks) {
-    const age = now - m.t, x = m.x * s, y = m.y * s;
+    const age = now - m.t, [x, y] = at(m.x, m.y);
     const fade = 1 - age / ALERT_MS;
     mctx.strokeStyle = `rgba(255,70,50,${(0.5 + 0.5 * fade).toFixed(2)})`;
     mctx.lineWidth = 2;
@@ -729,6 +789,43 @@ function drawMinimap() {
       mctx.strokeStyle = `rgba(255,70,50,${(1 - p).toFixed(2)})`;
       mctx.beginPath(); mctx.arc(x, y, 5 + p * 10, 0, 7); mctx.stroke();
     }
+  }
+  // What the camera sees: on the Globe, the edge of the screen traced over
+  // the ground (broken where it leaves the ball or crosses 180°), and a
+  // dot where the camera looks.
+  if (G) {
+    mctx.strokeStyle = "#efe6d1"; mctx.lineWidth = 1;
+    const pts = [];
+    for (let n = 0; n < 32; n++) {
+      const t = (n % 8) / 8, side = n >> 3;
+      const sx = [t, 1, 1 - t, 0][side] * view._w, sy = [0, t, 1, 1 - t][side] * view._h;
+      const g = screenToGround(sx, sy);
+      pts.push(g ? at(g.x, g.y) : null);
+    }
+    // (Zoomed out, the screen's edge is mostly sky: then the ball's own
+    // horizon as the camera sees it, where its view ends.)
+    if (pts.filter(Boolean).length < 16) {
+      pts.length = 0;
+      const sv = [GLOBE.seen.x, GLOBE.seen.y, GLOBE.seen.z], r = Math.acos(GLOBE.cosLimit);
+      const a0 = Math.abs(sv[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      const cross = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      let a = cross(sv, a0); const la = Math.hypot(...a); a = a.map(v => v / la);
+      const bb = cross(sv, a);
+      for (let n = 0; n < 32; n++) {
+        const f = n / 32 * 2 * Math.PI, d = [0, 1, 2].map(i => Math.cos(r) * sv[i] + Math.sin(r) * (Math.cos(f) * a[i] + Math.sin(f) * bb[i]));
+        pts.push(at(...cubeAtDir(d)));
+      }
+    }
+    mctx.beginPath();
+    for (let n = 0; n <= 32; n++) {
+      const p = pts[n % 32], q = pts[(n + 31) % 32];
+      if (!p) continue;
+      if (n && q && Math.abs(p[0] - q[0]) < WorldMap.w / 2) mctx.lineTo(p[0], p[1]); else mctx.moveTo(p[0], p[1]);
+    }
+    mctx.stroke();
+    const [cx, cy] = at(cam.x, cam.y);
+    mctx.fillStyle = "#efe6d1"; mctx.beginPath(); mctx.arc(cx, cy, 2, 0, 7); mctx.fill();
+    return;
   }
   // What the camera sees is a trapezoid on the ground.
   const q = viewQuad();
@@ -1758,6 +1855,10 @@ view.addEventListener("wheel", e => {
 let miniDrag = false;
 function miniMove(e) {
   const r = mini.getBoundingClientRect();
+  if (WorldMap.on) {
+    const [x, y] = WorldMap.toMap((e.clientX - r.left) / r.width * mini.width, (e.clientY - r.top) / r.height * mini.height);
+    return { x, y };
+  }
   return { x: ((e.clientX - r.left) / r.width) * MW, y: ((e.clientY - r.top) / r.height) * MH };
 }
 mini.addEventListener("pointerdown", e => {
