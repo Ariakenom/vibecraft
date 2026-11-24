@@ -1399,9 +1399,35 @@ pub extern "C" fn map_preview(seed: u32, players: u32, mode: u32) -> u32 {
             }
         }
     }
-    let w = m.w as u32;
+    // The Globe: its atlas of cube faces makes no sense to look at, so a
+    // world map instead, north up, 180° west to 180° east (as the minimap).
+    // Each pixel shows the tile at its latitude and longitude; the towns
+    // are drawn again on top, where they are in the world.
+    let (px, w, h) = if m.wrap {
+        let (w, h) = (480i32, 240i32);
+        let mut world: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let (lon, lat) = ((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
+                let (x, y) = map_world::globe_tile(90.0 - lat / h as f32 * 180.0, lon / w as f32 * 360.0 - 180.0);
+                px[m.idx(x as i32, y as i32)]
+            })
+            .collect();
+        for &(bx, by) in &bases {
+            let (lat, lon) = map_world::lat_lon(bx as f32 + 0.5, by as f32 + 0.5);
+            let (cx, cy) = (((lon + 180.0) / 360.0 * w as f32) as i32, ((90.0 - lat) / 180.0 * h as f32) as i32);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let (x, y) = ((cx + dx).rem_euclid(w), (cy + dy).clamp(0, h - 1));
+                    world[(y * w + x) as usize] = 7;
+                }
+            }
+        }
+        (world, w as u32, h as u32)
+    } else {
+        (px, m.w as u32, m.h as u32)
+    };
     PREVIEW.with(|p| *p.borrow_mut() = px);
-    PREVIEW_H.with(|h| h.set(m.h as u32));
+    PREVIEW_H.with(|hh| hh.set(h));
     w
 }
 /// The height of the last `map_preview`, in tiles.
