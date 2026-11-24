@@ -4106,10 +4106,6 @@ function buildWater() {
       }
     ` + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
-        // (On the Globe there's nothing past the map's edges: east and west
-        // the other side of the world is drawn there already, and at the
-        // top and bottom the ice caps are.)
-        if (uGlobe.x > 0.0 && (vWPos.x < 0.0 || vWPos.x > uGlobe.y || vWPos.y < 0.0 || vWPos.y > uGlobe.z)) discard;
         float ground = texture2D(uHeight, (vWPos + uHeightBox.xy) / uHeightBox.zw).r;
         float dRaw = ${WATER_Y.toFixed(3)} - ground;
         if (dRaw < -0.01) discard;
@@ -6550,7 +6546,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "f3adb80fe867", "base": "0139522be9"};
+const BUILD_INFO = {"sim": "f3adb80fe867", "base": "2b48ddf93b"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -9513,10 +9509,18 @@ function panCam(east, south) {
     for (let k = 0; k < n; k++) {
       const c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
       globeAt(cam.x, cam.y);
+      // (Which way the camera faces on the ball, kept over the step: where
+      // two faces meet, even inside a strip, their grids are at an angle,
+      // up to 30° by a corner, and measured on the new face's grid the
+      // view snapped round by that much.)
+      const look = GLOBE.east.map((v, i) => v * s + GLOBE.south[i] * c);
       const ls = Math.hypot(...GLOBE.es) * GLOBE.R, lt = Math.hypot(...GLOBE.et) * GLOBE.R;
       cam.x += (right * c + back * s) / n / Math.max(0.5, ls);
       cam.y += (-right * s + back * c) / n / Math.max(0.5, lt);
       clampCam();
+      globeAt(cam.x, cam.y);
+      const dot = a => a[0] * look[0] + a[1] * look[1] + a[2] * look[2];
+      cam.yaw = Math.atan2(dot(GLOBE.east), dot(GLOBE.south));
     }
     return;
   } else {
@@ -9665,6 +9669,7 @@ function loop(now) {
   if (running) {
     const f0 = performance.now();
     scrollCamera(dt);
+    watchCam(dt);
     if (mp) pumpMultiplayer(performance.now(), false);
     else if (watcher) { if (watcher.pump()) handleEvents(); }
     else if (Replay.on) { if (Replay.pump(dt)) handleEvents(); }
@@ -9855,7 +9860,24 @@ function drawSnapshot() {
     ents: entCount, drawCalls: r.calls, triangles: r.triangles, graphics: gfxName,
     heapMB: heap ? Math.round(heap / 104857.6) / 10 : undefined,
     view: [R3.renderer.domElement.width, R3.renderer.domElement.height],
+    cam: [cam.x, cam.y, cam.yaw, cam.dist, cam.pitch].map(v => Math.round(v * 100) / 100),
   };
+}
+// A jump of the view between two frames (the camera's spot moving far, or
+// its facing on the ball turning fast) goes in the trace as an event, with
+// what the camera was before and after: playtest, "the view teleports".
+let lastCam = null;
+function watchCam(dt) {
+  const now = [cam.x, cam.y, cam.yaw, cam.dist];
+  if (lastCam && Trace.cur && typeof GLOBE !== "undefined" && GLOBE.on) {
+    const look = (x, y, yaw) => { globeAt(x, y); return GLOBE.east.map((v, i) => v * Math.sin(yaw) + GLOBE.south[i] * Math.cos(yaw)); };
+    const a = cubeUnit(lastCam[0], lastCam[1]), b = cubeUnit(cam.x, cam.y);
+    const moved = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) * GLOBE.R;
+    const l0 = look(lastCam[0], lastCam[1], lastCam[2]), l1 = look(cam.x, cam.y, cam.yaw);
+    const turned = Math.acos(Math.max(-1, Math.min(1, l0[0] * l1[0] + l0[1] * l1[1] + l0[2] * l1[2]))) * 180 / Math.PI;
+    if (moved > 4 + cam.dist * 2 * dt || turned > 20) Trace.event("view jump", { moved: +moved.toFixed(1), turned: Math.round(turned), from: lastCam.map(v => +v.toFixed(2)), to: now.map(v => +v.toFixed(2)), keys: [...keys].join(" ") });
+  }
+  lastCam = now;
 }
 // Chrome and Edge report tasks that block the page for over 50 ms.
 try {

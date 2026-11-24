@@ -2237,10 +2237,6 @@ function buildWater() {
       }
     ` + sh.fragmentShader
       .replace("#include <color_fragment>", `#include <color_fragment>
-        // (On the Globe there's nothing past the map's edges: east and west
-        // the other side of the world is drawn there already, and at the
-        // top and bottom the ice caps are.)
-        if (uGlobe.x > 0.0 && (vWPos.x < 0.0 || vWPos.x > uGlobe.y || vWPos.y < 0.0 || vWPos.y > uGlobe.z)) discard;
         float ground = texture2D(uHeight, (vWPos + uHeightBox.xy) / uHeightBox.zw).r;
         float dRaw = ${WATER_Y.toFixed(3)} - ground;
         if (dRaw < -0.01) discard;
