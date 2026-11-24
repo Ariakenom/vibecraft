@@ -2004,9 +2004,11 @@ function buildWorld() {
   R3.camera.far = GLOBE.on ? 1500 : 400; R3.camera.updateProjectionMatrix();
   if (R3.globeBall) { disposeTree(R3.globeBall); R3.globeBall = null; }
   if (GLOBE.on) {
-    // (Deep sea, under the seams.)
+    // (Under everything, nearly black: the sea and the ground are drawn
+    // over it, with the fog of war. It only shows through slivers along
+    // the coasts, and a bright one there showed the sea through the fog.)
     const g = new THREE.SphereGeometry(GLOBE.R - 0.45, 96, 64), col = new Float32Array(g.attributes.position.count * 3);
-    for (let i = 0; i < g.attributes.position.count; i++) col.set([0.02, 0.1, 0.22], i * 3);
+    for (let i = 0; i < g.attributes.position.count; i++) col.set([0.006, 0.012, 0.024], i * 3);
     g.setAttribute("color", new THREE.BufferAttribute(col, 3));
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, fog: false });
     mat.userData.flat = true;
