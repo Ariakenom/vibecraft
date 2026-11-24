@@ -81,3 +81,5 @@
 1795554316	2026-11-24	0139522be9923780f878df7d488dcb37d7f7eb3f	Merge pull request #75 from Ariakenom/globe-preview
 1795555742	2026-11-24	7a142e09b5e1a8fa15308ac71d7fb67defc8f4f0	Globe: no view jumps when scrolling, no lines at seams
 1795555753	2026-11-24	2b48ddf93bcabee32cee195a52081ca2dcd56da4	Merge pull request #76 from Ariakenom/w-scroll
+1795559038	2026-11-24	cd39fcbf14bbe30ac121b79f8665cd406205db8b	Globe: water drawn again, no view snaps at face edges
+1795559049	2026-11-24	2e0114a0dc16c02d5c4ae7ec523b65ff347f6816	Merge pull request #77 from Ariakenom/globe-water
