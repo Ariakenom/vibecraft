@@ -102,6 +102,46 @@ const nuke = await pg.evaluate(() => {
 });
 check(nuke.flew > 100 && nuke.finite, `a nuke flies on the Globe (${nuke.flew} ticks)`);
 check(nuke.off < 0.5 && nuke.faces >= 2, `on the great circle, over ${nuke.faces} faces (${nuke.off.toFixed(2)} tiles off it at most)`);
+// The ground meets itself at every seam: a corner on a seam, drawn once by
+// each face, has the same height and the same light (normal, turned into
+// the other face's frame) both times.
+const twins = await pg.evaluate(() => {
+  newGame(3, 0, 2, 4); $("startScreen").hidden = true; running = false; readWorld();
+  const cw = MW + 1, h = R3.heights, nor = R3.terrainGeo.attributes.normal;
+  let n = 0, dh = 0, dn = 0;
+  for (let f = 0; f < 6; f++) for (let side = 0; side < 4; side++) {
+    const m = CUBE_SEAMS[f][side], F = CUBE_FACES[f];
+    if (!m) continue;
+    for (let a = 1; a < CUBE_N; a++) {
+      const [s, t] = [[0, a], [CUBE_N, a], [a, 0], [a, CUBE_N]][side], x = F.at[0] + s, y = F.at[1] + t;
+      const [qx, qy] = cubeTurn(m.k, x, y), tx = qx + m.tx, ty = qy + m.ty, i = y * cw + x, j = ty * cw + tx;
+      dh = Math.max(dh, Math.abs(h[i] - h[j]));
+      const [ex, ez] = cubeTurn(m.k, nor.getX(i), nor.getZ(i));
+      dn = Math.max(dn, Math.hypot(ex - nor.getX(j), nor.getY(i) - nor.getY(j), ez - nor.getZ(j)));
+      n++;
+    }
+  }
+  return { n, dh, dn };
+});
+check(twins.n > 1000 && twins.dh < 1e-6 && twins.dn < 1e-4, `the ground meets itself at the seams: same height and light (${twins.n} corners, ${twins.dh.toExponential(1)} high, ${twins.dn.toExponential(1)} light)`);
+// Holding W zoomed far out on a slow computer (big steps): the camera
+// crosses seams without the view spinning round. (One long step landed far
+// past a seam and turned the view 147°; now at most the ball's own curve
+// over the step.)
+const spin = await pg.evaluate(() => {
+  newGame(3, 0, 2, 4); $("startScreen").hidden = true; running = true; paused = true; readWorld();
+  const look = () => { globeAt(cam.x, cam.y); const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw); return GLOBE.east.map((v, i) => v * s + GLOBE.south[i] * c); };
+  cam.x = 454.5; cam.y = 44.5; cam.yaw = 0; cam.pitch = 1.0; cam.dist = 400; clampCam(); placeCamera();
+  keys.clear(); keys.add("KeyW");
+  let worst = 0;
+  for (let f = 0; f < 600; f++) {
+    const l0 = look(); scrollCamera(1 / 8); const l1 = look();
+    worst = Math.max(worst, Math.acos(Math.min(1, l0[0] * l1[0] + l0[1] * l1[1] + l0[2] * l1[2])) * 180 / Math.PI);
+  }
+  keys.clear(); running = false;
+  return worst;
+});
+check(spin < 45, `scrolling over seams in big steps doesn't spin the view (${spin.toFixed(1)}° at most)`);
 // The minimap is a world map: a town is drawn where it is in the world
 // (Stockholm-ish towns north, Sydney's south), and a click there brings
 // the camera back to it.
