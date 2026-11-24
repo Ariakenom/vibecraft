@@ -1929,6 +1929,50 @@ const CUBE_FACES = [
   { c: [0, 0, -1], u: [0, -1, 0], v: [1, 0, 0], at: [CUBE_N, CUBE_B0] },
   { c: [0, -1, 0], u: [0, 0, 1], v: [1, 0, 0], at: [2 * CUBE_N, CUBE_B0] },
 ];
+// What the cube's edges do (as cube.rs `Cube::new`): past face f's side s
+// (left, right, top, bottom), the face beyond and the move onto it: k
+// quarter turns, then a shift t. Null where the atlas joins the faces.
+const CUBE_SEAMS = (() => {
+  const turn = (k, x, y) => [[x, y], [-y, x], [-x, -y], [y, -x]][k & 3];
+  const corner = (F, s, t) => [0, 1, 2].map(i => F.c[i] + (s ? 1 : -1) * F.u[i] + (t ? 1 : -1) * F.v[i]);
+  const same = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+  const N = CUBE_N, ends = [[[0, 0], [0, N]], [[N, 0], [N, N]], [[0, 0], [N, 0]], [[0, N], [N, N]]];
+  return CUBE_FACES.map((F, f) => ends.map(([p1, p2]) => {
+    const c1 = corner(F, p1[0], p1[1]), c2 = corner(F, p2[0], p2[1]);
+    for (let g = 0; g < 6; g++) {
+      if (g === f) continue;
+      const G = CUBE_FACES[g], local = c => [[0, 0], [N, 0], [0, N], [N, N]].find(([a, b]) => same(corner(G, a, b), c));
+      const q1 = local(c1), q2 = local(c2);
+      if (!q1 || !q2) continue;
+      const run = [p2[0] - p1[0], p2[1] - p1[1]], want = [q2[0] - q1[0], q2[1] - q1[1]];
+      const k = [0, 1, 2, 3].find(k => { const r = turn(k, ...run); return r[0] === want[0] && r[1] === want[1]; });
+      const b = turn(k, F.at[0] + p1[0], F.at[1] + p1[1]), t = [q1[0] + G.at[0] - b[0], q1[1] + G.at[1] - b[1]];
+      return k === 0 && t[0] === 0 && t[1] === 0 ? null : { g, k, tx: t[0], ty: t[1] };
+    }
+    return null;
+  }));
+})();
+// How far in from a seam patterns drawn from the flat position (noise in
+// the sea and the sand, waves, cloud shadows) blend toward what the face
+// beyond has there: half and half at the seam itself, where both sides
+// then work out the same, so no line shows (`globeSeamAt`).
+const SEAM_W = 6;
+// For a point on a face: each seam within SEAM_W of it, as the point seen
+// from the face beyond (qx, qy), the turn from this face's frame to that
+// one's (k), and how much of it to mix in (w).
+function globeSeamImages(x, y) {
+  const out = [];
+  const f = cubeFaceOf(x, y);
+  if (f < 0) return out;
+  const F = CUBE_FACES[f], s = x - F.at[0], t = y - F.at[1];
+  [s, CUBE_N - s, t, CUBE_N - t].forEach((d, side) => {
+    const m = CUBE_SEAMS[f][side];
+    if (!m || d >= SEAM_W) return;
+    const [qx, qy] = [[x, y], [-y, x], [-x, -y], [y, -x]][m.k];
+    out.push({ qx: qx + m.tx, qy: qy + m.ty, k: m.k, w: 0.5 * (1 - Math.max(0, d) / SEAM_W) });
+  });
+  return out;
+}
 const GLOBE = {
   on: false, R: 2 * CUBE_N / Math.PI, k: 1, cosLimit: -1,
   // The frame at the last point asked about (`globeAt`): up, and the ball's
@@ -1947,18 +1991,39 @@ const GLOBE_GLSL = `
   uniform vec4 uGlobe; uniform vec3 uGlobeAt; uniform mat3 uGlobeRot;
   #define CUBE_N ${CUBE_N.toFixed(1)}
   #define CUBE_GAP ${CUBE_GAP.toFixed(1)}
-  // (Patterns drawn from the flat world's position, like the noise in the
-  // sea and the sand, don't join up at the cube's seams: they're faint.)
-  float globeSeam(float x) { return 0.0; }
-  vec2 globeWest(vec2 p) { return p; }
+  // Patterns drawn from the flat world's position (the sea's and the
+  // sand's noise, waves, cloud shadows) blend near a seam toward what the
+  // face beyond has (JS SEAM_W, globeSeamImages): globeSeamAt gives, for
+  // side s of p's face, p as that face has it (q), the turn from this face's
+  // frame to that one's (k) and how much to mix in (0 when not near).
+  #define SEAM_W ${SEAM_W.toFixed(1)}
+  vec2 cubeTurn(float k, vec2 v) { return k < 0.5 ? v : k < 1.5 ? vec2(-v.y, v.x) : k < 2.5 ? -v : vec2(v.y, -v.x); }
+  const vec3 SM[24] = vec3[24](${CUBE_SEAMS.flat().map(m => m ? `vec3(${m.k}.0, ${m.tx.toFixed(1)}, ${m.ty.toFixed(1)})` : "vec3(-1.0, 0.0, 0.0)").join(", ")});
+  float globeSeamAt(vec2 p, int side, out vec2 q, out float k) {
+    q = p; k = 0.0;
+    if (uGlobe.x <= 0.0) return 0.0;
+    float col = clamp(floor(p.x / CUBE_N), 0.0, 2.0);
+    bool b = p.y >= CUBE_N + CUBE_GAP * 0.5;
+    int f = int(col) + (b ? 3 : 0);
+    vec2 st = vec2(p.x - col * CUBE_N, p.y - (b ? CUBE_N + CUBE_GAP : 0.0));
+    float d = side == 0 ? st.x : side == 1 ? CUBE_N - st.x : side == 2 ? st.y : CUBE_N - st.y;
+    vec3 m = SM[f * 4 + side];
+    if (m.x < 0.0 || d >= SEAM_W) return 0.0;
+    k = m.x; q = cubeTurn(k, p) + m.yz;
+    return 0.5 * (1.0 - max(d, 0.0) / SEAM_W);
+  }
+  // A vector from the frame of the face beyond back into this one's.
+  vec2 cubeTurnBack(float k, vec2 v) { return cubeTurn(mod(4.0 - k, 4.0), v); }
   // The direction through flat point p (x, z) from the ball's middle, and
   // the ball's change east and south per tile there (on a ball of radius 1).
   // A point on a face's edge belongs to it, so every face's meshes reach
   // their own edges.
+  // (Tables made once, at the top: inside a function every call built
+  // them anew, and with many calls the software renderer gave up linking.)
+  const vec3 FC[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.c)).join(", ")});
+  const vec3 FU[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.u)).join(", ")});
+  const vec3 FV[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.v)).join(", ")});
   vec3 cubeDir(vec2 p, out vec3 es, out vec3 et) {
-    vec3 FC[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.c)).join(", ")});
-    vec3 FU[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.u)).join(", ")});
-    vec3 FV[6] = vec3[6](${CUBE_FACES.map(f => v3s(f.v)).join(", ")});
     float col = clamp(floor(p.x / CUBE_N), 0.0, 2.0);
     bool b = p.y >= CUBE_N + CUBE_GAP * 0.5;
     int f = int(col) + (b ? 3 : 0);
@@ -2059,7 +2124,8 @@ function cubeLoad() {
     return k < 0 ? null : { k, tx: W.cube_seam(f, side, 1), ty: W.cube_seam(f, side, 2) };
   }));
   const same = W.cube_size(0) === CUBE_N && W.cube_size(1) === CUBE_GAP && CUBE_FACES.every((f, i) => [...f.c, ...f.u, ...f.v, ...f.at].every((v, j) => W.cube_face(i, j) === v));
-  if (!same) console.error("render3d.js CUBE_FACES differ from cube.rs: the Globe will be drawn wrong");
+  const seamsSame = GLOBE.seams.every((row, f) => row.every((m, side) => { const c = CUBE_SEAMS[f][side]; return !m ? !c : !!c && c.k === m.k && c.tx === m.tx && c.ty === m.ty; }));
+  if (!same || !seamsSame) console.error("render3d.js CUBE_FACES or CUBE_SEAMS differ from cube.rs: the Globe will be drawn wrong");
 }
 // A vector turned by k quarter turns (as cube.rs `turn`).
 function cubeTurn(k, x, y) {
@@ -2129,13 +2195,15 @@ function lerpXY(px, py, x, y, a) {
 // (GLOBE.es, .et), unit east and south (GLOBE.east, .south) and how big a
 // tile is drawn there against a face's middle (GLOBE.k). Points off the
 // faces are brought onto one first.
-function globeAt(x, z) {
+function globeAt(x, z, from = false) {
   const G = GLOBE;
   // (A point a little past a face's edge is that face continued, as the
   // shader has it: a heading there is measured as on the face it came
   // from. Only one well past is brought onto the face it's on.)
   const out = Math.max(-x, x - 3 * CUBE_N, -z, z >= CUBE_N + CUBE_GAP / 2 ? Math.max(CUBE_B0 - z, z - CUBE_B0 - CUBE_N) : z - CUBE_N);
-  if (out > 8) [x, z] = cubeResolve(x, z);
+  // (`from`: measured on the face it came from, however far past it is,
+  // up to where that face's own grid would turn back on itself.)
+  if (out > (from ? 60 : 8)) [x, z] = cubeResolve(x, z);
   const col = Math.max(0, Math.min(2, Math.floor(x / CUBE_N))), b = z >= CUBE_N + CUBE_GAP / 2, F = CUBE_FACES[col + (b ? 3 : 0)];
   const s = x - col * CUBE_N, t = z - (b ? CUBE_B0 : 0), q = Math.PI / (2 * CUBE_N);
   const ta = Math.tan((s * 2 / CUBE_N - 1) * Math.PI / 4), tb = Math.tan((t * 2 / CUBE_N - 1) * Math.PI / 4);
@@ -2388,11 +2456,7 @@ const CLOUD_GLSL = GLOBE_GLSL + `
   float cloudShade(vec2 p) {
     float n = cloudAt(p);
     #ifdef GLOBE_SEAMS
-    float t = globeSeam(p.x);
-    if (t > 0.0) n = mix(n, cloudAt(globeWest(p)), t);
-    // (No cloud shadows right by the poles: every row meets there, and
-    // the patterns drawn on the flat map would pinch into streaks.)
-    n *= smoothstep(0.0, 30.0, min(p.y, uGlobe.z - p.y));
+    for (int s = 0; s < 4; s++) { vec2 q; float k; float w = globeSeamAt(p, s, q, k); if (w > 0.0) n = mix(n, cloudAt(q), w); }
     #endif
     return 1.0 - 0.55 * smoothstep(0.5, 0.66, n);
   }
@@ -2424,8 +2488,7 @@ function groundPatch(sh) {
       vec2 g = vGW.xz;
       vec3 gnz = groundNoise(g);
       #ifdef GLOBE_SEAMS
-      float gseam = globeSeam(g.x);
-      if (gseam > 0.0) gnz = mix(gnz, groundNoise(globeWest(g)), gseam);
+      for (int s = 0; s < 4; s++) { vec2 q; float k; float w = globeSeamAt(g, s, q, k); if (w > 0.0) gnz = mix(gnz, groundNoise(q), w); }
       #endif
       float gn = gnz.x;
       float line = 0.13 + (gn - 0.5) * 0.18;               // the height where grass gives way to sand
@@ -3713,6 +3776,10 @@ function computeHeights() {
     const l = landShare[i], sh = shallowShare[i];
     h[i] = l === 0 ? (sh > 0 ? -0.4 + sh * 0.16 : Math.min(h[i], -0.4)) : l === 1 ? Math.max(h[i], 0.02) : WATER_Y + (l - 0.5) * 0.3;
   }
+  // (On the Globe each corner on a seam is in the heights twice, once per
+  // face; worked out from slightly different neighbours, they could differ
+  // by a hair and show a crack. Both get their average.)
+  if (globe) globeSeamTwins(cw, (i, j) => { h[i] = h[j] = (h[i] + h[j]) / 2; });
   R3.heights = h;
   R3.hTop = null;
   R3.wet = wet;
@@ -3752,6 +3819,7 @@ function buildWorld() {
     pos.setY(i, h[cz * cw + cx]);
   }
   geo.computeVertexNormals();
+  if (globeMap()) globeSeamNormals(geo);
   const tex = new THREE.CanvasTexture(terrainCanvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = R3.renderer.capabilities.getMaxAnisotropy();
@@ -3985,11 +4053,18 @@ function buildWater() {
     // numbers, read the heights at the wrong scale, and drew lakes as dry
     // sand and dry land as deep water.
     sh.uniforms.uHeightBox = { value: new THREE.Vector4(pad, pad, MW + pad * 2, MH + pad * 2) };
-    sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+    sh.vertexShader = "attribute float aDepth;\nuniform float uTime;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + sh.vertexShader.replace("void main() {", `
+      // A slow swell at a flat-world spot.
+      float swellAt(vec2 p) { return sin(p.x * 0.9 + uTime * 0.9) + cos(p.y * 0.7 + uTime * 0.65) + sin((p.x + p.y) * 1.6 + uTime * 1.4) * 0.5; }
+      void main() {`).replace("#include <begin_vertex>", `#include <begin_vertex>
       vDepth = aDepth;
       vWPos = position.xz;
       // A slow swell, calm in the shallows.
-      transformed.y += (sin(position.x * 0.9 + uTime * 0.9) + cos(position.z * 0.7 + uTime * 0.65) + sin((position.x + position.z) * 1.6 + uTime * 1.4) * 0.5) * 0.018 * clamp(aDepth * 3.0, 0.0, 1.0);`);
+      // (On the Globe blended near a seam with the face beyond's, so the
+      // two edges of a seam rise and fall together.)
+      float swell = swellAt(position.xz);
+      for (int s = 0; s < 4; s++) { vec2 q; float k; float w = globeSeamAt(position.xz, s, q, k); if (w > 0.0) swell = mix(swell, swellAt(q), w); }
+      transformed.y += swell * 0.018 * clamp(aDepth * 3.0, 0.0, 1.0);`);
     sh.fragmentShader = "uniform float uTime;\nuniform sampler2D uHeight;\nuniform vec4 uHeightBox;\nvarying float vDepth;\nvarying vec2 vWPos;\n" + GLOBE_GLSL + `
       // The patterns on the sea at a flat-world spot, each a function of
       // where it is (so the Globe can join them up at its seam, see
@@ -4047,8 +4122,7 @@ function buildWater() {
         // lighter and greener, as over banks and currents.
         vec4 looks = seaLooks(vWPos);
         #ifdef GLOBE_SEAMS
-        float seam = globeSeam(vWPos.x);
-        if (seam > 0.0) looks = mix(looks, seaLooks(globeWest(vWPos)), seam);
+        for (int s = 0; s < 4; s++) { vec2 q; float k; float w = globeSeamAt(vWPos, s, q, k); if (w > 0.0) looks = mix(looks, seaLooks(q), w); }
         #endif
         float bank = looks.x;
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.012, 0.15, 0.34), smoothstep(0.4, 0.75, bank) * deepness * 0.75);
@@ -4066,10 +4140,12 @@ function buildWater() {
         // it washing in and out just beyond.
         float fn = looks.z;
         float edge = 1.0 - smoothstep(0.0, 0.008 + 0.022 * fn, d);
-        // (On the Globe the wobble's x is turned into one that comes round
-        // whole at the seam: 2pi * 173 waves round the world, as sin(x * 1.7) has.)
-        float wobX = uGlobe.x > 0.0 ? vWPos.x / uGlobe.y * 6.2831853 * floor(uGlobe.y * 1.7 / 6.2831853 + 0.5) : vWPos.x * 1.7;
-        float wash = sin(uTime * 1.5 - d * 70.0 + sin(wobX) * 1.5 + cos(vWPos.y * 1.3) * 1.5);
+        // (The wobble along the shore blends at the Globe's seams too.)
+        float wob = sin(vWPos.x * 1.7) * 1.5 + cos(vWPos.y * 1.3) * 1.5;
+        #ifdef GLOBE_SEAMS
+        for (int s = 0; s < 4; s++) { vec2 q; float k; float w = globeSeamAt(vWPos, s, q, k); if (w > 0.0) wob = mix(wob, sin(q.x * 1.7) * 1.5 + cos(q.y * 1.3) * 1.5, w); }
+        #endif
+        float wash = sin(uTime * 1.5 - d * 70.0 + wob);
         float wave = smoothstep(0.7, 0.95, wash) * (1.0 - smoothstep(0.015, 0.08, d)) * smoothstep(0.3, 0.7, fn);
         // Whitecaps out at sea: small crests that come and go.
         float cap = looks.w * smoothstep(0.5, 1.2, d) * (1.0 - haze)
@@ -4086,7 +4162,8 @@ function buildWater() {
         {
           vec2 sl = waterSlope(vWPos, uTime);
           #ifdef GLOBE_SEAMS
-          if (seam > 0.0) sl = mix(sl, waterSlope(globeWest(vWPos), uTime), seam);
+          // (A slope is a direction: from the face beyond's frame, turned back.)
+          for (int s = 0; s < 4; s++) { vec2 q; float k; float w = globeSeamAt(vWPos, s, q, k); if (w > 0.0) sl = mix(sl, cubeTurnBack(k, waterSlope(q, uTime)), w); }
           #endif
           sl *= waveAmt;
           vec3 nw = normalize(vec3(-sl.x, 1.0, -sl.y));
@@ -4300,6 +4377,50 @@ function flattenUnder(cx, cy, s) {
   placeTufts(x0 - 2, y0 - 2, x0 + s + 2, y0 + s + 2);
   R3.flatBase.set(site, base);
   return base;
+}
+
+// On the Globe a corner on a seam is drawn twice, once by each face, and
+// each worked out its normal from its own face's triangles: the light made
+// a crease along the seam. Each pair of twins gets the average of the two
+// (turned between the faces' frames).
+// Every pair of corners that are one corner on the Globe: one on a face's
+// seam side and its twin on the face beyond (indices into a grid of
+// corners `cw` wide), and the turn from the first's frame to the second's.
+function globeSeamTwins(cw, fn) {
+  const N = CUBE_N, done = new Set();
+  for (let f = 0; f < 6; f++) {
+    const F = CUBE_FACES[f];
+    for (let side = 0; side < 4; side++) {
+      const m = CUBE_SEAMS[f][side];
+      if (!m) continue;
+      for (let a = 0; a <= N; a++) {
+        const [s, t] = [[0, a], [N, a], [a, 0], [a, N]][side], x = F.at[0] + s, y = F.at[1] + t;
+        const [qx, qy] = [[x, y], [-y, x], [-x, -y], [y, -x]][m.k], tx = qx + m.tx, ty = qy + m.ty;
+        const i = y * cw + x, j = ty * cw + tx;
+        if (tx < 0 || ty < 0 || tx > MW || ty > MH || done.has(i)) continue;
+        done.add(i); done.add(j);
+        fn(i, j, m.k);
+      }
+    }
+  }
+}
+function globeSeamNormals(geo) {
+  const nor = geo.attributes.normal;
+  globeSeamTwins(MW + 1, (i, j, k) => {
+    {
+      {
+        const m = { k };
+        // This one's normal in the other's frame, summed with it.
+        const [ex, ez] = [[nor.getX(i), nor.getZ(i)], [-nor.getZ(i), nor.getX(i)], [-nor.getX(i), -nor.getZ(i)], [nor.getZ(i), -nor.getX(i)]][m.k];
+        let nx = ex + nor.getX(j), ny = nor.getY(i) + nor.getY(j), nz = ez + nor.getZ(j);
+        const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+        nor.setXYZ(j, nx, ny, nz);
+        // And back into this one's frame.
+        const back = (4 - m.k) & 3, [bx, bz] = [[nx, nz], [-nz, nx], [-nx, -nz], [nz, -nx]][back];
+        nor.setXYZ(i, bx, ny, bz);
+      }
+    }
+  });
 }
 
 // Recompute the terrain's normals for the corners from (ax, ay) to (bx, by),
@@ -4931,8 +5052,20 @@ function render3d(alpha, now, dt) {
       if (f <= 0) R3.nudges.delete(id);
       else { x += nudge.dx * f; y += nudge.dy * f; }
     }
+    const wasX = o.x, wasY = o.y;
     o.x = x; o.y = y;
     o.root.position.set(x, isNaval(kind) ? WATER_Y + 0.02 : groundAt(x, y) + (isAir(kind) ? AIR_ALT + Math.sin(t * 1.3 + id) * 0.08 : 0), y);
+    // Over a seam of the Globe its facing turned with the ground (quarter
+    // turns, map.rs `wrap_pos`): turn the drawn one as much at once, or
+    // it would swing round. Only the small bend between the faces' grids
+    // is eased then.
+    if (GLOBE.on && wasX !== undefined) {
+      const f0 = cubeFaceOf(wasX, wasY), f1 = cubeFaceOf(x, y);
+      if (f0 >= 0 && f1 >= 0 && f0 !== f1) {
+        const m = CUBE_SEAMS[f0].find(m => m && m.g === f1);
+        if (m) o.face -= m.k * Math.PI / 2;
+      }
+    }
     // Turn smoothly toward the facing Rust reports (three.js turns the other way).
     let target = -E(i, F.face), d = target - o.face;
     d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -6417,7 +6550,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "f3adb80fe867", "base": "d228bde745"};
+const BUILD_INFO = {"sim": "f3adb80fe867", "base": "0139522be9"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -7811,7 +7944,7 @@ function clampCam() {
   // the ground: the way it looked on the ball, in that face's east and
   // south, which are turned and, by the cube's corners, a little skewed.)
   if (globe && cubeFaceOf(cam.x, cam.y) < 0) {
-    globeAt(cam.x, cam.y);
+    globeAt(cam.x, cam.y, true);
     const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw);
     const look = GLOBE.east.map((v, i) => v * s + GLOBE.south[i] * c);
     [cam.x, cam.y] = cubeResolve(cam.x, cam.y);
@@ -7906,7 +8039,14 @@ function bakeTerrain() {
     // strip's edge then blends in that ground, not the gap.)
     if (globe && cubeFaceOf(x, y) < 0) [x, y] = cubeResolve(x, y);
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
-    const nz = (f, sd) => vnoise(x * f, y * f, sd);
+    // (By a seam the patches blend with what the face beyond has, half and
+    // half at the seam itself: no line there. render3d.js `globeSeamImages`.)
+    const near = globe ? globeSeamImages(x, y) : [];
+    const nz = (f, sd) => {
+      let v = vnoise(x * f, y * f, sd);
+      for (const m of near) v += (vnoise(m.qx * f, m.qy * f, sd) - v) * m.w;
+      return v;
+    };
     const n1 = nz(1 / 9, 3), n2 = nz(1 / 3.5, 11), n3 = nz(1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
     c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
@@ -9363,10 +9503,22 @@ function scrollCamera(dt) {
 // many more, to move as far on the ball.
 function panCam(east, south) {
   if (typeof GLOBE !== "undefined" && GLOBE.on) {
-    globeAt(cam.x, cam.y);
-    const ls = Math.hypot(...GLOBE.es) * GLOBE.R, lt = Math.hypot(...GLOBE.et) * GLOBE.R;
-    cam.x += east / Math.max(0.5, ls);
-    cam.y += south / Math.max(0.5, lt);
+    // In steps of a few tiles, each over at most one seam, the way taken
+    // as the camera sees it (right and back), so after a seam it goes on
+    // the same way. (In one long step, zoomed out on a slow frame, it
+    // landed far past a seam and the view spun round: playtest.)
+    const c0 = Math.cos(cam.yaw), s0 = Math.sin(cam.yaw);
+    const right = east * c0 - south * s0, back = east * s0 + south * c0;
+    const n = Math.max(1, Math.ceil(Math.hypot(east, south) / 3));
+    for (let k = 0; k < n; k++) {
+      const c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
+      globeAt(cam.x, cam.y);
+      const ls = Math.hypot(...GLOBE.es) * GLOBE.R, lt = Math.hypot(...GLOBE.et) * GLOBE.R;
+      cam.x += (right * c + back * s) / n / Math.max(0.5, ls);
+      cam.y += (-right * s + back * c) / n / Math.max(0.5, lt);
+      clampCam();
+    }
+    return;
   } else {
     cam.x += east;
     cam.y += south;

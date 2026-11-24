@@ -70,10 +70,16 @@ at 66°) and was squeezed thin past them (to 9% across at 85°).
 - The page bends each face round the ball as the game does
   (render3d.js `cubeDir`, `globeAt`), and the camera goes over a seam onto
   the face beyond, still looking the same way on the ball (main.js
-  `clampCam`). The minimap is a world map, north up (main.js `WorldMap`),
-  with the camera's view traced on it. Patterns drawn
-  from the flat position (the sea's and the sand's noise, cloud shadows)
-  don't join at seams; they're faint.
+  `clampCam`), in steps of a few tiles so a long step can't land far past
+  a seam. The minimap and the start screen's preview are world maps, north
+  up (main.js `WorldMap`, lib.rs `map_preview`).
+- Seams don't show: a corner on a seam is drawn by both faces with the
+  same height and light (render3d.js `globeSeamTwins`); patterns drawn
+  from the flat position (the sea's patches, foam and waves, the sand line,
+  cloud shadows, the ground's colours) blend over the last `SEAM_W` tiles
+  toward what the face beyond has, half and half at the seam, where both
+  sides then agree (`globeSeamAt`, `globeSeamImages`). A unit crossing a
+  seam turns with it at once; only the small bend between grids is eased.
 
 ## The World's land
 

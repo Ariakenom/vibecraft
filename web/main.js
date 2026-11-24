@@ -412,7 +412,7 @@ function clampCam() {
   // the ground: the way it looked on the ball, in that face's east and
   // south, which are turned and, by the cube's corners, a little skewed.)
   if (globe && cubeFaceOf(cam.x, cam.y) < 0) {
-    globeAt(cam.x, cam.y);
+    globeAt(cam.x, cam.y, true);
     const s = Math.sin(cam.yaw), c = Math.cos(cam.yaw);
     const look = GLOBE.east.map((v, i) => v * s + GLOBE.south[i] * c);
     [cam.x, cam.y] = cubeResolve(cam.x, cam.y);
@@ -507,7 +507,14 @@ function bakeTerrain() {
     // strip's edge then blends in that ground, not the gap.)
     if (globe && cubeFaceOf(x, y) < 0) [x, y] = cubeResolve(x, y);
     const t = ter[Math.min(MH - 1, y | 0) * MW + Math.min(MW - 1, x | 0)];
-    const nz = (f, sd) => vnoise(x * f, y * f, sd);
+    // (By a seam the patches blend with what the face beyond has, half and
+    // half at the seam itself: no line there. render3d.js `globeSeamImages`.)
+    const near = globe ? globeSeamImages(x, y) : [];
+    const nz = (f, sd) => {
+      let v = vnoise(x * f, y * f, sd);
+      for (const m of near) v += (vnoise(m.qx * f, m.qy * f, sd) - v) * m.w;
+      return v;
+    };
     const n1 = nz(1 / 9, 3), n2 = nz(1 / 3.5, 11), n3 = nz(1.3, 29);
     let c = mixc(LUSH, DARK, Math.max(0, Math.min(1, (n1 - 0.45) * 2.0)));
     c = mixc(c, DRY, Math.max(0, Math.min(1, (n2 - 0.66) * 2)) * 0.6);
@@ -1964,10 +1971,22 @@ function scrollCamera(dt) {
 // many more, to move as far on the ball.
 function panCam(east, south) {
   if (typeof GLOBE !== "undefined" && GLOBE.on) {
-    globeAt(cam.x, cam.y);
-    const ls = Math.hypot(...GLOBE.es) * GLOBE.R, lt = Math.hypot(...GLOBE.et) * GLOBE.R;
-    cam.x += east / Math.max(0.5, ls);
-    cam.y += south / Math.max(0.5, lt);
+    // In steps of a few tiles, each over at most one seam, the way taken
+    // as the camera sees it (right and back), so after a seam it goes on
+    // the same way. (In one long step, zoomed out on a slow frame, it
+    // landed far past a seam and the view spun round: playtest.)
+    const c0 = Math.cos(cam.yaw), s0 = Math.sin(cam.yaw);
+    const right = east * c0 - south * s0, back = east * s0 + south * c0;
+    const n = Math.max(1, Math.ceil(Math.hypot(east, south) / 3));
+    for (let k = 0; k < n; k++) {
+      const c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
+      globeAt(cam.x, cam.y);
+      const ls = Math.hypot(...GLOBE.es) * GLOBE.R, lt = Math.hypot(...GLOBE.et) * GLOBE.R;
+      cam.x += (right * c + back * s) / n / Math.max(0.5, ls);
+      cam.y += (-right * s + back * c) / n / Math.max(0.5, lt);
+      clampCam();
+    }
+    return;
   } else {
     cam.x += east;
     cam.y += south;
