@@ -717,6 +717,7 @@ body.observing #hint { display: none; }
         <div class="row">
           <button class="ghost" id="watchLinkBtn" title="Anyone with this link can watch the game live, seeing the whole map">Copy watch link</button>
           <button class="ghost" id="cheatBtn" title="Every player a person plays (not the computer) can build and train anything, of any era, free">Cheat mode: off</button>
+          <button class="ghost" id="revealBtn" title="See the whole map, without the fog of war (single player; only changes what you see, not the game)">Reveal map: off</button>
         </div>
       </section>
       <section class="tabpanel" data-tab="players" hidden>
@@ -6548,7 +6549,7 @@ function iconEl(k, owner, px) {
 
 // This build (filled in by build.sh; null when the page runs unbuilt), and
 // the commit the server says it deployed (fetched at start, live site only).
-const BUILD_INFO = {"sim": "f3adb80fe867", "base": "2e0114a0dc"};
+const BUILD_INFO = {"sim": "f3adb80fe867", "base": "ce89ae9ebd"};
 let deployedCommit = null;
 // (Only where a server writes version.txt: the live site, over https.)
 if (location.protocol === "https:" && !/claude\.ai|claudeusercontent/.test(location.hostname)) try { fetch("version.txt?t=" + Date.now(), { cache: "no-store" }).then(r => r.ok ? r.text() : "").then(t => { const c = t.trim().split(/\s+/)[0]; if (/^[0-9a-f]{7,40}$/.test(c)) deployedCommit = c; }).catch(() => {}); } catch { /* no fetch here */ }
@@ -9250,12 +9251,62 @@ function boxSelect(x0, y0, x1, y1, add, kindFilter = -1) {
   setSelection(ids);
 }
 
+// Touch: one finger drags the map (a tap selects or commands), two pinch
+// to zoom and twist to turn. `fingers` holds every finger on the map.
 let touch = null;
+const fingers = new Map();
+function touchStart(p, moved) { touch = { x0: p.x, y0: p.y, cx: cam.x, cy: cam.y, yaw: cam.yaw, moved }; }
+function pinchStart() {
+  const [a, b] = [...fingers.values()];
+  touch = { moved: true, pinch: { d: Math.max(20, Math.hypot(b.x - a.x, b.y - a.y)), ang: Math.atan2(b.y - a.y, b.x - a.x),
+    mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, dist: cam.dist, cx: cam.x, cy: cam.y, yaw: cam.yaw } };
+  placeCamera();
+  touch.pinch.g = screenToGround(touch.pinch.mx, touch.pinch.my);
+}
+function pinchMove() {
+  const [a, b] = [...fingers.values()], q = touch.pinch;
+  const d = Math.max(20, Math.hypot(b.x - a.x, b.y - a.y));
+  let turn = Math.atan2(b.y - a.y, b.x - a.x) - q.ang;
+  turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  cam.x = q.cx; cam.y = q.cy; cam.yaw = q.yaw + turn; cam.dist = q.dist * q.d / d;
+  clampCam();
+  if (q.g && !(typeof GLOBE !== "undefined" && GLOBE.on)) {
+    // The ground that was between the fingers stays between them: move
+    // the camera until it is (twice, for the hills).
+    for (let n = 0; n < 2; n++) {
+      placeCamera();
+      const g = screenToGround(mx, my);
+      if (!g) break;
+      cam.x += q.g.x - g.x; cam.y += q.g.y - g.y;
+      clampCam();
+    }
+  } else {
+    // (The Globe: the midpoint drags the map like one finger would.)
+    const k = cam.dist / view._h * 1.6, c = Math.cos(q.yaw), s = Math.sin(q.yaw);
+    const dx = -(mx - q.mx) * k, dy = -(my - q.my) * k;
+    const yaw = cam.yaw; cam.yaw = q.yaw;
+    panCam(dx * c + dy * s, -dx * s + dy * c);
+    cam.yaw += yaw - q.yaw;
+    clampCam();
+  }
+}
+function fingerUp(e) {
+  if (!fingers.delete(e.pointerId)) return false;
+  if (fingers.size === 1 && touch && touch.pinch) touchStart([...fingers.values()][0], true); // carry on dragging, no tap
+  else if (fingers.size >= 2) pinchStart();
+  return true;
+}
+view.addEventListener("pointercancel", e => { if (fingerUp(e) && !fingers.size) touch = null; });
 view.addEventListener("pointerdown", e => {
   if (!running) return;
   view.setPointerCapture(e.pointerId);
   const p = localPos(e); mouse.x = p.x; mouse.y = p.y; mouse.inside = true;
-  if (e.pointerType === "touch") { touch = { x0: p.x, y0: p.y, cx: cam.x, cy: cam.y, yaw: cam.yaw, moved: false }; return; }
+  if (e.pointerType === "touch") {
+    fingers.set(e.pointerId, p);
+    if (fingers.size === 1) touchStart(p, false); else pinchStart();
+    return;
+  }
   if (e.button === 1) { orbit = { x0: p.x, y0: p.y, yaw: cam.yaw, pitch: cam.pitch }; e.preventDefault(); return; }
   if (e.button === 2) {
     if (placing != null || amode) { placing = null; setAmode(false); return; }
@@ -9275,6 +9326,8 @@ view.addEventListener("pointerdown", e => {
 });
 view.addEventListener("pointermove", e => {
   const p = localPos(e); mouse.x = p.x; mouse.y = p.y; mouse.inside = true;
+  if (e.pointerType === "touch" && fingers.has(e.pointerId)) fingers.set(e.pointerId, p);
+  if (touch && touch.pinch) { if (fingers.size >= 2) pinchMove(); return; }
   if (touch) {
     if (Math.hypot(p.x - touch.x0, p.y - touch.y0) > 10) touch.moved = true;
     if (touch.moved) {
@@ -9313,6 +9366,12 @@ function updateHoverCursor(now) {
 }
 view.addEventListener("pointerup", e => {
   const p = localPos(e);
+  if (e.pointerType === "touch") {
+    const wasPinch = !!(touch && touch.pinch), one = touch;
+    fingerUp(e);
+    if (!fingers.size) { if (one && !one.moved && !wasPinch) tap(p); touch = null; }
+    return;
+  }
   if (touch) { if (!touch.moved) tap(p); touch = null; return; }
   if (orbit && e.button === 1) { orbit = null; return; }
   if (!drag || e.button !== 0) return;
@@ -11370,7 +11429,18 @@ function stableLabels(btn, texts) {
 function showLabel(btn, i) { [...btn.querySelector(".stack").children].forEach((sp, k) => sp.classList.toggle("on", k === i)); }
 stableLabels($("cheatBtn"), ["Cheat mode: off", "Cheat mode: on"]);
 stableLabels($("surrenderBtn"), ["Surrender", "Really surrender?"]);
-showLabel($("cheatBtn"), 0); showLabel($("surrenderBtn"), 0);
+stableLabels($("revealBtn"), ["Reveal map: off", "Reveal map: on"]);
+showLabel($("cheatBtn"), 0); showLabel($("surrenderBtn"), 0); showLabel($("revealBtn"), 0);
+// Lift the fog for yourself: only what this computer shows (see set_view in
+// lib.rs), so it never changes the game. Single player only, since online it
+// would show you what your rivals can't see.
+$("revealBtn").onclick = () => {
+  if (mp || observe) return;
+  const on = !W.view_reveal();
+  W.set_view(W.local_player(), on ? 1 : 0);
+  showLabel($("revealBtn"), on ? 1 : 0);
+  toast(on ? "Map revealed: you see everything." : "Fog of war is back.", "good");
+};
 $("cheatBtn").onclick = () => {
   const cmd = [15, W.cheats_on() ? 0 : 1, 0, 0];
   if (mp && mp.server) mp.server.system(cmd);
@@ -11390,6 +11460,8 @@ $("menuBtn").onclick = () => {
   // The host (or a single player) can switch cheat mode for every person.
   $("cheatBtn").hidden = !!observe || !!(mp && !mp.server);
   showLabel($("cheatBtn"), W.cheats_on() ? 1 : 0);
+  $("revealBtn").hidden = !!mp || !!observe;
+  showLabel($("revealBtn"), W.view_reveal() ? 1 : 0);
   delete $("surrenderBtn").dataset.sure; showLabel($("surrenderBtn"), 0);
   $("watchLinkBtn").hidden = !watchLink() || !!observe && observe.kind !== "out";
   $("quitBtn").textContent = watcher ? "Stop watching" : Replay.on ? "Exit replay" : mp ? "Leave game" : "New game";
